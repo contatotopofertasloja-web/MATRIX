@@ -1,0 +1,21 @@
+﻿version: v1
+description: "Assinaturas de tools (contratos estáveis)"
+tools:
+  - name: getPrice
+    input: { productId: string }
+    output: { productId: string, price: number, currency: string }
+  - name: getDiscount
+    input: { productId: string, qty: int }
+    output: { discountPct: number }
+  - name: getDeliveryTime
+    input: { zipcode: string }
+    output: { daysMin: int, daysMax: int }
+  - name: getPaymentOptions
+    input: { productId: string }
+    output: { methods: [string] }
+  - name: getCheckoutLink
+    input: { productId: string }
+    output: { url: string }
+  - name: getFaqAnswer
+    input: { topic: string }
+    output: { answer: string }

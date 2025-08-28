@@ -1,0 +1,21 @@
+﻿version: v1
+description: "Intents canônicas para todos os bots de vendas"
+intents:
+  - greet
+  - qualify
+  - offer
+  - objection.price
+  - objection.quality
+  - objection.security
+  - faq.delivery
+  - faq.payment
+  - faq.how_to_use
+  - close
+  - post_sale
+slots:
+  hair_type: [liso, ondulado, cacheado, crespo]
+  pain: [frizz, volume, alinhamento, indefinido]
+thresholds:
+  high: 0.75
+  mid: 0.45
+  low: 0.20

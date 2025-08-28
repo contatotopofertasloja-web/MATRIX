@@ -1,0 +1,20 @@
+﻿bot_id: claudia
+tenant_id: matrix
+product_id: prog_creme_170
+
+persona:
+  display_name: "Cláudia"
+  tone: ["empática", "amiga", "confiante"]
+  style: "Respostas curtas (até 2 frases + 1 pergunta). Máx. 2 emojis."
+
+flags:
+  send_link_in_two_messages: true
+  cooldown_cod_seconds: 90
+
+business:
+  price_target: 170
+  price_original: 197
+  checkout_url: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  coupon_code: "TOP-AGO2025-PROGRVG-150"
+  delivery_time: "24h capitais / 2 dias demais"
+  payment: "Somente no recebimento (COD)"

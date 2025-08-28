@@ -1,0 +1,16 @@
+﻿{
+  "event_version": "v1",
+  "required": ["ts", "session_id", "userId", "intent", "stage"],
+  "fields": {
+    "ts": "ISO datetime",
+    "session_id": "string",
+    "userId": "string",
+    "intent": "string",
+    "stage": "string",
+    "reply": "string",
+    "latency_ms": "int",
+    "next_action": "string",
+    "conversion": "boolean",
+    "loss_reason": "string"
+  }
+}
