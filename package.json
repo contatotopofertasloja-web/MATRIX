@@ -1,14 +1,1 @@
-{
-  "name": "matrix",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "engines": { "node": ">=18" },
-  "dependencies": {
-    "express": "^4.19.2",
-    "openai": "^4.57.0"
-  }
-}
+{  "name": "matrix",  "version": "0.1.0",  "main": "index.js",  "type": "module",  "scripts": {    "start": "node index.js"  },  "engines": { "node": ">=18" },  "dependencies": {    "express": "^4.19.2",    "dotenv": "^16.3.1",    "openai": "^4.0.0"  }} 
