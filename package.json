@@ -2,19 +2,15 @@
   "name": "matrix",
   "version": "1.0.0",
   "private": true,
-  "description": "MATRIX — IA de vendas (WhatsApp) com FSM + NLU + Telemetry",
   "type": "module",
   "main": "src/index.js",
-  "engines": {
-    "node": ">=18.17"
-  },
+  "engines": { "node": ">=18.17" },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon --watch src --ext js,json --exec \"node src/index.js\"",
-    "lint": "eslint . || true"
+    "dev": "nodemon --watch src --ext js,json --exec \"node src/index.js\""
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.7",
+    "@whiskeysockets/baileys": "6.5.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -23,7 +19,6 @@
     "qrcode": "^1.5.3"
   },
   "devDependencies": {
-    "eslint": "^9.9.0",
     "nodemon": "^3.0.2"
   }
 }
