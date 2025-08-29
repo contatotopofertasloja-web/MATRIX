@@ -1,5 +1,5 @@
-﻿import makeWASocket, { useMultiFileAuthState } from '@whiskeysockets/baileys'
-import qrcode from 'qrcode'
+﻿import * as baileys from '@whiskeysockets/baileys'
+const { default: makeWASocket, useMultiFileAuthState } = baileys
 
 let sock = null
 let authReady = false
