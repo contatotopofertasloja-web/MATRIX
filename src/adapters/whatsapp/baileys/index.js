@@ -1,5 +1,20 @@
-﻿import * as baileys from '@whiskeysockets/baileys'
-const { default: makeWASocket, useMultiFileAuthState } = baileys
+﻿// --- Baileys import robusto (ESM/CJS-safe) ---
+import * as _baileys from '@whiskeysockets/baileys'
+
+import makeWASocket, { useMultiFileAuthState } from '@whiskeysockets/baileys'
+
+// tenta extrair a função de vários formatos possíveis
+const makeWASocket =
+  _baileys?.default?.default ||
+  _baileys?.default ||
+  _baileys?.makeWASocket ||
+  _baileys
+
+const { useMultiFileAuthState } = _baileys
+
+// (Opcional) debug rápido — pode remover depois
+console.log('[WPP][debug] typeof makeWASocket =', typeof makeWASocket)
+
 
 let sock = null
 let authReady = false
