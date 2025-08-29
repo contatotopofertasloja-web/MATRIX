@@ -1,91 +1,113 @@
-﻿import express from 'express'
-import rateLimit from 'express-rate-limit'
-import dotenv from 'dotenv'
+﻿// src/index.js
+import 'dotenv/config';
+import express from 'express';
+import { withRateLimit } from './middlewares/rateLimit.js';
+import { adapter, getQrDataURL, isReady } from './index-gpt.js'; // usa o adapter Baileys novo
+import { bot } from './bot.js';
+import { EFFECTIVE_MODEL } from './model.js';
 
-import {
-  adapter,
-  getQrDataURL,
-  isReady
-} from './adapters/whatsapp/baileys/index.js'
+const app = express();
 
-dotenv.config()
+// Middlewares básicos
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.set('trust proxy', 1); // importante no Railway atrás de proxy
 
-const app = express()
-const PORT = process.env.PORT || 3000
-const HOST = process.env.HOST || '0.0.0.0'
-const WEBHOOK_TOKEN = (process.env.WEBHOOK_TOKEN || '').trim()
+// Debug rápido
+app.get('/__ping', (_req, res) => res.type('text').send('pong'));
+app.get('/__routes', (_req, res) => {
+  const list = [];
+  app._router?.stack?.forEach((r) => {
+    if (r.route && r.route.path) {
+      list.push(`${Object.keys(r.route.methods).join(',').toUpperCase()} ${r.route.path}`);
+    }
+  });
+  res.json(list);
+});
 
-// estamos atrás de proxy (Railway/Ingress) – necessário p/ express-rate-limit
-app.set('trust proxy', 1)
+// Healthcheck
+app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/wpp/health', (_req, res) => res.json({ ok: isReady() }));
 
-// middlewares
-app.use(express.json())
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
-  max: 300,                  // 300 req/15min por IP
-  standardHeaders: true,
-  legacyHeaders: false
-}))
+// Modelo GPT ativo
+app.get('/gpt-model', (_req, res) => {
+  res.json({
+    env_model: (process.env.MODEL_NAME || '').trim() || null,
+    effective_model: EFFECTIVE_MODEL,
+    node: process.version,
+    env: process.env.NODE_ENV || 'dev'
+  });
+});
 
-// proteção opcional por token (use para /send* se quiser)
-function requireToken(req, res, next) {
-  if (!WEBHOOK_TOKEN) return next()
-  const token = String(req.headers['x-api-token'] || req.query.token || '')
-  if (token !== WEBHOOK_TOKEN) return res.status(401).json({ error: 'unauthorized' })
-  next()
-}
-
-// ---------- rotas ----------
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, wppReady: isReady() })
-})
-
-app.get('/qr', (_req, res) => {
-  const dataUrl = getQrDataURL()
-  if (!dataUrl || isReady()) return res.status(204).send() // já conectado → sem QR
-  const base64 = dataUrl.split(',')[1]
-  const img = Buffer.from(base64, 'base64')
-  res.setHeader('Content-Type', 'image/png')
-  res.send(img)
-})
-
-app.post('/send', requireToken, async (req, res) => {
+// QR do WhatsApp
+app.get('/wpp/qr', async (_req, res) => {
   try {
-    const { to, text } = req.body || {}
-    if (!to || !text) return res.status(400).json({ error: 'to e text são obrigatórios' })
-    await adapter.sendMessage(String(to), String(text))
-    res.json({ ok: true })
+    if (isReady()) return res.type('text').send('WPP já conectado ✅');
+    const dataUrl = await getQrDataURL();
+    if (!dataUrl) return res.type('text').send('Aguardando QR ser gerado... atualize em 2–3s');
+    res.type('html').send(`
+      <html><body style="font-family:sans-serif">
+        <h3>Escaneie o QR no WhatsApp &gt; Dispositivos conectados</h3>
+        <img src="${dataUrl}" style="width:300px;height:300px" />
+      </body></html>
+    `);
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) })
+    console.error('[WPP][QR][ERR]', e);
+    res.status(500).send('erro ao gerar QR');
   }
-})
+});
 
-app.post('/send-image', requireToken, async (req, res) => {
+// Alias opcional
+app.get('/qr', (_req, res) => res.redirect(302, '/wpp/qr'));
+
+// Webhook universal (compatível com Meta)
+app.post('/webhook', withRateLimit({ windowMs: 3000 }), async (req, res) => {
+  const started = Date.now();
   try {
-    const { to, url, caption } = req.body || {}
-    if (!to || !url) return res.status(400).json({ error: 'to e url são obrigatórios' })
-    await adapter.sendImage(String(to), String(url), caption ? String(caption) : undefined)
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) })
+    let userId, text;
+    const context = req.body?.context || {};
+
+    if (req.body?.userId && typeof req.body?.text === 'string') {
+      userId = String(req.body.userId);
+      text = String(req.body.text || '');
+    } else if (Array.isArray(req.body?.entry)) {
+      const entry = req.body.entry[0];
+      const change = entry?.changes?.[0];
+      const m = change?.value?.messages?.[0];
+      userId = m?.from;
+      text = m?.text?.body || '';
+    }
+
+    if (!userId || !String(text).trim()) {
+      return res.status(400).json({ error: 'invalid payload', got: req.body });
+    }
+
+    const reply = await bot.handleMessage({ userId, text, context });
+    res.json({ reply, took_ms: Date.now() - started });
+  } catch (err) {
+    console.error('[WEBHOOK][ERR]', err);
+    res.json({
+      reply: 'Tivemos uma instabilidade rápida aqui. Posso te ajudar por aqui mesmo? 😊',
+      fallback: true
+    });
   }
-})
+});
 
-// espelho em /wpp/*
-const router = express.Router()
-router.get('/health', (req, res) => res.redirect(307, '/health'))
-router.get('/qr', (req, res) => res.redirect(307, '/qr'))
-router.post('/send', requireToken, (req, res) => res.redirect(307, '/send'))
-router.post('/send-image', requireToken, (req, res) => res.redirect(307, '/send-image'))
-app.use('/wpp', router)
+// Start HTTP
+const port = Number(process.env.PORT || 8080);
+const host = process.env.HOST || '0.0.0.0';
+const server = app.listen(port, host, () => {
+  console.log(`[HTTP] Listening on ${host}:${port}`);
+});
 
-// liga o listener de mensagens
-adapter.onMessage(async ({ from, text }) => {
-  if (!text) return
-  if (/^ping$/i.test(text)) return 'pong'
-  // TODO: plugar flows/NLU aqui
-})
+// Liga Baileys pelo adapter
+adapter.onMessage(async ({ from, text, hasMedia }) => {
+  if (!text && !hasMedia) return;
+  const reply = await bot.handleMessage({ userId: from, text, context: { hasMedia } });
+  return reply;
+});
 
-app.listen(PORT, HOST, () => {
-  console.log(`[HTTP] running on ${PORT}`)
-})
+// Tratamento de erros globais
+server.on('error', (err) => console.error('[HTTP][ERROR]', err?.message || err));
+process.on('uncaughtException', (err) => console.error('[UNCAUGHT]', err));
+process.on('unhandledRejection', (r) => console.error('[UNHANDLED]', r));
