@@ -1,16 +1,30 @@
-﻿bot_id: claudia
+﻿# =========================
+# 📦 Identificação da bot
+# =========================
+bot_id: claudia
 tenant_id: matrix
 product_id: prog_creme_170
 
+# =========================
+# 🧑 Persona / Tom
+# =========================
 persona:
   display_name: "Cláudia"
   tone: ["empática", "amiga", "confiante"]
   style: "Respostas curtas (até 2 frases + 1 pergunta). Máx. 2 emojis."
 
+# =========================
+# ⚙️ Flags de comportamento
+# =========================
 flags:
+  has_cod: true                 # compat: usado pelos flows atuais
+  send_opening_photo: true      # compat: se quiser foto de abertura
   send_link_in_two_messages: true
   cooldown_cod_seconds: 90
 
+# =========================
+# 💼 Negócio / Oferta (NOVO)
+# =========================
 business:
   price_target: 170
   price_original: 197
@@ -18,3 +32,55 @@ business:
   coupon_code: "TOP-AGO2025-PROGRVG-150"
   delivery_time: "24h capitais / 2 dias demais"
   payment: "Somente no recebimento (COD)"
+
+# ---------------------------------------------------------
+# 🔁 ESPelho p/ compatibilidade imediata (pode remover depois)
+# Mantém as chaves esperadas pelo código antigo enquanto migramos
+# ---------------------------------------------------------
+product:
+  price_target: 170
+  price_original: 197
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  coupon_code: "TOP-AGO2025-PROGRVG-150"
+
+# =========================
+# 🧠 Modelos por estágio
+# =========================
+models_by_stage:
+  greet: gpt-4o-mini
+  qualify: gpt-4o-mini
+  offer: gpt-4o
+  close: gpt-4o
+  postsale: gpt-4o-mini
+
+# =========================
+# 📈 Telemetria (reserva p/ futuro)
+# =========================
+telemetry:
+  enabled: true
+  kpis:
+    - lead_in
+    - reply_latency_ms
+    - stage_intent
+    - close_attempt
+    - link_click_hint
+  sink: "file"                  # file | http | db (futuro)
+  file_path: "telemetry.log.json"
+
+# =========================
+# 🧭 NLU (palavras-chave extra, opcional)
+# =========================
+nlu:
+  keywords:
+    delivery: ["entrega", "prazo", "frete", "dias", "chega"]
+    payment: ["pagamento", "pix", "cartão", "boleto", "cod", "contra entrega"]
+    features: ["como usa", "modo de uso", "aplicar", "aplicação"]
+    objection: ["caro", "confiança", "anvisa", "medo", "golpe"]
+
+# =========================
+# 🧪 Regras de resposta (limitadores, opcional)
+# =========================
+limits:
+  max_sentences: 2
+  max_emojis: 2
+  ask_back_enabled: true

@@ -1,0 +1,135 @@
+===============================
+MATRIX — MODELO DE MENINA (BOT)
+===============================
+
+🚀 Contexto
+-----------
+Cada "menina" é um bot de vendas (persona própria) conectado à Matrix.  
+Estrutura modular: prompts, FSM, ferramentas (tools), telemetria, memória.  
+Execução em container Railway (1 instância = 1 número de WhatsApp).  
+
+--------------------------------
+📦 Estrutura de Pastas (src/)
+--------------------------------
+src/
+  index.js          # server Express + rotas (health, webhook, QR, etc.)
+  wpp.js            # adapter WhatsApp (Baileys + typing + reconexão)
+  bot.js            # FSM/intents + guardrails
+  model.js          # wrapper LLM (OpenAI)
+  memory.js         # memória curta (TTL ou Redis no futuro)
+  telemetry.js      # log de eventos
+  middlewares/
+    rateLimit.js    # limitador de flood
+  prompts/
+    base.js         # persona + style rules (JSON base)
+    product.js      # dados de produto (price, claims, checkout)
+  flows/
+    greet.js        # abertura
+    qualify.js      # qualificação
+    offer.js        # oferta
+    close.js        # fechamento
+    postsale.js     # pós-venda
+  utils/
+    polish.js       # variação de frases + anti-loop
+    smartSend.js    # envia foto do produto + texto
+
+--------------------------------
+⚙️ Variáveis de Ambiente (.env)
+--------------------------------
+OPENAI_API_KEY=xxxx
+MODEL_NAME=gpt-4o
+PRICE_ORIGINAL=197
+PRICE_TARGET=170
+CHECKOUT_LINK=https://entrega.logzz.com.br/pay/xxxxx
+COUPON_CODE=TOP-AGO2025-PRODUTO-150
+WPP_AUTH_DIR=/app/baileys-auth
+MEMORY_TTL_DAYS=7
+PORT=8080
+
+# (opcional tuning)
+TYPING_MS_PER_CHAR=35
+TYPING_MIN_MS=800
+TYPING_MAX_MS=5000
+
+--------------------------------
+🧠 Persona Base (exemplo Cláudia)
+--------------------------------
+display_name: "Cláudia"
+role: "Vendedora oficial da TopOfertas Express"
+tone: empática, confiante, consultiva
+style: respostas curtas (1–2 frases, máx. 3 linhas), até 2 emojis
+guardrails:
+  - nunca revelar ser IA
+  - link apenas no close com intenção clara
+  - pagamento sempre COD
+  - se receber mídia: pedir resumo em texto
+
+--------------------------------
+🔗 Fluxo FSM (padrão)
+--------------------------------
+1) greet      → abertura + pergunta leve
+2) qualify    → tipo de cabelo/dor
+3) offer      → benefícios + preço + prazo + COD (sem link)
+4) close      → só envia link se intenção clara
+5) postsale   → valida comprovante + libera cupom
+
+Extras:
+- objections (preço, medo, confiança)
+- remarketing (não usar em chat ativo)
+- segunda_compra (desconto fidelidade)
+
+--------------------------------
+🛠️ Tools (padrão)
+--------------------------------
+getPrice(productId)
+getDeliveryETA(cep)
+checkStock(productId)
+createCheckout(productId, payment)
+applyCoupon(code)
+saveLead(userId, nome, intent)
+logTelemetry(event)
+
+--------------------------------
+📊 Telemetria
+--------------------------------
+Evento JSON:
+{
+  ts, userId, stage, intent,
+  msg_in, msg_out,
+  took_ms, next_action,
+  conversion?, loss_reason?
+}
+
+--------------------------------
+🧪 Roteiro Testes
+--------------------------------
+- /health responde {ok:true}
+- /wpp/qr mostra QRCode e conecta
+- greet pede nome (1 pergunta só)
+- qualify mapeia tipo de cabelo sem repetir
+- offer mostra preço, prazo, COD (sem link)
+- close manda link só se lead quiser comprar
+- postsale reconhece comprovante + libera cupom
+- telemetria registra eventos
+
+--------------------------------
+🚀 Deploy no Railway
+--------------------------------
+1. Conectar repo
+2. Variables (.env) → preencher
+3. Volumes → mount path /app/baileys-auth
+4. Deploy automático main
+5. Testar: 
+   GET  /health
+   GET  /wpp/qr (parear número)
+   POST /webhook {"userId":"c001","text":"Oi, Cláudia!"}
+
+--------------------------------
+🧬 Clonar Nova Menina
+--------------------------------
+1) Copiar pasta base (ex.: /claudia → /livia)
+2) Ajustar persona + prompts/base.js
+3) Atualizar product.js (nome, preço, claims, foto)
+4) Trocar variáveis .env (CHECKOUT_LINK, PRICE_TARGET, etc.)
+5) Deploy nova instância Railway (novo número)
+6) Parear QR em /wpp/qr

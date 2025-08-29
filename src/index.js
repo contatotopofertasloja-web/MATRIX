@@ -1,197 +1,213 @@
 ﻿// src/index-gpt.js
-import * as baileys from '@whiskeysockets/baileys'
-import qrcode from 'qrcode'
-import path from 'node:path'
+import * as baileys from '@whiskeysockets/baileys';
+import QRCode from 'qrcode';
+import path from 'path';
+import { existsSync, mkdirSync } from 'fs';
+import { loadBotConfig } from './config/bootstrap.js';
+const botConfig = loadBotConfig();
+console.log(`[MATRIX] Bot carregado: ${botConfig.bot_id} (${botConfig.persona_name})`);
 
-// --- typing helpers ---
-const TYPING_MS_PER_CHAR = Number(process.env.TYPING_MS_PER_CHAR || 35)
-const TYPING_MIN_MS      = Number(process.env.TYPING_MIN_MS || 800)
-const TYPING_MAX_MS      = Number(process.env.TYPING_MAX_MS || 5000)
+// ------------------------------
+// ENV & Consts
+// ------------------------------
+const AUTH_DIR = process.env.WPP_AUTH_DIR || './baileys-auth';
+const SESSION  = process.env.WPP_SESSION   || 'default';
+const DEVICE   = process.env.WPP_DEVICE    || 'Matrix-Node';
+const APP_VER  = process.env.WPP_APPVER    || ''; // opcional "2.24.x"
+const AUTH_PATH = path.join(AUTH_DIR, SESSION);
+
+// Typing config
+const TYPING_MS_PER_CHAR = Number(process.env.TYPING_MS_PER_CHAR || 35);
+const TYPING_MIN_MS      = Number(process.env.TYPING_MIN_MS || 800);
+const TYPING_MAX_MS      = Number(process.env.TYPING_MAX_MS || 5000);
+
+// Globals
+let sock = null;
+let ready = false;
+let lastQrDataUrl = null;
+let messageHandler = null; // usuário registra via adapter.onMessage
+
+// Garante pasta de sessão
+if (!existsSync(AUTH_DIR)) mkdirSync(AUTH_DIR, { recursive: true });
+if (!existsSync(AUTH_PATH)) mkdirSync(AUTH_PATH, { recursive: true });
+
+// ------------------------------
+// Helpers
+// ------------------------------
 function calcTypingMs(text) {
-  const n = Math.max(1, String(text || '').length)
-  return Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, n * TYPING_MS_PER_CHAR))
+  const n = Math.max(1, String(text || '').length);
+  const ms = Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, n * TYPING_MS_PER_CHAR));
+  return ms;
 }
-const delay = (ms) => new Promise(r => setTimeout(r, ms))
-async function simulateTyping(socket, to, text) {
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+function normalizeToJid(to) {
+  if (!to) throw new Error('destinatário inválido');
+  const s = String(to).trim();
+
+  if (s.endsWith('@s.whatsapp.net') || s.endsWith('@g.us')) return s;
+
+  // aceita "+55...", "55...", "5511...":
+  const digits = s.replace(/[^\d]/g, '');
+  if (!digits) throw new Error('número inválido');
+
+  // grupos não suportados aqui
+  if (digits.endsWith('@g.us')) throw new Error('envio para grupo não suportado por este helper');
+
+  return `${digits}@s.whatsapp.net`;
+}
+
+async function simulateTyping(jid, text) {
   try {
-    await socket.presenceSubscribe(to)
-    await socket.sendPresenceUpdate('composing', to)
-    await delay(calcTypingMs(text))
-    await socket.sendPresenceUpdate('paused', to)
+    if (!sock) return;
+    await sock.presenceSubscribe(jid);
+    await sock.sendPresenceUpdate('composing', jid);
+    await delay(calcTypingMs(text));
+    await sock.sendPresenceUpdate('paused', jid);
   } catch (e) {
-    console.warn('[WPP][typing]', e?.message || e)
+    console.warn('[WPP][typing]', e?.message || e);
   }
 }
 
-// -------- resolver robusto para diferentes formatos de export --------
-function resolveMakeWASocket(mod) {
-  if (!mod) return null
-  if (typeof mod === 'function') return mod
-  if (typeof mod.default === 'function') return mod.default
-  if (typeof mod.makeWASocket === 'function') return mod.makeWASocket
-  if (mod.default && typeof mod.default.makeWASocket === 'function') {
-    return mod.default.makeWASocket
+// ------------------------------
+// Socket lifecycle
+// ------------------------------
+async function startSocket() {
+  const { state, saveCreds } = await baileys.useMultiFileAuthState(AUTH_PATH);
+
+  // Versão do WhatsApp Web suportada
+  let version = (await baileys.fetchLatestBaileysVersion()).version;
+  if (APP_VER) {
+    try {
+      // permite forçar versão via env, ex: "2.2419.9"
+      const arr = APP_VER.split('.').map(x => Number(x));
+      if (arr.length === 3 && arr.every(Number.isFinite)) version = arr;
+    } catch {}
   }
-  return null
-}
 
-const makeWASocket = resolveMakeWASocket(baileys)
-const { useMultiFileAuthState, fetchLatestBaileysVersion } = baileys
+  console.log('[WPP] Using WA version:', version?.join('.') || version);
 
-if (typeof makeWASocket !== 'function') {
-  throw new Error('Falha ao resolver makeWASocket de @whiskeysockets/baileys')
-}
-
-// -------- estado interno --------
-let sock = null
-let authReady = false
-let lastQrDataURL = null
-let reconnecting = false
-
-// -------- adapter público usado pelo app --------
-export const adapter = {
-  async sendMessage(to, text) {
-    if (!sock) throw new Error('Baileys não inicializado')
-    const jid = normalizeJid(to)
-    await simulateTyping(sock, jid, text)
-    await sock.sendMessage(jid, { text: String(text) })
-  },
-
-  async sendImage(to, url, caption = '') {
-    if (!sock) throw new Error('Baileys não inicializado')
-    const jid = normalizeJid(to)
-    await simulateTyping(sock, jid, caption || url)
-    await sock.sendMessage(jid, { image: { url: String(url) }, caption: String(caption) })
-  },
-
-  onMessage(handler) {
-    startBaileys(async ({ from, text, hasMedia }) => {
-      if (typeof handler === 'function') {
-        // o handler pode retornar a resposta (string). Se retornar, a index.js manda.
-        return handler({ from, text, hasMedia })
-      }
-    })
-  }
-}
-
-// helpers acessados pelos endpoints HTTP
-export function getQrDataURL() {
-  return lastQrDataURL
-}
-export function isReady() {
-  return authReady && !!sock
-}
-
-// -------- implementação --------
-async function startBaileys(onMessage) {
-  // base do diretório de sessão (env ou default)
-  const baseDir = process.env.WPP_AUTH_DIR || '/app/baileys-auth-v2'
-  const session = process.env.WPP_SESSION || 'default'
-  const authDir = path.join(baseDir, session)
-
-  console.log(`[WPP] Iniciando com WPP_AUTH_DIR=${authDir}`)
-
-  const { state, saveCreds } = await useMultiFileAuthState(authDir)
-  const { version } = await fetchLatestBaileysVersion()
-
-  sock = makeWASocket({
-    version,
+  sock = baileys.makeWASocket({
     auth: state,
-    printQRInTerminal: true,          // QR também nos logs do Railway
-    browser: ['Matrix', 'Chrome', '120.0.0'],
+    printQRInTerminal: false, // geramos DataURL pro endpoint /wpp/qr
+    browser: ['Matrix', DEVICE, '1.0.0'],
+    version,
     markOnlineOnConnect: false,
     syncFullHistory: false,
-    defaultQueryTimeoutMs: 60_000,
-    connectTimeoutMs: 60_000,
-    keepAliveIntervalMs: 20_000
-  })
+    generateHighQualityLinkPreview: true,
+  });
 
-  if (state?.creds?.me?.id) {
-    console.log(`[WPP] Sessão carregada do volume! Número: ${state.creds.me.id}`)
-  } else {
-    console.log('[WPP] Nenhuma sessão encontrada → será gerado QR')
-  }
+  // Atualização de credenciais no disco
+  sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('creds.update', saveCreds)
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update || {}
+  // QR e status de conexão
+  sock.ev.on('connection.update', async (u) => {
+    const { connection, lastDisconnect, qr } = u;
 
     if (qr) {
       try {
-        lastQrDataURL = await qrcode.toDataURL(qr)
-        console.log('[WPP] QRCode atualizado')
+        lastQrDataUrl = await QRCode.toDataURL(qr);
       } catch (e) {
-        console.log('[WPP] Falha ao gerar dataURL do QR:', e)
+        console.error('[WPP][QR][ERR]', e?.message || e);
+        lastQrDataUrl = null;
       }
     }
 
     if (connection === 'open') {
-      authReady = true
-      lastQrDataURL = null
-      reconnecting = false
-      console.log('[WPP] Conectado com sucesso 🎉')
-    }
+      ready = true;
+      lastQrDataUrl = null;
+      console.log('[WPP] Conectado ✅');
+    } else if (connection === 'close') {
+      ready = false;
+      const shouldReconnect =
+        !lastDisconnect?.error?.output?.statusCode ||
+        lastDisconnect.error.output.statusCode !== baileys.DisconnectReason.loggedOut;
 
-    if (connection === 'close') {
-      authReady = false
-      const reason =
-        lastDisconnect?.error?.output?.statusCode ||
-        lastDisconnect?.error?.message ||
-        lastDisconnect?.error ||
-        'desconhecido'
-      console.log('[WPP] Conexão fechada ❌ Motivo:', reason)
-
-      if (!reconnecting) {
-        reconnecting = true
-        const waitMs = 3_000
-        console.log(`[WPP] Tentando reconectar em ${waitMs}ms...`)
-        setTimeout(() => {
-          startBaileys(onMessage).catch(err =>
-            console.error('[WPP] Falha no re-start:', err)
-          )
-        }, waitMs)
+      console.warn('[WPP] Conexão fechada', lastDisconnect?.error?.message || lastDisconnect);
+      if (shouldReconnect) {
+        console.log('[WPP] Tentando reconectar em 2s…');
+        setTimeout(() => startSocket().catch(err => console.error('[WPP][reconnect][ERR]', err)), 2000);
+      } else {
+        console.error('[WPP] Logout detectado — é preciso reescanear o QR.');
       }
     }
-  })
+  });
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages && messages[0]
-    if (!msg || !msg.message) return
+  // Recebimento de mensagens
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      if (m.type !== 'notify') return;
+      const msg = m.messages && m.messages[0];
+      if (!msg || msg.key.fromMe) return;            // ignora as nossas
+      if (!msg.message) return;
 
-    const from = msg.key.remoteJid
-    const text =
-      msg.message.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      msg.message?.imageMessage?.caption ||
-      ''
+      const from = msg.key.remoteJid;
+      // Ignora grupos
+      if (!from || from.endsWith('@g.us')) return;
 
-    const hasMedia = !!(
-      msg.message.imageMessage ||
-      msg.message.videoMessage ||
-      msg.message.documentMessage ||
-      msg.message.audioMessage ||
-      msg.message.stickerMessage ||
-      msg.message.viewOnceMessage
-    )
+      const txt =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        msg.message.videoMessage?.caption ||
+        msg.message.buttonsResponseMessage?.selectedDisplayText ||
+        msg.message.listResponseMessage?.singleSelectReply?.selectedRowId ||
+        '';
 
-    console.log(`[WPP] Mensagem de ${from}: ${text || '[mídia]'}`)
+      const hasMedia = Boolean(
+        msg.message.imageMessage ||
+        msg.message.videoMessage ||
+        msg.message.audioMessage ||
+        msg.message.documentMessage ||
+        msg.message.stickerMessage
+      );
 
-    if (typeof onMessage === 'function') {
-      try {
-        const reply = await onMessage({ from, text, hasMedia })
-        // quem envia a resposta é a camada superior (index.js),
-        // chamando adapter.sendMessage/sendImage conforme necessário.
-        return reply
-      } catch (err) {
-        console.error('[WPP][onMessage][ERR]', err)
+      if (typeof messageHandler === 'function') {
+        const maybeReply = await messageHandler({ from, text: String(txt || '').trim(), hasMedia });
+        // se handler devolver string, enviamos automaticamente
+        if (typeof maybeReply === 'string' && maybeReply.trim()) {
+          await adapter.sendMessage(from, maybeReply);
+        }
       }
+    } catch (e) {
+      console.error('[WPP][onMessage][ERR]', e?.message || e);
     }
-  })
+  });
 }
 
-function normalizeJid(to) {
-  const digits = String(to).replace(/\D/g, '')
-  if (digits.endsWith('@s.whatsapp.net')) return digits
-  return `${digits}@s.whatsapp.net`
+// Inicializa ao importar o módulo
+startSocket().catch(err => console.error('[WPP][init][ERR]', err));
+
+// ------------------------------
+// Public API
+// ------------------------------
+export function isReady() {
+  return Boolean(ready && sock);
 }
+
+export async function getQrDataURL() {
+  return lastQrDataUrl;
+}
+
+export const adapter = {
+  onMessage(fn) {
+    messageHandler = fn;
+  },
+
+  async sendMessage(to, text) {
+    if (!sock) throw new Error('WhatsApp não inicializado');
+    const jid = normalizeToJid(to);
+    await simulateTyping(jid, text);
+    await sock.sendMessage(jid, { text: String(text ?? '') });
+  },
+
+  async sendImage(to, url, caption = '') {
+    if (!sock) throw new Error('WhatsApp não inicializado');
+    const jid = normalizeToJid(to);
+    await simulateTyping(jid, caption || url);
+    await sock.sendMessage(jid, {
+      image: { url: String(url) },
+      caption: String(caption || ''),
+    });
+  }
+};
