@@ -2,6 +2,8 @@
 import * as baileys from '@whiskeysockets/baileys'
 import qrcode from 'qrcode'
 import path from 'node:path'
+import * as adapter from './adapters/whatsapp/index.js';
+
 
 // --- helpers de digitação ---
 const TYPING_MS_PER_CHAR = Number(process.env.TYPING_MS_PER_CHAR || 35)

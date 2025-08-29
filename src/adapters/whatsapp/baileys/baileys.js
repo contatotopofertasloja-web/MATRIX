@@ -1,4 +1,6 @@
-﻿let _onMsgCb = null;
+// Implementação mínima; substitua pelos handlers reais quando quiser.
+// Mantém a mesma interface { init, onMessage, sendMessage, stop }.
+let _onMsgCb = null;
 
 export async function init() {
   console.log('[WPP/baileys] init');
@@ -15,6 +17,7 @@ export async function sendMessage(to, text, opts = {}) {
 
 export async function stop() {
   console.log('[WPP/baileys] stop');
+  // TODO: fechar conexões
 }
 
 export default { init, onMessage, sendMessage, stop };
