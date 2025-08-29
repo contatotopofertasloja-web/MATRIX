@@ -3,6 +3,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
+import { startBot } from './bot/index.js';
 
 import { adapter, isReady as wppReady, getQrDataURL } from './adapters/whatsapp/index.js';
 import botDefault, { handleMessage as botHandle, initBot } from './bot.js';
