@@ -6,6 +6,7 @@ import dotenv from 'dotenv'
 import { adapter } from './adapters/whatsapp/baileys/index.js'
 import { getQrDataURL, isReady } from './adapters/whatsapp/baileys/index.js'
 
+
 dotenv.config()
 
 const app = express()

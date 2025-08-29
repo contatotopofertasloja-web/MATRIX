@@ -1,25 +1,37 @@
-﻿// --- Baileys import robusto (ESM/CJS-safe) ---
-import * as _baileys from '@whiskeysockets/baileys'
+﻿// ---------- Imports robustos ----------
+import * as baileys from '@whiskeysockets/baileys'
+import qrcode from 'qrcode'
 
-import makeWASocket, { useMultiFileAuthState } from '@whiskeysockets/baileys'
+// Resolver para diferentes formatos de export do Baileys (ESM/CJS)
+function resolveMakeWASocket(mod) {
+  if (!mod) return null
+  // function direta
+  if (typeof mod === 'function') return mod
+  // default é função
+  if (typeof mod.default === 'function') return mod.default
+  // export nomeado
+  if (typeof mod.makeWASocket === 'function') return mod.makeWASocket
+  // default contém a função como propriedade
+  if (mod.default && typeof mod.default.makeWASocket === 'function') {
+    return mod.default.makeWASocket
+  }
+  return null
+}
 
-// tenta extrair a função de vários formatos possíveis
-const makeWASocket =
-  _baileys?.default?.default ||
-  _baileys?.default ||
-  _baileys?.makeWASocket ||
-  _baileys
+const makeWASocket = resolveMakeWASocket(baileys)
+const { useMultiFileAuthState } = baileys
 
-const { useMultiFileAuthState } = _baileys
+console.log('[WPP][debug] resolved makeWASocket type =', typeof makeWASocket)
+if (typeof makeWASocket !== 'function') {
+  throw new Error('Falha ao resolver makeWASocket a partir de @whiskeysockets/baileys')
+}
 
-// (Opcional) debug rápido — pode remover depois
-console.log('[WPP][debug] typeof makeWASocket =', typeof makeWASocket)
-
-
+// ---------- Estado ----------
 let sock = null
 let authReady = false
 let lastQrDataURL = null
 
+// ---------- Adapter público ----------
 export const adapter = {
   async sendMessage(to, text) {
     if (!sock) throw new Error('Baileys não inicializado')
@@ -42,7 +54,7 @@ export const adapter = {
   }
 }
 
-// Helpers para o servidor HTTP
+// Helpers expostos para HTTP
 export function getQrDataURL() {
   return lastQrDataURL
 }
@@ -52,7 +64,6 @@ export function isReady() {
 }
 
 // ---------- Internals ----------
-
 async function startBaileys(onMessage) {
   const authDir = process.env.WPP_AUTH_DIR || './.wpp-auth'
   console.log(`[WPP] Iniciando com WPP_AUTH_DIR=${authDir}`)
@@ -61,7 +72,7 @@ async function startBaileys(onMessage) {
 
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true // em prod você pode usar a rota /qr
+    printQRInTerminal: true // você também pode pegar o QR via /qr
   })
 
   if (state?.creds?.me?.id) {
