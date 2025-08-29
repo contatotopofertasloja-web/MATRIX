@@ -70,10 +70,19 @@ async function startBaileys(onMessage) {
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
 
-  sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true // você também pode pegar o QR via /qr
-  })
+ // pega a versão mais recente suportada pelo WhatsApp Web
+const { version } = await baileys.fetchLatestBaileysVersion()
+
+sock = makeWASocket({
+  version,
+  auth: state,                      // useMultiFileAuthState(state)
+  printQRInTerminal: false,         // QR via /wpp/qr
+  browser: ['Matrix', 'Chrome', '120.0.0'],
+  markOnlineOnConnect: false,       // evita ficar "online" no pareamento
+  syncFullHistory: false,           // não tenta puxar histórico completo
+  defaultQueryTimeoutMs: 60_000,    // fôlego extra
+})
+
 
   if (state?.creds?.me?.id) {
     console.log(`[WPP] Sessão carregada do volume! Número: ${state.creds.me.id}`)
