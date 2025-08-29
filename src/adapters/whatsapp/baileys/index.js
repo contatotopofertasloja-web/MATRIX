@@ -1,17 +1,14 @@
-﻿// ---------- Imports robustos ----------
+﻿// src/adapters/whatsapp/baileys/index.js
 import * as baileys from '@whiskeysockets/baileys'
 import qrcode from 'qrcode'
+import path from 'node:path'
 
-// Resolver para diferentes formatos de export do Baileys (ESM/CJS)
+// -------- resolver robusto para diferentes formatos de export --------
 function resolveMakeWASocket(mod) {
   if (!mod) return null
-  // function direta
   if (typeof mod === 'function') return mod
-  // default é função
   if (typeof mod.default === 'function') return mod.default
-  // export nomeado
   if (typeof mod.makeWASocket === 'function') return mod.makeWASocket
-  // default contém a função como propriedade
   if (mod.default && typeof mod.default.makeWASocket === 'function') {
     return mod.default.makeWASocket
   }
@@ -19,19 +16,19 @@ function resolveMakeWASocket(mod) {
 }
 
 const makeWASocket = resolveMakeWASocket(baileys)
-const { useMultiFileAuthState } = baileys
+const { useMultiFileAuthState, fetchLatestBaileysVersion } = baileys
 
 console.log('[WPP][debug] resolved makeWASocket type =', typeof makeWASocket)
 if (typeof makeWASocket !== 'function') {
-  throw new Error('Falha ao resolver makeWASocket a partir de @whiskeysockets/baileys')
+  throw new Error('Falha ao resolver makeWASocket de @whiskeysockets/baileys')
 }
 
-// ---------- Estado ----------
+// -------- estado interno --------
 let sock = null
 let authReady = false
 let lastQrDataURL = null
 
-// ---------- Adapter público ----------
+// -------- adapter público usado pelo app --------
 export const adapter = {
   async sendMessage(to, text) {
     if (!sock) throw new Error('Baileys não inicializado')
@@ -54,7 +51,7 @@ export const adapter = {
   }
 }
 
-// Helpers expostos para HTTP
+// helpers acessados pelos endpoints HTTP
 export function getQrDataURL() {
   return lastQrDataURL
 }
@@ -63,26 +60,29 @@ export function isReady() {
   return authReady && !!sock
 }
 
-// ---------- Internals ----------
+// -------- implementação --------
 async function startBaileys(onMessage) {
-  const authDir = process.env.WPP_AUTH_DIR || './.wpp-auth'
+  // base do diretório de sessão (respeita env e permite subpasta se quiser usar WPP_SESSION)
+  const baseDir = process.env.WPP_AUTH_DIR || '/app/baileys-auth'
+  const session = process.env.WPP_SESSION || 'default'
+  const authDir = path.join(baseDir, session)
+
   console.log(`[WPP] Iniciando com WPP_AUTH_DIR=${authDir}`)
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
 
- // pega a versão mais recente suportada pelo WhatsApp Web
-const { version } = await baileys.fetchLatestBaileysVersion()
+  // força versão do WhatsApp Web suportada
+  const { version } = await fetchLatestBaileysVersion()
 
-sock = makeWASocket({
-  version,
-  auth: state,                      // useMultiFileAuthState(state)
-  printQRInTerminal: false,         // QR via /wpp/qr
-  browser: ['Matrix', 'Chrome', '120.0.0'],
-  markOnlineOnConnect: false,       // evita ficar "online" no pareamento
-  syncFullHistory: false,           // não tenta puxar histórico completo
-  defaultQueryTimeoutMs: 60_000,    // fôlego extra
-})
-
+  sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: true,          // QR também nos logs do Railway
+    browser: ['Matrix', 'Chrome', '120.0.0'],
+    markOnlineOnConnect: false,       // evita ficar "online" no pareamento
+    syncFullHistory: false,           // não tenta puxar histórico completo
+    defaultQueryTimeoutMs: 60_000,    // fôlego extra
+  })
 
   if (state?.creds?.me?.id) {
     console.log(`[WPP] Sessão carregada do volume! Número: ${state.creds.me.id}`)
@@ -108,9 +108,16 @@ sock = makeWASocket({
       authReady = true
       lastQrDataURL = null
       console.log('[WPP] Conectado com sucesso 🎉')
-    } else if (connection === 'close') {
+    }
+
+    if (connection === 'close') {
       authReady = false
-      console.log('[WPP] Conexão fechada ❌', lastDisconnect?.error)
+      const reason =
+        lastDisconnect?.error?.output?.statusCode ||
+        lastDisconnect?.error?.message ||
+        lastDisconnect?.error ||
+        'desconhecido'
+      console.log('[WPP] Conexão fechada ❌ Motivo:', reason)
     }
   })
 
@@ -121,11 +128,15 @@ sock = makeWASocket({
     const from = msg.key.remoteJid
     const text =
       msg.message.conversation ||
-      (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
-      (msg.message.imageMessage && msg.message.imageMessage.caption) ||
+      msg.message?.extendedTextMessage?.text ||
+      msg.message?.imageMessage?.caption ||
       ''
 
-    const hasMedia = !!(msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage)
+    const hasMedia = !!(
+      msg.message.imageMessage ||
+      msg.message.videoMessage ||
+      msg.message.documentMessage
+    )
 
     console.log(`[WPP] Mensagem de ${from}: ${text}`)
     if (onMessage) await onMessage({ from, text, hasMedia })
