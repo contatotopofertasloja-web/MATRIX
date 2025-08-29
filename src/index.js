@@ -3,8 +3,8 @@ import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
 
 // Import direto do adapter em TS (mantemos como você já está usando)
-import { adapter } from './adapters/whatsapp/baileys/index.ts'
-import { getQrDataURL, isReady } from './adapters/whatsapp/baileys/index.ts'
+import { adapter } from './adapters/whatsapp/baileys/index.js'
+import { getQrDataURL, isReady } from './adapters/whatsapp/baileys/index.js'
 
 dotenv.config()
 

@@ -20,7 +20,7 @@
     "express": "^4.19.2",
     "express-rate-limit": "^7.1.5",
     "openai": "^4.56.0",
-    "qrcode": "^1.5.3"
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "eslint": "^9.9.0",
