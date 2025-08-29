@@ -2,10 +2,12 @@
 import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
 
-// Import direto do adapter em TS (mantemos como você já está usando)
-import { adapter } from './adapters/whatsapp/baileys/index.js'
-import { getQrDataURL, isReady } from './adapters/whatsapp/baileys/index.js'
-
+// Adapter Baileys (já com QR, versão e flags estáveis)
+import {
+  adapter,
+  getQrDataURL,
+  isReady
+} from './adapters/whatsapp/baileys/index.js'
 
 dotenv.config()
 
@@ -14,34 +16,38 @@ const PORT = process.env.PORT || 3000
 const HOST = process.env.HOST || '0.0.0.0'
 const WEBHOOK_TOKEN = (process.env.WEBHOOK_TOKEN || '').trim()
 
-app.use(express.json())
+// Estamos atrás de proxy (Railway/Ingress) → necessário para express-rate-limit
+app.set('trust proxy', 1)
 
-// Rate limit básico
+// Middlewares básicos
+app.use(express.json())
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 300,
+    windowMs: 15 * 60 * 1000, // 15 min
+    max: 300,                  // 300 req/15min por IP
     standardHeaders: true,
     legacyHeaders: false
   })
 )
 
-// Proteção opcional por token simples (use para /send e /send-image)
+// Proteção opcional por token (para /send e /send-image)
 function requireToken(req, res, next) {
   if (!WEBHOOK_TOKEN) return next()
-  const token = (req.headers['x-api-token'] || req.query.token || '').toString()
-  if (token !== WEBHOOK_TOKEN) return res.status(401).json({ error: 'unauthorized' })
+  const token = String(req.headers['x-api-token'] || req.query.token || '')
+  if (token !== WEBHOOK_TOKEN) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
   next()
 }
 
-// ---------- ROTAS "NUAS" (sem prefixo) ----------
-app.get('/health', (req, res) => {
+// ---------- ROTAS ----------
+app.get('/health', (_req, res) => {
   res.json({ ok: true, wppReady: isReady() })
 })
 
-app.get('/qr', (req, res) => {
+app.get('/qr', (_req, res) => {
   const dataUrl = getQrDataURL()
-  // Se já está conectado, não há QR — 204 é esperado
+  // Se já conectou, não há QR — 204 é esperado
   if (!dataUrl || isReady()) return res.status(204).send()
   const base64 = dataUrl.split(',')[1]
   const img = Buffer.from(base64, 'base64')
@@ -79,11 +85,11 @@ router.post('/send', requireToken, (req, res) => res.redirect(307, '/send'))
 router.post('/send-image', requireToken, (req, res) => res.redirect(307, '/send-image'))
 app.use('/wpp', router)
 
-// Liga o Baileys: pipeline de mensagens
+// Liga o Baileys para receber mensagens
 adapter.onMessage(async ({ from, text }) => {
-  // TODO: plugar flows/NLU aqui
   if (!text) return
   if (/^ping$/i.test(text)) return 'pong'
+  // TODO: plugar flows/NLU aqui
 })
 
 app.listen(PORT, HOST, () => {
