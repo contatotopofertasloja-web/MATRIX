@@ -1,29 +1,32 @@
 {
-  "name": "matrix",
-  "version": "1.0.0",
-  "private": true,
-  "description": "MATRIX — IA de vendas (WhatsApp) com FSM + NLU + Telemetry",
-  "type": "module",
+  "name": "matrix-wpp",
+  "version": "2.0.0",
+  "description": "Projeto Matrix IA 2.0 — Cláudia (assistente de vendas no WhatsApp, Baileys + GPT)",
   "main": "src/index.js",
-  "engines": {
-    "node": ">=18.17"
-  },
+  "type": "module",
   "scripts": {
+    "dev": "cross-env NODE_ENV=development nodemon src/index.js",
     "start": "node src/index.js",
-    "dev": "nodemon --watch src --ext js,json --exec \"node src/index.js\"",
-    "lint": "eslint . || true"
+    "lint": "eslint . --ext .js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.6.0",
+    "@whiskeysockets/baileys": "^6.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.1.5",
+    "express-rate-limit": "^7.3.0",
+    "morgan": "^1.10.0",
     "openai": "^4.56.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "eslint": "^9.9.0",
-    "nodemon": "^3.0.2"
-  }
+    "cross-env": "^7.0.3",
+    "eslint": "^8.57.0",
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "license": "MIT",
+  "author": "Matrix Project Team"
 }

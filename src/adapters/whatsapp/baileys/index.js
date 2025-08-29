@@ -1,162 +1,137 @@
-﻿import * as baileys from '@whiskeysockets/baileys'
-import qrcode from 'qrcode'
-import path from 'node:path'
+﻿// src/index.js
+// Server HTTP + WhatsApp adapter + handler MVP da Cláudia
 
-// -------- resolver robusto para diferentes formatos de export --------
-function resolveMakeWASocket(mod) {
-  if (!mod) return null
-  if (typeof mod === 'function') return mod
-  if (typeof mod.default === 'function') return mod.default
-  if (typeof mod.makeWASocket === 'function') return mod.makeWASocket
-  if (mod.default && typeof mod.default.makeWASocket === 'function') {
-    return mod.default.makeWASocket
-  }
-  return null
-}
+import express from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import morgan from 'morgan';
 
-const makeWASocket = resolveMakeWASocket(baileys)
-const { useMultiFileAuthState, fetchLatestBaileysVersion } = baileys
+import {
+  adapter,        // { onMessage(fn), sendMessage(to, text), sendImage(to, url, caption) }
+  isReady,        // -> boolean
+  getQrDataURL    // -> dataURL (base64) do QR ou null
+} from './adapters/whatsapp/baileys/index.js';
 
-if (typeof makeWASocket !== 'function') {
-  throw new Error('Falha ao resolver makeWASocket de @whiskeysockets/baileys')
-}
+// ---------------------------
+// Config básica
+// ---------------------------
+const PORT = Number(process.env.PORT || 8080);
+const app  = express();
 
-// -------- estado interno --------
-let sock = null
-let authReady = false
-let lastQrDataURL = null
-let reconnecting = false
+// Atrás de proxy (Railway/Ingress)
+app.set('trust proxy', 1);
 
-// -------- adapter público usado pelo app --------
-export const adapter = {
-  async sendMessage(to, text) {
-    if (!sock) throw new Error('Baileys não inicializado')
-    const jid = normalizeJid(to)
-    await sock.sendMessage(jid, { text: String(text) })
-  },
+// Middlewares úteis
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use(morgan('tiny'));
 
-  async sendImage(to, url, caption = '') {
-    if (!sock) throw new Error('Baileys não inicializado')
-    const jid = normalizeJid(to)
-    await sock.sendMessage(jid, { image: { url: String(url) }, caption: String(caption) })
-  },
-
-  onMessage(handler) {
-    startBaileys(async ({ from, text, hasMedia }) => {
-      if (typeof handler === 'function') {
-        await handler({ from, text, hasMedia })
-      }
-    })
-  }
-}
-
-// helpers acessados pelos endpoints HTTP
-export function getQrDataURL() {
-  return lastQrDataURL
-}
-
-export function isReady() {
-  return authReady && !!sock
-}
-
-// -------- implementação --------
-async function startBaileys(onMessage) {
-  // base do diretório de sessão (env ou default)
-  const baseDir = process.env.WPP_AUTH_DIR || '/app/baileys-auth-v2'
-  const session = process.env.WPP_SESSION || 'default'
-  const authDir = path.join(baseDir, session)
-
-  console.log(`[WPP] Iniciando com WPP_AUTH_DIR=${authDir}`)
-
-  const { state, saveCreds } = await useMultiFileAuthState(authDir)
-  const { version } = await fetchLatestBaileysVersion()
-
-  sock = makeWASocket({
-    version,
-    auth: state,
-    printQRInTerminal: true,          // QR também nos logs do Railway
-    browser: ['Matrix', 'Chrome', '120.0.0'],
-    markOnlineOnConnect: false,       // evita ficar "online" no pareamento
-    syncFullHistory: false,           // não tenta puxar histórico completo
-    defaultQueryTimeoutMs: 60_000,    // fôlego extra
-    connectTimeoutMs: 60_000,
-    keepAliveIntervalMs: 20_000
+// Rate limit leve (protege endpoints públicos)
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000, // 1 min
+    max: 60,             // 60 req/min por IP
+    standardHeaders: true,
+    legacyHeaders: false,
   })
+);
 
-  if (state?.creds?.me?.id) {
-    console.log(`[WPP] Sessão carregada do volume! Número: ${state.creds.me.id}`)
-  } else {
-    console.log('[WPP] Nenhuma sessão encontrada → será gerado QR')
-  }
+// ---------------------------
+// Endpoints de health/diagnóstico
+// ---------------------------
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    service: 'matrix-wpp',
+    ts: new Date().toISOString(),
+    uptime_s: Math.round(process.uptime()),
+    env: process.env.NODE_ENV || 'development',
+  });
+});
 
-  sock.ev.on('creds.update', saveCreds)
+app.get('/wpp/health', (req, res) => {
+  res.json({
+    ok: true,
+    ready: isReady(),
+  });
+});
 
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update
+// Retorna o QR em dataURL (para UI/Web)
+app.get('/wpp/qr', async (req, res) => {
+  const dataUrl = await getQrDataURL();
+  if (!dataUrl) return res.status(204).end(); // sem conteúdo quando já conectado
+  res.json({ ok: true, qr: dataUrl });
+});
 
-    if (qr) {
-      try {
-        lastQrDataURL = await qrcode.toDataURL(qr)
-        console.log('[WPP] QRCode atualizado')
-      } catch (e) {
-        console.log('[WPP] Falha ao gerar dataURL do QR:', e)
-      }
+// ---------------------------
+// Endpoint utilitário: disparo manual de teste
+// ---------------------------
+app.post('/wpp/send', async (req, res) => {
+  try {
+    const { to, text, imageUrl, caption } = req.body || {};
+    if (!to || (!text && !imageUrl)) {
+      return res.status(400).json({ ok: false, error: 'Informe "to" e "text" ou "imageUrl".' });
     }
 
-    if (connection === 'open') {
-      authReady = true
-      lastQrDataURL = null
-      reconnecting = false
-      console.log('[WPP] Conectado com sucesso 🎉')
+    if (imageUrl) {
+      await adapter.sendImage(to, imageUrl, caption || '');
+    }
+    if (text) {
+      await adapter.sendMessage(to, text);
     }
 
-    if (connection === 'close') {
-      authReady = false
-      const reason =
-        lastDisconnect?.error?.output?.statusCode ||
-        lastDisconnect?.error?.message ||
-        lastDisconnect?.error ||
-        'desconhecido'
-      console.log('[WPP] Conexão fechada ❌ Motivo:', reason)
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[POST /wpp/send][ERR]', err);
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
 
-      // auto-reconexão para quedas logo após o pareamento (408/515)
-      if (!reconnecting) {
-        reconnecting = true
-        const waitMs = 3_000
-        console.log(`[WPP] Tentando reconectar em ${waitMs}ms...`)
-        setTimeout(() => {
-          startBaileys(onMessage).catch(err =>
-            console.error('[WPP] Falha no re-start:', err)
-          )
-        }, waitMs)
-      }
+// ---------------------------
+// Pipeline de mensagens (Cláudia MVP)
+// ---------------------------
+// Regras rápidas para já responder:
+// - "ping" -> "pong"
+// - Saudações -> apresentação
+// - Fallback -> eco educado
+adapter.onMessage(async ({ from, text, hasMedia }) => {
+  try {
+    if (!text && !hasMedia) return;
+
+    // Se for mídia (áudio/foto/vídeo/doc), peça resumo por texto
+    if (hasMedia && !text) {
+      return await adapter.sendMessage(
+        from,
+        'Consigo te ajudar mais rápido por texto 💕 Me conta rapidinho o que você precisa?'
+      );
     }
-  })
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages && messages[0]
-    if (!msg || !msg.message) return
+    const t = (text || '').trim();
 
-    const from = msg.key.remoteJid
-    const text =
-      msg.message.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      msg.message?.imageMessage?.caption ||
-      ''
+    // Regras MVP
+    if (/^ping$/i.test(t)) {
+      return await adapter.sendMessage(from, 'pong');
+    }
 
-    const hasMedia = !!(
-      msg.message.imageMessage ||
-      msg.message.videoMessage ||
-      msg.message.documentMessage
-    )
+    if (/^(oi|olá|ola|bom dia|boa tarde|boa noite)\b/i.test(t)) {
+      return await adapter.sendMessage(from, 'Oi! Eu sou a Cláudia 😊 Como posso te ajudar?');
+    }
 
-    console.log(`[WPP] Mensagem de ${from}: ${text}`)
-    if (onMessage) await onMessage({ from, text, hasMedia })
-  })
-}
+    // Fallback educado (eco)
+    const reply = `Você disse: "${t}". Me conta um pouco mais pra eu te ajudar.`;
+    await adapter.sendMessage(from, reply);
+  } catch (err) {
+    console.error('[onMessage][ERR]', err);
+    try {
+      await adapter.sendMessage(from, 'Dei uma travadinha aqui, pode repetir? 💕');
+    } catch {}
+  }
+});
 
-function normalizeJid(to) {
-  const digits = String(to).replace(/\D/g, '')
-  if (digits.endsWith('@s.whatsapp.net')) return digits
-  return `${digits}@s.whatsapp.net`
-}
+// ---------------------------
+// Start
+// ---------------------------
+app.listen(PORT, () => {
+  console.log(`[HTTP] Servidor rodando na porta ${PORT}`);
+  console.log('[HTTP] Health: GET /health | WhatsApp: GET /wpp/health, GET /wpp/qr');
+});
