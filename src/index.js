@@ -2,7 +2,6 @@
 import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
 
-// Adapter Baileys (já com QR, versão e flags estáveis)
 import {
   adapter,
   getQrDataURL,
@@ -16,39 +15,34 @@ const PORT = process.env.PORT || 3000
 const HOST = process.env.HOST || '0.0.0.0'
 const WEBHOOK_TOKEN = (process.env.WEBHOOK_TOKEN || '').trim()
 
-// Estamos atrás de proxy (Railway/Ingress) → necessário para express-rate-limit
+// estamos atrás de proxy (Railway/Ingress) – necessário p/ express-rate-limit
 app.set('trust proxy', 1)
 
-// Middlewares básicos
+// middlewares
 app.use(express.json())
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 min
-    max: 300,                  // 300 req/15min por IP
-    standardHeaders: true,
-    legacyHeaders: false
-  })
-)
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 300,                  // 300 req/15min por IP
+  standardHeaders: true,
+  legacyHeaders: false
+}))
 
-// Proteção opcional por token (para /send e /send-image)
+// proteção opcional por token (use para /send* se quiser)
 function requireToken(req, res, next) {
   if (!WEBHOOK_TOKEN) return next()
   const token = String(req.headers['x-api-token'] || req.query.token || '')
-  if (token !== WEBHOOK_TOKEN) {
-    return res.status(401).json({ error: 'unauthorized' })
-  }
+  if (token !== WEBHOOK_TOKEN) return res.status(401).json({ error: 'unauthorized' })
   next()
 }
 
-// ---------- ROTAS ----------
+// ---------- rotas ----------
 app.get('/health', (_req, res) => {
   res.json({ ok: true, wppReady: isReady() })
 })
 
 app.get('/qr', (_req, res) => {
   const dataUrl = getQrDataURL()
-  // Se já conectou, não há QR — 204 é esperado
-  if (!dataUrl || isReady()) return res.status(204).send()
+  if (!dataUrl || isReady()) return res.status(204).send() // já conectado → sem QR
   const base64 = dataUrl.split(',')[1]
   const img = Buffer.from(base64, 'base64')
   res.setHeader('Content-Type', 'image/png')
@@ -77,7 +71,7 @@ app.post('/send-image', requireToken, async (req, res) => {
   }
 })
 
-// ---------- ESPELHO EM /wpp/* ----------
+// espelho em /wpp/*
 const router = express.Router()
 router.get('/health', (req, res) => res.redirect(307, '/health'))
 router.get('/qr', (req, res) => res.redirect(307, '/qr'))
@@ -85,7 +79,7 @@ router.post('/send', requireToken, (req, res) => res.redirect(307, '/send'))
 router.post('/send-image', requireToken, (req, res) => res.redirect(307, '/send-image'))
 app.use('/wpp', router)
 
-// Liga o Baileys para receber mensagens
+// liga o listener de mensagens
 adapter.onMessage(async ({ from, text }) => {
   if (!text) return
   if (/^ping$/i.test(text)) return 'pong'

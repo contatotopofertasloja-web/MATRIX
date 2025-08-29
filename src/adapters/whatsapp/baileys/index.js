@@ -1,5 +1,4 @@
-﻿// src/adapters/whatsapp/baileys/index.js
-import * as baileys from '@whiskeysockets/baileys'
+﻿import * as baileys from '@whiskeysockets/baileys'
 import qrcode from 'qrcode'
 import path from 'node:path'
 
@@ -18,7 +17,6 @@ function resolveMakeWASocket(mod) {
 const makeWASocket = resolveMakeWASocket(baileys)
 const { useMultiFileAuthState, fetchLatestBaileysVersion } = baileys
 
-console.log('[WPP][debug] resolved makeWASocket type =', typeof makeWASocket)
 if (typeof makeWASocket !== 'function') {
   throw new Error('Falha ao resolver makeWASocket de @whiskeysockets/baileys')
 }
@@ -27,6 +25,7 @@ if (typeof makeWASocket !== 'function') {
 let sock = null
 let authReady = false
 let lastQrDataURL = null
+let reconnecting = false
 
 // -------- adapter público usado pelo app --------
 export const adapter = {
@@ -62,16 +61,14 @@ export function isReady() {
 
 // -------- implementação --------
 async function startBaileys(onMessage) {
-  // base do diretório de sessão (respeita env e permite subpasta se quiser usar WPP_SESSION)
-  const baseDir = process.env.WPP_AUTH_DIR || '/app/baileys-auth'
+  // base do diretório de sessão (env ou default)
+  const baseDir = process.env.WPP_AUTH_DIR || '/app/baileys-auth-v2'
   const session = process.env.WPP_SESSION || 'default'
   const authDir = path.join(baseDir, session)
 
   console.log(`[WPP] Iniciando com WPP_AUTH_DIR=${authDir}`)
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
-
-  // força versão do WhatsApp Web suportada
   const { version } = await fetchLatestBaileysVersion()
 
   sock = makeWASocket({
@@ -82,6 +79,8 @@ async function startBaileys(onMessage) {
     markOnlineOnConnect: false,       // evita ficar "online" no pareamento
     syncFullHistory: false,           // não tenta puxar histórico completo
     defaultQueryTimeoutMs: 60_000,    // fôlego extra
+    connectTimeoutMs: 60_000,
+    keepAliveIntervalMs: 20_000
   })
 
   if (state?.creds?.me?.id) {
@@ -107,6 +106,7 @@ async function startBaileys(onMessage) {
     if (connection === 'open') {
       authReady = true
       lastQrDataURL = null
+      reconnecting = false
       console.log('[WPP] Conectado com sucesso 🎉')
     }
 
@@ -118,6 +118,18 @@ async function startBaileys(onMessage) {
         lastDisconnect?.error ||
         'desconhecido'
       console.log('[WPP] Conexão fechada ❌ Motivo:', reason)
+
+      // auto-reconexão para quedas logo após o pareamento (408/515)
+      if (!reconnecting) {
+        reconnecting = true
+        const waitMs = 3_000
+        console.log(`[WPP] Tentando reconectar em ${waitMs}ms...`)
+        setTimeout(() => {
+          startBaileys(onMessage).catch(err =>
+            console.error('[WPP] Falha no re-start:', err)
+          )
+        }, waitMs)
+      }
     }
   })
 
