@@ -1,213 +1,106 @@
-﻿// src/index-gpt.js
-import * as baileys from '@whiskeysockets/baileys';
-import QRCode from 'qrcode';
-import path from 'path';
-import { existsSync, mkdirSync } from 'fs';
-import { loadBotConfig } from './config/bootstrap.js';
-const botConfig = loadBotConfig();
-console.log(`[MATRIX] Bot carregado: ${botConfig.bot_id} (${botConfig.persona_name})`);
+﻿// src/index.js
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import morgan from 'morgan';
 
-// ------------------------------
-// ENV & Consts
-// ------------------------------
-const AUTH_DIR = process.env.WPP_AUTH_DIR || './baileys-auth';
-const SESSION  = process.env.WPP_SESSION   || 'default';
-const DEVICE   = process.env.WPP_DEVICE    || 'Matrix-Node';
-const APP_VER  = process.env.WPP_APPVER    || ''; // opcional "2.24.x"
-const AUTH_PATH = path.join(AUTH_DIR, SESSION);
+import rateLimit from './middlewares/rateLimit.js';
+import { adapter, getQrDataURL, isReady } from './index-gpt.js'; // Baileys adapter
+import { bot } from './bot.js';
+import { settings } from './core/settings.js';
 
-// Typing config
-const TYPING_MS_PER_CHAR = Number(process.env.TYPING_MS_PER_CHAR || 35);
-const TYPING_MIN_MS      = Number(process.env.TYPING_MIN_MS || 800);
-const TYPING_MAX_MS      = Number(process.env.TYPING_MAX_MS || 5000);
+// 🚀 Fila pesada (dispatcher plugável: memory | redis | sqs | rabbit)
+import { startQueues, dispatchMessage } from './queue/dispatcher.js';
 
-// Globals
-let sock = null;
-let ready = false;
-let lastQrDataUrl = null;
-let messageHandler = null; // usuário registra via adapter.onMessage
+// Opcional: polimento (máx. frases/emojis)
+// import { limitSentencesEmojis } from './utils/polish.js';
 
-// Garante pasta de sessão
-if (!existsSync(AUTH_DIR)) mkdirSync(AUTH_DIR, { recursive: true });
-if (!existsSync(AUTH_PATH)) mkdirSync(AUTH_PATH, { recursive: true });
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use(morgan('tiny'));
 
-// ------------------------------
-// Helpers
-// ------------------------------
-function calcTypingMs(text) {
-  const n = Math.max(1, String(text || '').length);
-  const ms = Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, n * TYPING_MS_PER_CHAR));
-  return ms;
-}
-const delay = (ms) => new Promise(r => setTimeout(r, ms));
+// Protege o /webhook com rate limit + token, se WEBHOOK_TOKEN estiver setado
+app.use('/webhook', rateLimit);
 
-function normalizeToJid(to) {
-  if (!to) throw new Error('destinatário inválido');
-  const s = String(to).trim();
+// 🔌 Liga as filas (outbox/inbox conforme backend escolhido por ENV)
+startQueues();
 
-  if (s.endsWith('@s.whatsapp.net') || s.endsWith('@g.us')) return s;
+// ========== WhatsApp → Matrix (FSM/flows) ==========
+adapter.onMessage(async ({ from, text, hasMedia }) => {
+  if (!text && !hasMedia) return;
 
-  // aceita "+55...", "55...", "5511...":
-  const digits = s.replace(/[^\d]/g, '');
-  if (!digits) throw new Error('número inválido');
-
-  // grupos não suportados aqui
-  if (digits.endsWith('@g.us')) throw new Error('envio para grupo não suportado por este helper');
-
-  return `${digits}@s.whatsapp.net`;
-}
-
-async function simulateTyping(jid, text) {
   try {
-    if (!sock) return;
-    await sock.presenceSubscribe(jid);
-    await sock.sendPresenceUpdate('composing', jid);
-    await delay(calcTypingMs(text));
-    await sock.sendPresenceUpdate('paused', jid);
+    // 1) roda a FSM (intents/flows) e obtém a resposta
+    let reply = await bot.handleMessage({ userId: from, text, context: { hasMedia } });
+
+    // 2) (opcional) polimento de estilo
+    // reply = limitSentencesEmojis(
+    //   reply,
+    //   settings?.limits?.max_sentences ?? 2,
+    //   settings?.limits?.max_emojis ?? 2
+    // );
+
+    // 3) Regra Matrix: se flag ativa e houver '\n', enviar como múltiplas mensagens
+    const splitAllowed = Boolean(settings?.flags?.send_link_in_two_messages);
+    if (splitAllowed && typeof reply === 'string' && reply.includes('\n')) {
+      const parts = reply.split('\n').map(s => s.trim()).filter(Boolean);
+      for (const part of parts) {
+        await dispatchMessage(from, part);   // <-- usa fila
+      }
+      return; // evita duplicidade
+    }
+
+    // 4) Caso normal → enfileira envio
+    if (typeof reply === 'string' && reply.trim()) {
+      await dispatchMessage(from, reply);     // <-- usa fila
+    }
   } catch (e) {
-    console.warn('[WPP][typing]', e?.message || e);
+    console.error('[BOT][ERR]', e);
+    try { await dispatchMessage(from, 'Dei uma travadinha aqui, pode repetir? 💕'); } catch {}
   }
-}
+});
 
-// ------------------------------
-// Socket lifecycle
-// ------------------------------
-async function startSocket() {
-  const { state, saveCreds } = await baileys.useMultiFileAuthState(AUTH_PATH);
+// ========== Rotas utilitárias ==========
+app.get('/wpp/health', (_req, res) => {
+  res.json({ ok: true, ready: isReady() });
+});
 
-  // Versão do WhatsApp Web suportada
-  let version = (await baileys.fetchLatestBaileysVersion()).version;
-  if (APP_VER) {
-    try {
-      // permite forçar versão via env, ex: "2.2419.9"
-      const arr = APP_VER.split('.').map(x => Number(x));
-      if (arr.length === 3 && arr.every(Number.isFinite)) version = arr;
-    } catch {}
+app.get('/wpp/qr', async (_req, res) => {
+  const dataUrl = await getQrDataURL();
+  if (!dataUrl) {
+    return res
+      .status(200)
+      .send(isReady() ? '✅ Conectado' : 'Aguardando QR... atualize em alguns segundos.');
   }
+  res.status(200).send(`
+    <html>
+      <body style="display:grid;place-items:center;height:100vh;font-family:sans-serif">
+        <div>
+          <h3>Escaneie no WhatsApp</h3>
+          <img src="${dataUrl}" alt="QR WhatsApp" />
+        </div>
+      </body>
+    </html>
+  `);
+});
 
-  console.log('[WPP] Using WA version:', version?.join('.') || version);
-
-  sock = baileys.makeWASocket({
-    auth: state,
-    printQRInTerminal: false, // geramos DataURL pro endpoint /wpp/qr
-    browser: ['Matrix', DEVICE, '1.0.0'],
-    version,
-    markOnlineOnConnect: false,
-    syncFullHistory: false,
-    generateHighQualityLinkPreview: true,
-  });
-
-  // Atualização de credenciais no disco
-  sock.ev.on('creds.update', saveCreds);
-
-  // QR e status de conexão
-  sock.ev.on('connection.update', async (u) => {
-    const { connection, lastDisconnect, qr } = u;
-
-    if (qr) {
-      try {
-        lastQrDataUrl = await QRCode.toDataURL(qr);
-      } catch (e) {
-        console.error('[WPP][QR][ERR]', e?.message || e);
-        lastQrDataUrl = null;
-      }
-    }
-
-    if (connection === 'open') {
-      ready = true;
-      lastQrDataUrl = null;
-      console.log('[WPP] Conectado ✅');
-    } else if (connection === 'close') {
-      ready = false;
-      const shouldReconnect =
-        !lastDisconnect?.error?.output?.statusCode ||
-        lastDisconnect.error.output.statusCode !== baileys.DisconnectReason.loggedOut;
-
-      console.warn('[WPP] Conexão fechada', lastDisconnect?.error?.message || lastDisconnect);
-      if (shouldReconnect) {
-        console.log('[WPP] Tentando reconectar em 2s…');
-        setTimeout(() => startSocket().catch(err => console.error('[WPP][reconnect][ERR]', err)), 2000);
-      } else {
-        console.error('[WPP] Logout detectado — é preciso reescanear o QR.');
-      }
-    }
-  });
-
-  // Recebimento de mensagens
-  sock.ev.on('messages.upsert', async (m) => {
-    try {
-      if (m.type !== 'notify') return;
-      const msg = m.messages && m.messages[0];
-      if (!msg || msg.key.fromMe) return;            // ignora as nossas
-      if (!msg.message) return;
-
-      const from = msg.key.remoteJid;
-      // Ignora grupos
-      if (!from || from.endsWith('@g.us')) return;
-
-      const txt =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        msg.message.buttonsResponseMessage?.selectedDisplayText ||
-        msg.message.listResponseMessage?.singleSelectReply?.selectedRowId ||
-        '';
-
-      const hasMedia = Boolean(
-        msg.message.imageMessage ||
-        msg.message.videoMessage ||
-        msg.message.audioMessage ||
-        msg.message.documentMessage ||
-        msg.message.stickerMessage
-      );
-
-      if (typeof messageHandler === 'function') {
-        const maybeReply = await messageHandler({ from, text: String(txt || '').trim(), hasMedia });
-        // se handler devolver string, enviamos automaticamente
-        if (typeof maybeReply === 'string' && maybeReply.trim()) {
-          await adapter.sendMessage(from, maybeReply);
-        }
-      }
-    } catch (e) {
-      console.error('[WPP][onMessage][ERR]', e?.message || e);
-    }
-  });
-}
-
-// Inicializa ao importar o módulo
-startSocket().catch(err => console.error('[WPP][init][ERR]', err));
-
-// ------------------------------
-// Public API
-// ------------------------------
-export function isReady() {
-  return Boolean(ready && sock);
-}
-
-export async function getQrDataURL() {
-  return lastQrDataUrl;
-}
-
-export const adapter = {
-  onMessage(fn) {
-    messageHandler = fn;
-  },
-
-  async sendMessage(to, text) {
-    if (!sock) throw new Error('WhatsApp não inicializado');
-    const jid = normalizeToJid(to);
-    await simulateTyping(jid, text);
-    await sock.sendMessage(jid, { text: String(text ?? '') });
-  },
-
-  async sendImage(to, url, caption = '') {
-    if (!sock) throw new Error('WhatsApp não inicializado');
-    const jid = normalizeToJid(to);
-    await simulateTyping(jid, caption || url);
-    await sock.sendMessage(jid, {
-      image: { url: String(url) },
-      caption: String(caption || ''),
-    });
+// Webhook de teste (envio manual de mensagem)
+app.post('/webhook', async (req, res) => {
+  try {
+    const { to, text } = req.body || {};
+    if (!to || !text) return res.status(400).json({ ok: false, error: 'to e text são obrigatórios' });
+    await dispatchMessage(String(to), String(text));   // <-- usa fila
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
-};
+});
+
+// ========== Start ==========
+const PORT = Number(process.env.PORT || 8080);
+const HOST = process.env.HOST || '0.0.0.0';
+
+app.listen(PORT, HOST, () => {
+  console.log(`[HTTP] Matrix rodando em http://${HOST}:${PORT}`);
+});

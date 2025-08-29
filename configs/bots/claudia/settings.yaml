@@ -18,12 +18,12 @@ persona:
 # =========================
 flags:
   has_cod: true                 # compat: usado pelos flows atuais
-  send_opening_photo: true      # compat: se quiser foto de abertura
-  send_link_in_two_messages: true
+  send_opening_photo: true      # se deve mandar foto de abertura
+  send_link_in_two_messages: true   # true = dividir pelo \n e mandar em 2 msgs
   cooldown_cod_seconds: 90
 
 # =========================
-# 💼 Negócio / Oferta (NOVO)
+# 💼 Negócio / Oferta
 # =========================
 business:
   price_target: 170
@@ -34,8 +34,7 @@ business:
   payment: "Somente no recebimento (COD)"
 
 # ---------------------------------------------------------
-# 🔁 ESPelho p/ compatibilidade imediata (pode remover depois)
-# Mantém as chaves esperadas pelo código antigo enquanto migramos
+# 🔁 Espelho p/ compatibilidade imediata (pode remover depois)
 # ---------------------------------------------------------
 product:
   price_target: 170
