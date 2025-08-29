@@ -1,137 +1,198 @@
-﻿// src/index.js
-// Server HTTP + WhatsApp adapter + handler MVP da Cláudia
+﻿// src/adapters/whatsapp/baileys/index.js
+// Adapter Baileys + Watcher de conexão + Heartbeat integrado
+// Exports: adapter, isReady, getQrDataURL
 
-import express from 'express';
-import cors from 'cors';
-import rateLimit from 'express-rate-limit';
-import morgan from 'morgan';
+import makeWASocket, {
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  useMultiFileAuthState,
+  makeCacheableSignalKeyStore
+} from "@whiskeysockets/baileys";
+import pino from "pino";
+import * as qrcode from "qrcode";
 
-import {
-  adapter,        // { onMessage(fn), sendMessage(to, text), sendImage(to, url, caption) }
-  isReady,        // -> boolean
-  getQrDataURL    // -> dataURL (base64) do QR ou null
-} from './adapters/whatsapp/baileys/index.js';
+// Alertas (já enviados na etapa anterior)
+import { notifyDown, notifyUp } from "../../../alerts/notifier.js";
+// Heartbeat (já enviado na etapa anterior)
+import { beat } from "../../../watchers/heartbeat.js";
 
-// ---------------------------
-// Config básica
-// ---------------------------
-const PORT = Number(process.env.PORT || 8080);
-const app  = express();
+const {
+  WPP_LOG_LEVEL = "warn",
+  WPP_PRINT_QR = "true", // loga QR no console também
+} = process.env;
 
-// Atrás de proxy (Railway/Ingress)
-app.set('trust proxy', 1);
-
-// Middlewares úteis
-app.use(cors());
-app.use(express.json({ limit: '1mb' }));
-app.use(morgan('tiny'));
-
-// Rate limit leve (protege endpoints públicos)
-app.use(
-  rateLimit({
-    windowMs: 60 * 1000, // 1 min
-    max: 60,             // 60 req/min por IP
-    standardHeaders: true,
-    legacyHeaders: false,
-  })
-);
+let sock;
+let _isReady = false;
+let _lastQrText = null; // QR bruto
+let _onMessageHandler = null;
 
 // ---------------------------
-// Endpoints de health/diagnóstico
+// Helpers do adapter público
 // ---------------------------
-app.get('/health', (req, res) => {
-  res.json({
-    ok: true,
-    service: 'matrix-wpp',
-    ts: new Date().toISOString(),
-    uptime_s: Math.round(process.uptime()),
-    env: process.env.NODE_ENV || 'development',
+function setOnMessageHandler(fn) {
+  _onMessageHandler = typeof fn === "function" ? fn : null;
+}
+
+async function sendMessage(to, text) {
+  if (!sock) throw new Error("WhatsApp socket ainda não inicializado.");
+  const jid = normalizeJid(to);
+  const res = await sock.sendMessage(jid, { text: String(text ?? "") });
+  // sucesso → sinaliza atividade
+  beat();
+  return res;
+}
+
+async function sendImage(to, url, caption = "") {
+  if (!sock) throw new Error("WhatsApp socket ainda não inicializado.");
+  const jid = normalizeJid(to);
+  const res = await sock.sendMessage(jid, {
+    image: { url },
+    caption: caption || ""
   });
+  beat();
+  return res;
+}
+
+function isReady() {
+  return _isReady;
+}
+
+async function getQrDataURL() {
+  if (!_lastQrText) return null;
+  // Converte o QR bruto em DataURL para UI/web
+  return qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 });
+}
+
+function normalizeJid(input) {
+  const digits = String(input).replace(/\D/g, "");
+  // Para BR, se vier sem @s.whatsapp.net
+  return digits.endsWith("@s.whatsapp.net") ? digits : `${digits}@s.whatsapp.net`;
+}
+
+// API pública p/ o resto do app
+export const adapter = {
+  onMessage: setOnMessageHandler,
+  sendMessage,
+  sendImage,
+};
+
+// ---------------------------
+// Boot do Baileys
+// ---------------------------
+boot().catch((e) => {
+  console.error("[baileys][boot][fatal]", e);
+  process.exitCode = 1;
 });
 
-app.get('/wpp/health', (req, res) => {
-  res.json({
-    ok: true,
-    ready: isReady(),
+async function boot() {
+  const logger = pino({ level: WPP_LOG_LEVEL });
+
+  const { state, saveCreds } = await useMultiFileAuthState("./wpp-auth");
+  const { version } = await fetchLatestBaileysVersion();
+
+  sock = makeWASocket({
+    version,
+    logger,
+    printQRInTerminal: WPP_PRINT_QR === "true",
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    generateHighQualityLinkPreview: true,
+    // reconexão automática já é gerida pelo Baileys internamente
   });
-});
 
-// Retorna o QR em dataURL (para UI/Web)
-app.get('/wpp/qr', async (req, res) => {
-  const dataUrl = await getQrDataURL();
-  if (!dataUrl) return res.status(204).end(); // sem conteúdo quando já conectado
-  res.json({ ok: true, qr: dataUrl });
-});
+  // Persistência de credenciais
+  sock.ev.on("creds.update", saveCreds);
 
-// ---------------------------
-// Endpoint utilitário: disparo manual de teste
-// ---------------------------
-app.post('/wpp/send', async (req, res) => {
-  try {
-    const { to, text, imageUrl, caption } = req.body || {};
-    if (!to || (!text && !imageUrl)) {
-      return res.status(400).json({ ok: false, error: 'Informe "to" e "text" ou "imageUrl".' });
+  // ---------------------------
+  // Watcher de conexão
+  // ---------------------------
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      _lastQrText = qr;
+      if (WPP_PRINT_QR !== "true") {
+        console.log("[baileys] QR atualizado (use GET /wpp/qr para obter dataURL)");
+      }
     }
 
-    if (imageUrl) {
-      await adapter.sendImage(to, imageUrl, caption || '');
-    }
-    if (text) {
-      await adapter.sendMessage(to, text);
-    }
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[POST /wpp/send][ERR]', err);
-    res.status(500).json({ ok: false, error: String(err?.message || err) });
-  }
-});
-
-// ---------------------------
-// Pipeline de mensagens (Cláudia MVP)
-// ---------------------------
-// Regras rápidas para já responder:
-// - "ping" -> "pong"
-// - Saudações -> apresentação
-// - Fallback -> eco educado
-adapter.onMessage(async ({ from, text, hasMedia }) => {
-  try {
-    if (!text && !hasMedia) return;
-
-    // Se for mídia (áudio/foto/vídeo/doc), peça resumo por texto
-    if (hasMedia && !text) {
-      return await adapter.sendMessage(
-        from,
-        'Consigo te ajudar mais rápido por texto 💕 Me conta rapidinho o que você precisa?'
-      );
+    if (connection === "open") {
+      _isReady = true;
+      _lastQrText = null;
+      beat(); // atividade OK
+      await notifyUp({ meta: { lib: "baileys" } });
+      console.log("[baileys] Conectado.");
     }
 
-    const t = (text || '').trim();
+    if (connection === "close") {
+      _isReady = false;
+      const err = lastDisconnect?.error;
+      const code =
+        err?.output?.statusCode ||
+        err?.status?.code ||
+        err?.code ||
+        (err?.message?.includes("logged out")
+          ? DisconnectReason.loggedOut
+          : "unknown");
 
-    // Regras MVP
-    if (/^ping$/i.test(t)) {
-      return await adapter.sendMessage(from, 'pong');
+      // Motivos comuns: loggedOut, connectionLost, restartRequired, timedOut etc.
+      await notifyDown({
+        reason: `connection=close code=${code}`,
+        meta: { lib: "baileys", code, msg: err?.message }
+      });
+
+      const shouldReconnect = code !== DisconnectReason.loggedOut;
+      console.warn("[baileys] Conexão fechada. Reconnect?", shouldReconnect);
+      if (shouldReconnect) {
+        // pequeno backoff
+        setTimeout(() => boot().catch(console.error), 2_000);
+      }
     }
+  });
 
-    if (/^(oi|olá|ola|bom dia|boa tarde|boa noite)\b/i.test(t)) {
-      return await adapter.sendMessage(from, 'Oi! Eu sou a Cláudia 😊 Como posso te ajudar?');
-    }
-
-    // Fallback educado (eco)
-    const reply = `Você disse: "${t}". Me conta um pouco mais pra eu te ajudar.`;
-    await adapter.sendMessage(from, reply);
-  } catch (err) {
-    console.error('[onMessage][ERR]', err);
+  // ---------------------------
+  // Mensagens (upsert)
+  // ---------------------------
+  sock.ev.on("messages.upsert", async ({ type, messages }) => {
     try {
-      await adapter.sendMessage(from, 'Dei uma travadinha aqui, pode repetir? 💕');
-    } catch {}
-  }
-});
+      if (!messages?.length) return;
+      const msg = messages[0];
+      if (!msg?.key) return;
 
-// ---------------------------
-// Start
-// ---------------------------
-app.listen(PORT, () => {
-  console.log(`[HTTP] Servidor rodando na porta ${PORT}`);
-  console.log('[HTTP] Health: GET /health | WhatsApp: GET /wpp/health, GET /wpp/qr');
-});
+      const from = msg.key.remoteJid;
+      // Ignora status e mensagens do próprio bot
+      if (!from || from.endsWith("@status") || msg.key.fromMe) return;
+
+      // Texto simples
+      const text = msg.message?.conversation
+        || msg.message?.extendedTextMessage?.text
+        || msg.message?.imageMessage?.caption
+        || msg.message?.videoMessage?.caption
+        || "";
+
+      const hasMedia = Boolean(
+        msg.message?.imageMessage ||
+        msg.message?.videoMessage ||
+        msg.message?.audioMessage ||
+        msg.message?.documentMessage ||
+        msg.message?.stickerMessage
+      );
+
+      // Sinaliza atividade (chegou mensagem)
+      beat();
+
+      if (typeof _onMessageHandler === "function") {
+        await _onMessageHandler({
+          from,
+          text,
+          hasMedia,
+          raw: msg
+        });
+      }
+    } catch (err) {
+      console.error("[baileys][messages.upsert][err]", err);
+    }
+  });
+}

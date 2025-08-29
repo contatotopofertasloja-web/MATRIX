@@ -1,62 +1,127 @@
-﻿// src/bot.js
-import { intentOf } from './core/intent.js';
-import { settings, BOT_ID } from './core/settings.js';
+﻿// src/bot.ts
+// Bot em TypeScript com fallback local + LLM opcional (OpenAI).
+// Exports: initBot(), handleMessage() e default { handleMessage, initBot }
+
+import 'dotenv/config';
+import OpenAI from 'openai';
+
+type BotContext = Record<string, unknown>;
+
+interface HandleMessageInput {
+  userId: string;
+  text: string;
+  context?: BotContext;
+}
+
+const {
+  OPENAI_API_KEY,
+  MODEL_NAME = 'gpt-4o',
+  BOT_ID = 'claudia',
+} = process.env;
+
+let openai: OpenAI | null = null;
 
 /**
- * Importa dinamicamente um flow a partir de configs/bots/<BOT_ID>/flow/<name>.js
- * Usa URL relativa ao arquivo atual para funcionar em qualquer SO.
+ * Carrega recursos do bot (prompts/flows/etc). Mantido simples para não travar boot.
  */
-async function loadFlow(name) {
-  const url = new URL(`../configs/bots/${BOT_ID}/flow/${name}.js`, import.meta.url);
+async function loadBotSettings(_botId: string): Promise<{ name: string }> {
+  // Se quiser, ler YAML/JSON aqui.
+  return { name: _botId };
+}
+
+/**
+ * Inicializa o bot: instancia OpenAI quando houver chave.
+ */
+export async function initBot(): Promise<boolean> {
   try {
-    const mod = await import(url.href);
-    return mod?.[name] || mod?.default || Object.values(mod)[0];
-  } catch (e) {
-    console.warn(`[BOT] Flow "${name}" não encontrado para "${BOT_ID}" (${e?.message})`);
-    return null;
-  }
-}
-
-// carrega todos os flows principais
-const flows = {
-  greet:     await loadFlow('greet'),
-  qualify:   await loadFlow('qualify'),
-  offer:     await loadFlow('offer'),
-  close:     await loadFlow('closeDeal'),
-  post_sale: await loadFlow('postSale'),
-};
-
-function fallback(intent) {
-  // respostas padrão úteis quando o flow específico não existir
-  if (intent === 'delivery') return 'Me passa seu CEP rapidinho que já te confirmo prazo e frete 🚚';
-  if (intent === 'payment')  return 'Trabalhamos com Pagamento na Entrega (COD). Se preferir, posso te passar outras opções.';
-  if (intent === 'features') return 'É um tratamento sem formol, que alinha e nutre. Posso te enviar o passo a passo de uso?';
-  if (intent === 'objection') return 'Te entendo! É produto regularizado e com garantia. Quer que eu te mande o passo a passo e resultados?';
-
-  const name = settings?.persona?.display_name || 'assistente';
-  return `Consegue me contar rapidinho sobre seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)`;
-}
-
-export const bot = {
-  /**
-   * Roteador principal: decide a intent e chama o flow correspondente.
-   * Retorna sempre string (se o flow retornar array, convertemos para linhas).
-   */
-  async handleMessage({ userId, text, context }) {
-    const intent = intentOf(text);
-    const fn =
-      (intent === 'close'     ? flows.close :
-       intent === 'post_sale' ? flows.post_sale :
-       flows[intent]);
-
-    if (typeof fn === 'function') {
-      const out = await fn({ userId, text, context, settings });
-      if (Array.isArray(out)) return out.filter(Boolean).join('\n'); // compat
-      return String(out ?? '').trim() || fallback(intent);
+    if (OPENAI_API_KEY && typeof OPENAI_API_KEY === 'string') {
+      openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    } else {
+      openai = null; // funciona em modo "fallback"
     }
-
-    return fallback(intent);
+    await loadBotSettings(BOT_ID || 'claudia');
+    return true;
+  } catch (err: unknown) {
+    console.error('[bot][initBot] error:', (err as Error)?.message || err);
+    openai = null;
+    return false;
   }
-};
+}
 
-console.log(`[BOT] Ativa: ${BOT_ID} — flows carregados (${Object.keys(flows).filter(k => typeof flows[k]==='function').join(', ')})`);
+/**
+ * Faz a chamada ao LLM (quando disponível).
+ */
+async function askLLM(prompt: string): Promise<string> {
+  if (!openai) {
+    return '';
+  }
+  try {
+    const system = [
+      'Você é a Cláudia, vendedora educada e objetiva.',
+      'Responda em Português do Brasil.',
+      'Se o usuário pedir preço/link sem contexto, faça 1–2 perguntas de qualificação antes de ofertar.',
+      'Evite enviar links espontaneamente; ofereça primeiro ajuda guiada.',
+    ].join(' ');
+
+    const resp = await openai.chat.completions.create({
+      model: MODEL_NAME,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.4,
+      max_tokens: 300,
+    });
+
+    const out =
+      resp?.choices?.[0]?.message?.content?.trim() ||
+      'Perfeito! Me dá um pouco mais de contexto pra eu te ajudar melhor. 😉';
+
+    return out;
+  } catch (err: unknown) {
+    console.error('[bot][askLLM] error:', (err as Error)?.message || err);
+    return '';
+  }
+}
+
+/**
+ * Manipula a mensagem vinda do adapter de WhatsApp.
+ * Retorna SEMPRE string (inclusive em fallback).
+ */
+export async function handleMessage({ userId, text, context = {} }: HandleMessageInput): Promise<string> {
+  const msg = String(text ?? '').trim();
+
+  // Regras rápidas / saudações
+  if (!msg) {
+    return 'Oi! Sou a Cláudia 👋 Como posso te ajudar hoje?';
+  }
+  if (/(^|\s)(oi|ol[áa]|bom dia|boa tarde|boa noite)(\s|!|\.|$)/i.test(msg)) {
+    return 'Oi! Tudo bem? 😊 Me conta: você já tem em mente o que está buscando?';
+  }
+  if (/\b(menu|ajuda|help)\b/i.test(msg)) {
+    return [
+      'Posso ajudar com:',
+      '• dúvidas sobre produtos',
+      '• status de pedido',
+      '• ofertas e condições',
+      '• atendimento humano (se preferir)',
+      '',
+      'O que você precisa?'
+    ].join('\n');
+  }
+
+  // Tenta LLM; se falhar ou estiver desabilitado, cai no fallback
+  const llm = await askLLM(msg);
+  if (llm) return llm;
+
+  // Fallback local (sem OpenAI)
+  return [
+    'Entendi! 👍',
+    'Posso te ajudar com dúvidas, ofertas e acompanhamento.',
+    'Quer me contar em 1 frase o que você precisa agora?'
+  ].join(' ');
+}
+
+// Export default para compatibilidade com import default
+const BotDefault = { handleMessage, initBot };
+export default BotDefault;
