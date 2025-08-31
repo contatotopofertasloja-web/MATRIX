@@ -1,4 +1,5 @@
-﻿export function buildPrompt({stage, message}) {
+﻿// configs/bots/claudia/prompts/index.js
+export function buildPrompt({stage, message}) {
   const system = {
     greet:      'Você é a Cláudia, especialista em progressiva vegetal. Cumprimente e faça 1 pergunta curta.',
     qualify:    'Faça 2 perguntas rápidas para qualificar o lead (tipo de cabelo e objetivo).',

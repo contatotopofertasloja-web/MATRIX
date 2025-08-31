@@ -1,4 +1,5 @@
-﻿import OpenAI from 'openai';
+﻿//scr/flows/index.js
+import OpenAI from 'openai';
 import { buildPrompt } from '../prompts/index.js';
 
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;

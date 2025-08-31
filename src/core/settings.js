@@ -1,10 +1,12 @@
 // src/core/settings.js
-//
-// Carrega settings.yaml da bot ativa (ex.: claudia)
-
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const ROOT       = path.resolve(__dirname, '..', '..');
 
 function env(name, def) {
   const v = process.env[name];
@@ -12,40 +14,72 @@ function env(name, def) {
 }
 
 export const BOT_ID = env('BOT_ID', 'claudia');
-
-// caminho absoluto → configs/bots/<BOT_ID>/settings.yaml
-const ROOT = process.cwd();
 const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
-// valores default (fallback)
-let settings = {
+// --------- Defaults globais vindos das ENVs ----------
+const GLOBAL_MODELS = {
+  recepcao:     env('LLM_MODEL_RECEPCAO',     'GPT-5-nano'),
+  qualificacao: env('LLM_MODEL_QUALIFICACAO', 'GPT-5-nano'),
+  oferta:       env('LLM_MODEL_OFERTA',       'GPT-5-mini'),
+  obstrucoes:   env('LLM_MODEL_OBJECOES',     'GPT-5'),
+  objeções:     env('LLM_MODEL_OBJECOES',     'GPT-5'),
+  objecoes:     env('LLM_MODEL_OBJECOES',     'GPT-5'),
+  fechamento:   env('LLM_MODEL_FECHAMENTO',   'GPT-5-mini'),
+  posvenda:     env('LLM_MODEL_POSVENDA',     'GPT-5-nano'),
+  pósvenda:     env('LLM_MODEL_POSVENDA',     'GPT-5-nano'),
+  postsale:     env('LLM_MODEL_POSVENDA',     'GPT-5-nano'),
+};
+
+const FLAGS = {
+  useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
+  fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
+};
+
+const AUDIO = {
+  asrProvider: env('ASR_PROVIDER', 'openai'),
+  asrModel:    env('ASR_MODEL',    'whisper-1'),
+  ttsProvider: env('TTS_PROVIDER', 'none'),
+  ttsVoice:    env('TTS_VOICE',    'alloy'),
+};
+
+const LLM_DEFAULTS = {
+  provider:    env('LLM_PROVIDER', 'openai'),
+  temperature: Number(env('LLM_TEMPERATURE', '0.5')),
+  timeouts: { defaultMs: Number(env('LLM_TIMEOUT_MS', '25000')) },
+  maxTokens: {
+    nano: Number(env('LLM_MAX_TOKENS_NANO', '512')),
+    mini: Number(env('LLM_MAX_TOKENS_MINI', '1024')),
+    full: Number(env('LLM_MAX_TOKENS_FULL', '2048')),
+  },
+  retries: Number(env('LLM_RETRIES', '2')),
+};
+
+let fileSettings = {
   bot_id: BOT_ID,
-  persona: {
-    display_name: 'Assistente',
-    tone: ['amigável'],
-    style: 'Respostas curtas, claras e simpáticas.'
-  },
-  product: {
-    price_original: 197,
-    price_target: 170,
-    checkout_link: '',
-    coupon_code: ''
-  },
-  flags: { has_cod: true, send_opening_photo: false },
-  models_by_stage: {}
+  persona_name: 'Cláudia',
+  product: { price_original: 197, price_target: 170, checkout_link: '', coupon_code: '' },
+  models_by_stage: {},
+  flags: { has_cod: true, send_opening_photo: true },
 };
 
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
-    const raw = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
-    const parsed = YAML.parse(raw) || {};
-    settings = { ...settings, ...parsed };
+    const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
+    const parsed = YAML.parse(text) || {};
+    fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
-    console.warn(`[SETTINGS] Não encontrado: ${BOT_SETTINGS_PATH}`);
+    console.warn(`[SETTINGS] Arquivo não encontrado: ${BOT_SETTINGS_PATH}`);
   }
-} catch (err) {
-  console.error('[SETTINGS] Falha ao carregar YAML:', err.message);
+} catch (e) {
+  console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
-export { settings };
+export const settings = {
+  botId: BOT_ID,
+  ...fileSettings,
+  llm: LLM_DEFAULTS,
+  flags: { ...fileSettings.flags, ...FLAGS },
+  audio: AUDIO,
+  global_models: GLOBAL_MODELS,
+};

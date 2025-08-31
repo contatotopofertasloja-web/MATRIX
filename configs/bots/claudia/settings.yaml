@@ -1,85 +1,85 @@
-﻿# =========================
-# 📦 Identificação da bot
-# =========================
-bot_id: claudia
-tenant_id: matrix
-product_id: prog_creme_170
+﻿bot_id: claudia
+persona_name: "Cláudia"
+language: "pt-BR"
 
-# =========================
-# 🧑 Persona / Tom
-# =========================
-persona:
-  display_name: "Cláudia"
-  tone: ["empática", "amiga", "confiante"]
-  style: "Respostas curtas (até 2 frases + 1 pergunta). Máx. 2 emojis."
-
-# =========================
-# ⚙️ Flags de comportamento
-# =========================
-flags:
-  has_cod: true                 # compat: usado pelos flows atuais
-  send_opening_photo: true      # se deve mandar foto de abertura
-  send_link_in_two_messages: true   # true = dividir pelo \n e mandar em 2 msgs
-  cooldown_cod_seconds: 90
-
-# =========================
-# 💼 Negócio / Oferta
-# =========================
-business:
-  price_target: 170
-  price_original: 197
-  checkout_url: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
-  coupon_code: "TOP-AGO2025-PROGRVG-150"
-  delivery_time: "24h capitais / 2 dias demais"
-  payment: "Somente no recebimento (COD)"
-
-# ---------------------------------------------------------
-# 🔁 Espelho p/ compatibilidade imediata (pode remover depois)
-# ---------------------------------------------------------
 product:
-  price_target: 170
+  name: "Progressiva X"
   price_original: 197
+  price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
+  has_cod: true
 
-# =========================
-# 🧠 Modelos por estágio
-# =========================
+flags:
+  has_cod: true
+  send_opening_photo: true             # envia foto de abertura (se existir no flow)
+  guardrails_strict: true              # regras rígidas (não inventar preço/link)
+  use_telemetry: true                  # envia eventos para Postgres (CoNexus)
+  use_thompson: true                   # Thompson/AB para oferta
+  allow_audio_in: true                 # cliente pode enviar áudio
+  allow_audio_out: false               # TTS depois
+  small_talk_soften: true              # tom leve e vendedor
+
+# ⚠️ Padronizei nomes SEM acento para casar com intents/flows
 models_by_stage:
-  greet: gpt-4o-mini
-  qualify: gpt-4o-mini
-  offer: gpt-4o
-  close: gpt-4o
-  postsale: gpt-4o-mini
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5-full"
+  fechamento:   "gpt-5-mini"
+  posvenda:     "gpt-5-nano"
 
-# =========================
-# 📈 Telemetria (reserva p/ futuro)
-# =========================
+typing:
+  ms_per_char: 35
+  min_ms: 800
+  max_ms: 5000
+
+messages:
+  opening:
+    - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
+  qualify_followups:
+    - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
+    - "Prefere resultado bem liso ou só alinhado com brilho?"
+  offer_templates:
+    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
+    - "Tenho cupom {{coupon_code}} que reduz para R${{price_target}}. Quer aproveitar?"
+  objection_handles:
+    - "Te entendo! É sem formol, com registro e garantia. Posso te mostrar resultados reais e o modo de uso?"
+    - "Se não amar o resultado, a gente orienta até acertar. Quer ver o passo a passo simples?"
+  closing:
+    - "Perfeito! Te mando o link do checkout agora? Assim já garante o valor com o cupom 😉"
+  postsale:
+    - "Qualquer dúvida no uso me chama aqui, combinado? Posso te mandar uma rotina de manutenção ✨"
+
+guardrails:
+  price_min: 149
+  price_max: 249
+  allow_links_only_from_list: true
+  allowed_links:
+    - "{{checkout_link}}"
+  freeze_fields:
+    - "price_target"
+    - "checkout_link"
+    - "coupon_code"
+
 telemetry:
   enabled: true
-  kpis:
-    - lead_in
-    - reply_latency_ms
-    - stage_intent
-    - close_attempt
-    - link_click_hint
-  sink: "file"                  # file | http | db (futuro)
-  file_path: "telemetry.log.json"
+  db: "postgres"               # CoNexus
+  tables:
+    events: "telemetry_events"
+    sessions: "telemetry_sessions"
 
-# =========================
-# 🧭 NLU (palavras-chave extra, opcional)
-# =========================
-nlu:
-  keywords:
-    delivery: ["entrega", "prazo", "frete", "dias", "chega"]
-    payment: ["pagamento", "pix", "cartão", "boleto", "cod", "contra entrega"]
-    features: ["como usa", "modo de uso", "aplicar", "aplicação"]
-    objection: ["caro", "confiança", "anvisa", "medo", "golpe"]
+thompson:
+  enabled: true
+  buckets:
+    - id: "offer_a"
+      weight: 1
+    - id: "offer_b"
+      weight: 1
+  metric: "conversion"
 
-# =========================
-# 🧪 Regras de resposta (limitadores, opcional)
-# =========================
-limits:
-  max_sentences: 2
-  max_emojis: 2
-  ask_back_enabled: true
+audio:
+  asr_provider: "openai"
+  asr_model: "whisper-1"
+  tts_provider: "none"
+  tts_voice: "alloy"

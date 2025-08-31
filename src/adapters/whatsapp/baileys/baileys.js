@@ -1,3 +1,4 @@
+//scr/adapters/whastapp/baileys.js
 // Implementação mínima; substitua pelos handlers reais quando quiser.
 // Mantém a mesma interface { init, onMessage, sendMessage, stop }.
 let _onMsgCb = null;

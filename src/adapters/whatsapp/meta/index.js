@@ -1,20 +1,20 @@
+// src/adapters/whatsapp/meta/index.js
 let _onMsgCb = null;
+let _ready = false;
+
+export function isReady() { return _ready; }
+export async function getQrDataURL() { return null; }
+export function onMessage(cb) { _onMsgCb = typeof cb === 'function' ? cb : null; }
 
 export async function init() {
-  console.log('[WPP/meta] init');
-  // TODO: inicializar Webhook/Long-polling da Cloud API
+  _ready = true; // stub “conectado”
+  console.log('[WPP/meta] Stub iniciado (sem Cloud API). Use WPP_ADAPTER=baileys por enquanto.');
 }
 
-export function onMessage(cb) { _onMsgCb = cb; }
-
-export async function sendMessage(to, text, opts = {}) {
-  console.log('[WPP/meta] sendMessage ->', { to, text, opts });
-  // TODO: POST /messages (Cloud API)
-  return { ok: true };
+export async function sendMessage(_to, _text) {
+  throw new Error('Adapter Meta (Cloud API) ainda não implementado.');
 }
 
-export async function stop() {
-  console.log('[WPP/meta] stop');
-}
+export async function stop() { _ready = false; }
 
-export default { init, onMessage, sendMessage, stop };
+export default { init, onMessage, sendMessage, stop, isReady, getQrDataURL };

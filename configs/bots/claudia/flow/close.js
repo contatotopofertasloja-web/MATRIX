@@ -1,16 +1,34 @@
 // configs/bots/claudia/flow/close.js
-import { settings } from '../../../src/core/settings.js';
+import { callLLM } from '../../../../src/core/llm.js';
+import { settings } from '../../../../src/core/settings.js';
 
-export async function closeDeal() {
-  const price =
-    Number(settings?.business?.price_target ?? settings?.product?.price_target ?? 170).toFixed(0);
-  const url = settings?.business?.checkout_url || settings?.product?.checkout_link || '';
-  const pay = settings?.business?.payment || 'Pagamento na entrega (COD).';
-  const twoMsgs = Boolean(settings?.flags?.send_link_in_two_messages);
+function onlyAllowedLink(link) {
+  const strict = !!settings?.guardrails?.allow_links_only_from_list;
+  const allowed = (settings?.guardrails?.allowed_links || [])
+    .map(s => s.replace('{{checkout_link}}', settings?.product?.checkout_link || ''))
+    .filter(Boolean);
+  if (!strict) return link;
+  return allowed.some(a => String(link).includes(a)) ? link : '';
+}
 
-  const head = [`Perfeito! Fechamos por R$ ${price} ✅`, pay].join(' ');
-  const link = url ? `Link oficial: ${url}` : '';
+export async function closeDeal({ userId, text }) {
+  const checkout = onlyAllowedLink(settings?.product?.checkout_link || '');
+  const price = settings?.product?.price_target ?? 170;
+  const closingLines = settings?.messages?.closing || [
+    'Perfeito! Te mando o link do checkout agora? Assim já garante o valor com o cupom 😉'
+  ];
 
-  // Se preferir enviar em duas mensagens, o handler pode dividir por '\n'
-  return twoMsgs && link ? [head, link].join('\n') : [head, link].filter(Boolean).join('\n');
+  const base = checkout
+    ? `Aqui está seu link seguro: ${checkout}\nValor: R$${price}. Qualquer dúvida fico aqui 💖`
+    : closingLines[0];
+
+  const { text: llm } = await callLLM({
+    stage: 'fechamento',
+    system: `Você é ${settings?.persona_name || 'Cláudia'}.
+Fechamento objetivo, 1-2 linhas, com CTA claro. Se houver link permitido, inclua; caso contrário, peça autorização.`,
+    prompt: `Cliente: ${text || '(sem texto)'}\nResponda fechando a compra.`,
+  });
+
+  const out = (llm || base);
+  return out.trim();
 }

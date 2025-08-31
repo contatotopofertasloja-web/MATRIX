@@ -1,4 +1,5 @@
-﻿version: v1
+﻿#configs/schema.intent.yaml
+version: v1
 description: "Intents canônicas para todos os bots de vendas"
 intents:
   - greet

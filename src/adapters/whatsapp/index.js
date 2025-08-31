@@ -1,33 +1,24 @@
 ﻿// src/adapters/whatsapp/index.js
-// Seleciona o driver via WPP_ADAPTER = 'baileys' | 'meta' (default: baileys)
+// Seleciona o driver via WPP_ADAPTER (baileys | meta) — default: baileys
 const DRIVER = (process.env.WPP_ADAPTER || 'baileys').toLowerCase();
 
-let lib;
+let driver;
 if (DRIVER === 'meta') {
-  lib = await import('./meta/index.js');
+  driver = await import('./meta/index.js').then(m => m.default || m);
 } else {
-  lib = await import('./baileys/index.js');
+  driver = await import('./baileys/index.js').then(m => m.default || m);
 }
 
-// Reexporta as funções esperadas
-export const onMessage = lib.onMessage;
-export const sendMessage = lib.sendMessage;
-export const sendImage = lib.sendImage;
-
-// Exports usados pelo server
-export const isReady = lib.isReady;
-export const getQrDataURL = lib.getQrDataURL;
-
-// Exporta o objeto adapter (o src/index.js importa isso)
+// Interface exposta para o server (src/index.js)
 export const adapter = {
-  onMessage,
-  sendMessage,
-  sendImage,
+  init:        driver.init,
+  onMessage:   driver.onMessage,
+  sendMessage: driver.sendMessage,
+  stop:        driver.stop,
 };
 
-// Helper opcional p/ debug
-export function whichAdapter() {
-  return DRIVER;
-}
+export const isReady      = driver.isReady;
+export const getQrDataURL = driver.getQrDataURL;
 
-export default { adapter, onMessage, sendMessage, sendImage, isReady, getQrDataURL, whichAdapter };
+export function whichAdapter() { return DRIVER; }
+export default { adapter, isReady, getQrDataURL, whichAdapter };
