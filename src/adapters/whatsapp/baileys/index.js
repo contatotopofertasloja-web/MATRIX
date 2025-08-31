@@ -11,17 +11,17 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { settings } from '../../../core/settings.js';
 
-const SESSION_ID   = process.env.WPP_SESSION  || 'claudia-main';
-const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${SESSION_ID}`;
+const SESSION_ID    = process.env.WPP_SESSION  || 'claudia-main';
+const OUTBOX_TOPIC  = process.env.OUTBOX_TOPIC || `outbox:${SESSION_ID}`;
 const QUEUE_BACKEND = (process.env.QUEUE_BACKEND || 'redis').toLowerCase(); // redis|memory|rabbit|sqs|none
-const USE_QUEUE    = QUEUE_BACKEND !== 'none';
+const USE_QUEUE     = QUEUE_BACKEND !== 'none';
 
 const logLevel = (process.env.WPP_LOG_LEVEL || 'warn').toLowerCase();
 const logger = pino({ level: logLevel });
 
-const AUTH_DIR   = process.env.WPP_AUTH_DIR || path.join(process.cwd(), 'baileys-auth');
-const DEVICE     = process.env.WPP_DEVICE   || 'Claudia-Matrix';
-const PRINT_QR   = String(process.env.WPP_PRINT_QR || 'false').toLowerCase() === 'true';
+const AUTH_DIR = process.env.WPP_AUTH_DIR || path.join(process.cwd(), 'baileys-auth');
+const DEVICE   = process.env.WPP_DEVICE   || 'Claudia-Matrix';
+const PRINT_QR = String(process.env.WPP_PRINT_QR || 'false').toLowerCase() === 'true';
 
 let sock = null;
 let _onMsgCb = null;
@@ -49,7 +49,7 @@ export async function init() {
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      _qrDataURL = await qrcode.toDataURL(qr);
+      try { _qrDataURL = await qrcode.toDataURL(qr); } catch { _qrDataURL = null; }
       if (PRINT_QR) logger.info('[WPP] QR atualizado (terminal + /wpp/qr)');
     }
     if (connection === 'open') {
@@ -97,7 +97,6 @@ export async function init() {
               await enqueueOutbox({
                 topic: OUTBOX_TOPIC,
                 to: msg.from,
-                // passa o objeto como "text" (o worker entende)
                 text: { type: 'image', imageUrl: reply.imageUrl, caption: reply.caption || '' },
                 meta: { session: SESSION_ID, adapter: 'baileys', bot: settings?.botId || 'claudia' }
               });
@@ -106,8 +105,6 @@ export async function init() {
             }
             continue;
           }
-
-          // fallback vazio
         } catch (e) {
           logger.error({ err: String(e?.message || e) }, '[WPP] onMessage handler error');
         }
@@ -156,7 +153,23 @@ export async function stop() {
   sock = null;
 }
 
-// — Helpers —
+// ——————————————————————————————
+// EXTRA: baixar áudio (voice) → Buffer
+// ——————————————————————————————
+export async function getAudioBuffer(rawMsg) {
+  try {
+    const audio = rawMsg?.message?.audioMessage;
+    if (!audio) return null;
+    const stream = await downloadContentFromMessage(audio, 'audio');
+    const chunks = [];
+    for await (const c of stream) chunks.push(c);
+    return { buffer: Buffer.concat(chunks), mimeType: audio.mimetype || 'audio/ogg' };
+  } catch {
+    return null;
+  }
+}
+
+// Helpers
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function normalizeJid(input) {
   const s = String(input || '').replace(/\D/g, '');
@@ -166,12 +179,14 @@ function normalizeMessage(m) {
   try {
     const from = m?.key?.remoteJid || '';
     const isFromMe = !!m?.key?.fromMe;
+
     const txt = m?.message?.conversation
       || m?.message?.extendedTextMessage?.text
       || m?.message?.ephemeralMessage?.message?.extendedTextMessage?.text
       || m?.message?.imageMessage?.caption
       || m?.message?.videoMessage?.caption
       || '';
+
     const hasImage = !!m?.message?.imageMessage;
     const hasVideo = !!m?.message?.videoMessage;
     const hasAudio = !!m?.message?.audioMessage;
@@ -190,4 +205,4 @@ function normalizeMessage(m) {
   } catch { return null; }
 }
 
-export default { init, onMessage, sendMessage, sendImage, stop, isReady, getQrDataURL };
+export default { init, onMessage, sendMessage, sendImage, stop, isReady, getQrDataURL, getAudioBuffer };
