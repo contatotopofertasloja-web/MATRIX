@@ -11,50 +11,83 @@ import { intentOf } from './core/intent.js';
 // Fila (dispatcher)
 import { enqueueOutbox, startOutboxWorkers } from './core/queue/dispatcher.js';
 
-// Adapter WhatsApp — import resiliente (default, named, CommonJS, factory ou adapter pronto)
+// ===== Adapter WhatsApp (import resiliente)
 import * as wpp from './adapters/whatsapp/index.js';
 
 function looksLikeAdapter(obj) {
   return (
     obj &&
     typeof obj === 'object' &&
-    typeof obj.onMessage === 'function' &&
+    (typeof obj.onMessage === 'function' || typeof obj.setOnMessage === 'function' || obj?.events?.on) &&
     (typeof obj.sendMessage === 'function' || typeof obj.sendImage === 'function') &&
     (typeof obj.isReady === 'function' || typeof obj.getQrDataURL === 'function')
   );
 }
 
+// cria um "adapter" padrão a partir de whichAdapter(session)
+function makeFromWhichAdapter(mod) {
+  return ({ session }) => {
+    const pick = () => mod.whichAdapter(session);
+
+    const onMessage = (fn) => {
+      const inst = pick();
+      if (typeof inst?.onMessage === 'function') return inst.onMessage(fn);
+      if (typeof inst?.setOnMessage === 'function') return inst.setOnMessage(fn);
+      if (inst?.events?.on) return inst.events.on('message', fn);
+      throw new Error('Adapter não expõe onMessage/setOnMessage/events.on');
+    };
+
+    const sendMessage = (...args) => pick().sendMessage?.(...args);
+    const sendImage = (...args) => (pick().sendImage ?? pick().sendFile)?.(...args);
+
+    const isReady =
+      typeof mod.isReady === 'function'
+        ? () => mod.isReady(session)
+        : () => pick().isReady?.();
+
+    const getQrDataURL =
+      typeof mod.getQrDataURL === 'function'
+        ? () => mod.getQrDataURL(session)
+        : () => pick().getQrDataURL?.();
+
+    return { onMessage, sendMessage, sendImage, isReady, getQrDataURL };
+  };
+}
+
 function resolveAdapterFactory(mod) {
-  // 1) módulo inteiro é uma função (CommonJS: module.exports = fn)
+  // 1) CommonJS: module.exports = function(session){...}
   if (typeof mod === 'function') return mod;
 
-  // 2) default export é função
+  // 2) ESM default function
   if (typeof mod?.default === 'function') return mod.default;
 
-  // 3) exports nomeados comuns (factory)
+  // 3) ESM nomeado com factory típica
   const candidates = ['makeAdapter', 'factory', 'createAdapter', 'buildAdapter', 'initAdapter', 'init', 'adapter'];
   for (const k of candidates) {
     if (typeof mod?.[k] === 'function') return mod[k];
     if (typeof mod?.default?.[k] === 'function') return mod.default[k];
   }
 
-  // 4) módulo já exporta um ADAPTER PRONTO
+  // 4) API baseada em whichAdapter(session) + helpers
+  if (typeof mod?.whichAdapter === 'function') return makeFromWhichAdapter(mod);
+  if (typeof mod?.default?.whichAdapter === 'function') return makeFromWhichAdapter(mod.default);
+
+  // 5) módulo já exporta instancia pronta
   if (looksLikeAdapter(mod)) return () => mod;
   if (looksLikeAdapter(mod?.default)) return () => mod.default;
-
-  // 5) módulo exporta um objeto "adapter" pronto (ou em default.adapter)
   if (looksLikeAdapter(mod?.adapter)) return () => mod.adapter;
   if (looksLikeAdapter(mod?.default?.adapter)) return () => mod.default.adapter;
 
   const exported = Object.keys(mod || {});
   const exportedDefault = Object.keys(mod?.default || {});
   throw new Error(
-    `Adapter inválido: não encontrei makeAdapter/adapter (exports: [${exported.join(',')}], default: [${exportedDefault.join(',')}])`
+    `Adapter inválido: não encontrei makeAdapter/whichAdapter/adapter (exports: [${exported.join(',')}], default: [${exportedDefault.join(',')}])`
   );
 }
 
 const makeAdapter = resolveAdapterFactory(wpp);
 
+// ===== servidor HTTP
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
@@ -76,14 +109,14 @@ const OUTBOX_RESERVA = process.env.OUTBOX_TOPIC_RESERVA || `outbox:${SESSION_RES
 const OUTBOX_CONC = Number(process.env.QUEUE_OUTBOX_CONCURRENCY || 2);
 const RATE_PER_SEC = Number(process.env.QUEUE_RATE_PER_SEC || 0.5);
 
-// cria/adquire adapters (se o módulo já exporta pronto, o factory retorna o próprio objeto)
+// cria/adquire adapters por sessão
 const adapterMain = makeAdapter({ session: SESSION_MAIN });
 const adapterReserva = makeAdapter({ session: SESSION_RESERVA });
 
-// flows
+// ===== flows
 const flows = await loadFlows(BOT_ID);
 
-// handler principal
+// ===== handler principal
 adapterMain.onMessage(async (msg) => {
   try {
     const { from, text, hasMedia, mediaType } = msg || {};
@@ -136,16 +169,16 @@ adapterMain.onMessage(async (msg) => {
   }
 });
 
-// workers (consumidores da fila)
+// ===== workers (consumidores da fila)
 await startOutboxWorkers({
   topic: OUTBOX_MAIN,
   concurrency: OUTBOX_CONC,
   ratePerSec: RATE_PER_SEC,
   sendFn: async (to, payload) => {
     if (payload?.kind === 'image') {
-      return adapterMain.sendImage(to, payload.imageUrl, payload.caption || '');
+      return adapterMain.sendImage?.(to, payload.imageUrl, payload.caption || '');
     }
-    return adapterMain.sendMessage(to, String(payload?.text ?? ''));
+    return adapterMain.sendMessage?.(to, String(payload?.text ?? ''));
   },
 });
 
@@ -155,13 +188,13 @@ await startOutboxWorkers({
   ratePerSec: RATE_PER_SEC,
   sendFn: async (to, payload) => {
     if (payload?.kind === 'image') {
-      return adapterReserva.sendImage(to, payload.imageUrl, payload.caption || '');
+      return adapterReserva.sendImage?.(to, payload.imageUrl, payload.caption || '');
     }
-    return adapterReserva.sendMessage(to, String(payload?.text ?? ''));
+    return adapterReserva.sendMessage?.(to, String(payload?.text ?? ''));
   },
 });
 
-// endpoints
+// ===== endpoints
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'Matrix IA 2.0', bot: BOT_ID });
 });
