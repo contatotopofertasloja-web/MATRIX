@@ -8,7 +8,6 @@ import morgan from 'morgan';
 
 import { makeAdapter } from './adapters/whatsapp/index.js';
 import { enqueueOutbox, startOutboxWorkers } from './core/queue/dispatcher.js';
-import * as adapter from './adapters/whatsapp/index.js';
 
 // ====== Env / Defaults ======
 const PORT = Number(process.env.PORT || 3000);
@@ -21,15 +20,11 @@ const SESSION_MAIN =
   'claudia-main';
 
 // tópico da outbox (um por sessão)
-const OUTBOX_TOPIC =
-  process.env.OUTBOX_TOPIC || `outbox:${SESSION_MAIN}`;
+const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${SESSION_MAIN}`;
 
 // controle de fila (usa seus envs existentes)
-const QUEUE_BACKEND =
-  (process.env.QUEUE_BACKEND || 'memory').toLowerCase();
-
-const QUEUE_OUTBOX_CONCURRENCY =
-  Number(process.env.QUEUE_OUTBOX_CONCURRENCY || 4);
+const QUEUE_BACKEND = (process.env.QUEUE_BACKEND || 'memory').toLowerCase();
+const QUEUE_OUTBOX_CONCURRENCY = Number(process.env.QUEUE_OUTBOX_CONCURRENCY || 4);
 
 // ====== Adapter (factory por sessão) ======
 const adapter = makeAdapter({ session: SESSION_MAIN });
@@ -38,7 +33,6 @@ const adapter = makeAdapter({ session: SESSION_MAIN });
 // Ex.: encaminhar toda mensagem recebida para o seu greet/flow.
 // Mantive o onMessage simples para não acoplar em nada que você não tenha enviado:
 await adapter.onMessage?.(async (msg) => {
-  // msg = { from, body/text, ... } dependendo do seu baileys adapter
   // console.log('[WPP][IN]', msg);
 });
 
@@ -52,7 +46,6 @@ if (QUEUE_BACKEND !== 'none') {
     // A função abaixo recebe o payload que foi enfileirado em enqueueOutbox
     // e decide como enviar (texto, imagem, etc).
     sendFn: async (job) => {
-      // O formato abaixo casa com os enqueues que faremos nos endpoints.
       const { to, type = 'text', text, imageUrl, caption } = job || {};
       if (!to) throw new Error('Payload inválido: "to" ausente');
 
@@ -91,24 +84,21 @@ app.get('/wpp/qr', async (req, res) => {
   try {
     const dataUrl = await adapter.getQrDataURL?.();
     if (!dataUrl) return res.status(404).json({ ok: false, error: 'QR indisponível' });
-    // retorna como data-url para front, ou use <img src="...">
     res.json({ ok: true, dataUrl });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
 });
 
-// Enviar mensagem (usa a OUTBOX para respeitar rate-limit/concurrency/retries)
+// Enviar mensagem via OUTBOX (respeita rate-limit/concurrency/retries)
 app.post('/wpp/send', async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
     if (!to) return res.status(400).json({ ok: false, error: '"to" é obrigatório' });
 
-    // payload padrão da nossa outbox
-    const payload =
-      imageUrl
-        ? { type: 'image', to, imageUrl, caption: caption || '' }
-        : { type: 'text', to, text: text ?? '' };
+    const payload = imageUrl
+      ? { type: 'image', to, imageUrl, caption: caption || '' }
+      : { type: 'text', to, text: text ?? '' };
 
     await enqueueOutbox({
       topic: OUTBOX_TOPIC,
@@ -122,7 +112,7 @@ app.post('/wpp/send', async (req, res) => {
   }
 });
 
-// opcional: envio síncrono direto (bypassa fila) ?sync=1
+// Envio direto opcional (bypassa a fila): ?sync=1
 app.post('/wpp/send-direct', async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
@@ -140,5 +130,7 @@ app.post('/wpp/send-direct', async (req, res) => {
 
 // Boot
 app.listen(PORT, () => {
-  console.log(`[MATRIX-WPP] up on :${PORT} | session=${SESSION_MAIN} | backend=${QUEUE_BACKEND} | topic=${OUTBOX_TOPIC}`);
+  console.log(
+    `[MATRIX-WPP] up on :${PORT} | session=${SESSION_MAIN} | backend=${QUEUE_BACKEND} | topic=${OUTBOX_TOPIC}`
+  );
 });
