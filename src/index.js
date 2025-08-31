@@ -3,17 +3,15 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
-- import { makeAdapter } from './adapters/whatsapp/index.js';
-+ import wpp from './adapters/whatsapp/index.js';
-+ const makeAdapter = wpp?.makeAdapter ?? wpp; // aceita default function OU { makeAdapter }
-import { makeAdapter } from './adapters/whatsapp/index.js'; // factory multi-sessão (ok) [base do seu projeto]
+
 import { BOT_ID, settings } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 
 // Fila (dispatcher)
 import { enqueueOutbox, startOutboxWorkers } from './core/queue/dispatcher.js';
-
+import * as wpp from './adapters/whatsapp/index.js';
+const makeAdapter = wpp?.makeAdapter ?? wpp?.default ?? wpp;
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
