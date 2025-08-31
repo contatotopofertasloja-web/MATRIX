@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/greet.js
-import { settings } from '../../../src/core/settings.js';
+import { settings } from '../../../../src/core/settings.js';
 
 /**
  * Flow: greet
