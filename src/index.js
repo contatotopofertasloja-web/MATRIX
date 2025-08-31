@@ -3,7 +3,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
-
+- import { makeAdapter } from './adapters/whatsapp/index.js';
++ import wpp from './adapters/whatsapp/index.js';
++ const makeAdapter = wpp?.makeAdapter ?? wpp; // aceita default function OU { makeAdapter }
 import { makeAdapter } from './adapters/whatsapp/index.js'; // factory multi-sessão (ok) [base do seu projeto]
 import { BOT_ID, settings } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
