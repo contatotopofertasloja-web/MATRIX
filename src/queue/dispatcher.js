@@ -1,53 +1,57 @@
 // src/core/queue/dispatcher.js
-// Backend de fila selecionável por ENV (padrão: redis)
-const BACKEND = (process.env.QUEUE_BACKEND || 'redis').toLowerCase(); // memory | rabbit | sqs | redis | none
+import { qpushLeft, qpopRightBlocking } from './redis.js';
+import { allowSend } from './rate-limit.js';
 
-/**
- * Enfileira uma saída (resposta) no tópico/stream informado.
- * topic: nome do stream/fila (ex.: outbox:claudia-main)
- * to/text/meta: payload da mensagem
- */
-export async function enqueueOutbox({ topic, to, text, meta }) {
-  switch (BACKEND) {
-    case 'redis': {
-      const { enqueueOutboxRedis } = await import('./redis-backend.js');
-      return enqueueOutboxRedis({ key: topic, to, text, meta });
-    }
-    // Se quiser reativar outros backends, acrescente aqui:
-    // case 'memory': { const { enqueueOutboxMemory } = await import('./memory-backend.js'); ... }
-    // case 'rabbit': { const { enqueueOutboxRabbit } = await import('./rabbit-backend.js'); ... }
-    // case 'sqs':    { const { enqueueOutboxSQS }    = await import('./sqs-backend.js'); ... }
-    default:
-      throw new Error(`QUEUE_BACKEND="${BACKEND}" não suportado neste build`);
+export async function enqueueOutbox({ topic, to, content, meta = {} }) {
+  if (!topic) throw new Error('enqueueOutbox: topic obrigatório');
+  if (!to) throw new Error('enqueueOutbox: to obrigatório');
+  if (!content) throw new Error('enqueueOutbox: content obrigatório');
+
+  const job = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: Date.now(),
+    to,
+    content,
+    meta,
+  };
+  await qpushLeft(topic, job);
+  return { ok: true, enqueued: true, topic, id: job.id };
+}
+
+export async function startOutboxWorkers({ topic, concurrency = 1, ratePerSec = 0.5, sendFn }) {
+  if (!topic) throw new Error('startOutboxWorkers: topic obrigatório');
+  if (typeof sendFn !== 'function') throw new Error('startOutboxWorkers: sendFn obrigatório');
+
+  for (let i = 0; i < concurrency; i++) {
+    loop(topic, ratePerSec, sendFn).catch((e) =>
+      console.error(`[outbox:${topic}][w${i}] loop error`, e)
+    );
   }
 }
 
-/**
- * Sobe os workers consumidores para o tópico informado.
- * concurrency: quantos consumidores paralelos para o mesmo stream
- * sendFn: função que envia de fato (ex.: adapter.sendMessage)
- */
-export async function startOutboxWorkers({ topic, concurrency = 1, sendFn }) {
-  switch (BACKEND) {
-    case 'redis': {
-      const { startOutboxWorkersRedis } = await import('./redis-backend.js');
-      const perMin = Number(process.env.WPP_RATE_LIMIT_PER_MIN || 25);
-      for (let i = 0; i < concurrency; i++) {
-        startOutboxWorkersRedis({
-          key: topic,
-          group: process.env.OUTBOX_GROUP || 'g1',
-          consumer: `c-${i}-${Math.random().toString(36).slice(2,7)}`,
-          perMin,
-          sendFn,
-        }).catch(e => console.error('[outbox-redis] worker failed', e?.message || e));
+async function loop(topic, ratePerSec, sendFn) {
+  // loop infinito controlado por BRPOP timeout
+  while (true) {
+    try {
+      const job = await qpopRightBlocking(topic, 5);
+      if (!job) continue;
+
+      // rate-limit distribuído
+      const can = await allowSend({ topic, ratePerSec });
+      if (!can) {
+        // devolve pro início da fila (reprocessar mais tarde)
+        await qpushLeft(topic, job);
+        await sleep(1000); // backoff mínimo
+        continue;
       }
-      return;
+
+      // envia
+      await sendFn(job.to, job.content);
+    } catch (e) {
+      console.error(`[outbox:${topic}] send error`, e?.message || e);
+      await sleep(500);
     }
-    // Reative aqui se usar outros backends:
-    // case 'memory': ...
-    // case 'rabbit': ...
-    // case 'sqs': ...
-    default:
-      throw new Error(`QUEUE_BACKEND="${BACKEND}" não suportado neste build`);
   }
 }
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

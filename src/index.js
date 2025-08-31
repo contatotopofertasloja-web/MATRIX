@@ -1,125 +1,193 @@
-﻿// src/adapters/whatsapp/index.js
-// Factory de adaptadores WhatsApp (multi-sessão)
-// - makeAdapter({ session, device, authDir, outboxTopic })
-// - expõe: onMessage, sendMessage, sendImage, isReady, getQrDataURL
+﻿// src/index.js
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import morgan from 'morgan';
 
-const DRIVER = (process.env.WPP_ADAPTER || 'baileys').toLowerCase();
+import { makeAdapter } from './adapters/whatsapp/index.js'; // factory multi-sessão (ok) [base do seu projeto]
+import { BOT_ID, settings } from './core/settings.js';
+import { loadFlows } from './core/flow-loader.js';
+import { intentOf } from './core/intent.js';
 
-// cache por sessão para evitar reinit
-const instances = new Map();
+// Fila (dispatcher)
+import { enqueueOutbox, startOutboxWorkers } from './core/queue/dispatcher.js';
 
-/**
- * Cria (ou retorna do cache) um adaptador para a sessão informada.
- * Por padrão usa o driver "baileys" do seu projeto.
- */
-export function makeAdapter({
-  session,
-  device,
-  authDir,
-  outboxTopic,
-} = {}) {
-  if (!session) throw new Error('makeAdapter: informe { session }');
+const app = express();
+app.set('trust proxy', 1);
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 
-  // já existe? devolve
-  if (instances.has(session)) return instances.get(session);
+const PORT = Number(process.env.PORT || 8080);
+const HOST = process.env.HOST || '0.0.0.0';
 
-  const api = buildAdapterForSession({ session, device, authDir, outboxTopic });
-  instances.set(session, api);
-  return api;
-}
+// sessões
+const SESSION_MAIN = process.env.WPP_SESSION || 'claudia-main';
+const SESSION_RESERVA = process.env.WPP_SESSION_RESERVA || 'claudia-reserva';
 
-function buildAdapterForSession({ session, device, authDir, outboxTopic }) {
-  // Defaults amigáveis
-  const AUTH_DIR = authDir || process.env.WPP_AUTH_DIR || '/app/baileys-auth-v2';
-  const DEVICE   = device   || process.env.WPP_DEVICE   || `Matrix-${session}`;
-  const TOPIC    = outboxTopic || process.env.OUTBOX_TOPIC || `outbox:${session}`;
+// tópicos de saída (fila)
+const OUTBOX_MAIN = process.env.OUTBOX_TOPIC || `outbox:${SESSION_MAIN}`;
+const OUTBOX_RESERVA = process.env.OUTBOX_TOPIC_RESERVA || `outbox:${SESSION_RESERVA}`;
 
-  // Usamos import dinâmico com um query param único por sessão
-  // para forçar o Node a instanciar o módulo novamente.
-  const moduleUrl =
-    DRIVER === 'baileys'
-      ? `./baileys/index.js?session=${encodeURIComponent(session)}`
-      : `./meta/index.js?session=${encodeURIComponent(session)}`;
+// quantos workers por fila
+const OUTBOX_CONC = Number(process.env.QUEUE_OUTBOX_CONCURRENCY || 2);
+// rate global por sessão (msgs/seg) — ex.: 0.5 => 1 msg/2s
+const RATE_PER_SEC = Number(process.env.QUEUE_RATE_PER_SEC || 0.5);
 
-  // Guardamos o estado do módulo carregado aqui
-  let modPromise = null;
+// adapters
+const adapterMain = makeAdapter({ session: SESSION_MAIN });
+const adapterReserva = makeAdapter({ session: SESSION_RESERVA });
 
-  async function ensureModule() {
-    if (modPromise) return modPromise;
+// flows
+const flows = await loadFlows(BOT_ID);
 
-    // ⚠️ Importante: set ENVs específicas desta sessão ANTES do import
-    const prev = {
-      WPP_SESSION: process.env.WPP_SESSION,
-      WPP_DEVICE:  process.env.WPP_DEVICE,
-      WPP_AUTH_DIR: process.env.WPP_AUTH_DIR,
-      OUTBOX_TOPIC: process.env.OUTBOX_TOPIC,
-    };
+// handler principal
+adapterMain.onMessage(async (msg) => {
+  try {
+    const { from, text, hasMedia, mediaType } = msg || {};
+    let finalText = text || '';
 
-    process.env.WPP_SESSION  = session;
-    process.env.WPP_DEVICE   = DEVICE;
-    process.env.WPP_AUTH_DIR = AUTH_DIR;
-    process.env.OUTBOX_TOPIC = TOPIC;
+    // Se tiver mídia de áudio e você já tiver util de ASR plugado, pode transcrever.
+    // Mantive simples: se precisar, integre seu getAudioBuffer + transcribe aqui.
 
-    // Carrega o driver (baileys/meta) com cache key diferente por sessão
-    modPromise = import(moduleUrl).then(async (m) => {
-      const mod = m.default || m;
+    if (!finalText && !hasMedia) return '';
 
-      // Alguns dos seus drivers expõem init(); se existir, inicializa já
-      if (typeof mod.init === 'function') {
-        await mod.init();
+    const intent = intentOf(finalText);
+    const handler = flows[intent] || flows[intent?.toLowerCase?.()] || null;
+
+    // se houver handler, ele pode devolver string (texto) ou {type:'image', imageUrl, caption}
+    if (typeof handler === 'function') {
+      const reply = await handler({ userId: from, text: finalText, context: { hasMedia, mediaType } });
+
+      if (typeof reply === 'string' && reply.trim()) {
+        await enqueueOutbox({
+          topic: OUTBOX_MAIN,
+          to: from,
+          content: { kind: 'text', text: reply.trim() },
+          meta: { session: SESSION_MAIN, bot: BOT_ID }
+        });
+        return '';
       }
+      if (reply && typeof reply === 'object' && reply.type === 'image' && reply.imageUrl) {
+        await enqueueOutbox({
+          topic: OUTBOX_MAIN,
+          to: from,
+          content: { kind: 'image', imageUrl: reply.imageUrl, caption: reply.caption || '' },
+          meta: { session: SESSION_MAIN, bot: BOT_ID }
+        });
+        return '';
+      }
+      return '';
+    }
 
-      // Restaura ENVs globais (para não “vazar” para outras sessões)
-      process.env.WPP_SESSION  = prev.WPP_SESSION  ?? '';
-      process.env.WPP_DEVICE   = prev.WPP_DEVICE   ?? '';
-      process.env.WPP_AUTH_DIR = prev.WPP_AUTH_DIR ?? '';
-      process.env.OUTBOX_TOPIC = prev.OUTBOX_TOPIC ?? '';
-
-      return mod;
+    // fallback
+    await enqueueOutbox({
+      topic: OUTBOX_MAIN,
+      to: from,
+      content: { kind: 'text', text: 'Consegue me contar rapidinho como é seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)' },
+      meta: { session: SESSION_MAIN, bot: BOT_ID }
     });
-
-    return modPromise;
+    return '';
+  } catch (e) {
+    console.error('[onMessage][error]', e);
+    return 'Dei uma travadinha aqui, pode repetir? 💕';
   }
+});
 
-  // API que o resto da Matrix enxerga
-  return {
-    async onMessage(fn) {
-      const mod = await ensureModule();
-      // compat: alguns drivers usam onMessage, outros adapter.onMessage
-      const target = mod.onMessage || mod.adapter?.onMessage;
-      if (typeof target !== 'function') {
-        throw new Error(`[${session}] driver não expõe onMessage`);
-      }
-      return target.call(mod, fn);
-    },
+// sobe workers (consomem a fila e chamam o adapter pra enviar)
+await startOutboxWorkers({
+  topic: OUTBOX_MAIN,
+  concurrency: OUTBOX_CONC,
+  ratePerSec: RATE_PER_SEC,
+  sendFn: async (to, payload) => {
+    if (payload?.kind === 'image') {
+      return adapterMain.sendImage(to, payload.imageUrl, payload.caption || '');
+    }
+    return adapterMain.sendMessage(to, String(payload?.text ?? ''));
+  },
+});
 
-    async sendMessage(to, text, opts = {}) {
-      const mod = await ensureModule();
-      const fn = mod.sendMessage || mod.adapter?.sendMessage;
-      if (typeof fn !== 'function') throw new Error(`[${session}] driver não expõe sendMessage`);
-      return fn.call(mod, to, text, opts);
-    },
+// reserva (opcional)
+await startOutboxWorkers({
+  topic: OUTBOX_RESERVA,
+  concurrency: OUTBOX_CONC,
+  ratePerSec: RATE_PER_SEC,
+  sendFn: async (to, payload) => {
+    if (payload?.kind === 'image') {
+      return adapterReserva.sendImage(to, payload.imageUrl, payload.caption || '');
+    }
+    return adapterReserva.sendMessage(to, String(payload?.text ?? ''));
+  },
+});
 
-    async sendImage(to, imageUrl, caption = '') {
-      const mod = await ensureModule();
-      const fn = mod.sendImage || mod.adapter?.sendImage;
-      if (typeof fn !== 'function') throw new Error(`[${session}] driver não expõe sendImage`);
-      return fn.call(mod, to, imageUrl, caption);
-    },
+// endpoints
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, service: 'Matrix IA 2.0', bot: BOT_ID });
+});
 
-    async isReady() {
-      const mod = await ensureModule();
-      const fn = mod.isReady || mod.adapter?.isReady;
-      return typeof fn === 'function' ? !!(await fn.call(mod)) : false;
-    },
+app.get('/wpp/health', async (_req, res) => {
+  try {
+    const mainReady = await adapterMain.isReady?.();
+    const resvReady = await adapterReserva.isReady?.();
+    res.json({ ok: true, sessions: { main: !!mainReady, reserva: !!resvReady } });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 
-    async getQrDataURL() {
-      const mod = await ensureModule();
-      const fn = mod.getQrDataURL || mod.adapter?.getQrDataURL;
-      if (typeof fn !== 'function') return null;
-      return await fn.call(mod);
-    },
-  };
-}
+app.get('/wpp/qr', async (_req, res) => {
+  try {
+    const dataURL = await adapterMain.getQrDataURL();
+    if (!dataURL) return res.status(204).end();
+    res.json({ session: 'main', dataURL });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
 
-export default { makeAdapter };
+app.get('/wpp/qr/reserva', async (_req, res) => {
+  try {
+    const dataURL = await adapterReserva.getQrDataURL();
+    if (!dataURL) return res.status(204).end();
+    res.json({ session: 'reserva', dataURL });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// envio manual (teste rápido)
+app.post('/wpp/send', async (req, res) => {
+  try {
+    const { to, text, type, imageUrl, caption, session = 'main' } = req.body || {};
+    if (!to) return res.status(400).json({ error: 'Informe { to }' });
+
+    const topic = session === 'reserva' ? OUTBOX_RESERVA : OUTBOX_MAIN;
+
+    if (type === 'image' && imageUrl) {
+      await enqueueOutbox({ topic, to, content: { kind: 'image', imageUrl, caption: caption || '' }, meta: { session } });
+      return res.json({ ok: true });
+    }
+    if (!text) return res.status(400).json({ error: 'Informe { text } ou { type:"image", imageUrl }' });
+    await enqueueOutbox({ topic, to, content: { kind: 'text', text: String(text) }, meta: { session } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// (opcional) saúde da fila
+app.get('/queue/health', (_req, res) => {
+  res.json({
+    ok: true,
+    outbox: {
+      main: OUTBOX_MAIN,
+      reserva: OUTBOX_RESERVA,
+      ratePerSec: RATE_PER_SEC,
+      workersPerTopic: OUTBOX_CONC
+    }
+  });
+});
+
+app.listen(PORT, HOST, () => {
+  console.log(`[server] Matrix on http://${HOST}:${PORT}`);
+});
