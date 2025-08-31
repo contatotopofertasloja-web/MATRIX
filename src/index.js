@@ -4,14 +4,23 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 
-import { BOT_ID, settings } from './core/settings.js';
+import { BOT_ID } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 
 // Fila (dispatcher)
 import { enqueueOutbox, startOutboxWorkers } from './core/queue/dispatcher.js';
+
+// Adapter WhatsApp — import resiliente (default, named ou CommonJS)
 import * as wpp from './adapters/whatsapp/index.js';
-const makeAdapter = wpp?.makeAdapter ?? wpp?.default ?? wpp;
+const makeAdapter = (() => {
+  if (typeof wpp === 'function') return wpp;                               // module.exports = fn
+  if (typeof wpp?.default === 'function') return wpp.default;              // export default function
+  if (typeof wpp?.makeAdapter === 'function') return wpp.makeAdapter;      // export const makeAdapter
+  if (typeof wpp?.default?.makeAdapter === 'function') return wpp.default.makeAdapter; // export default { makeAdapter }
+  throw new Error('Adapter inválido: não encontrei makeAdapter');
+})();
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
@@ -46,9 +55,6 @@ adapterMain.onMessage(async (msg) => {
   try {
     const { from, text, hasMedia, mediaType } = msg || {};
     let finalText = text || '';
-
-    // Se tiver mídia de áudio e você já tiver util de ASR plugado, pode transcrever.
-    // Mantive simples: se precisar, integre seu getAudioBuffer + transcribe aqui.
 
     if (!finalText && !hasMedia) return '';
 
