@@ -1,111 +1,37 @@
-﻿// Wrapper “alto nível”: fabrica o adapter por sessão e expõe a API usada pelo index/rotas.
-import { createBaileysClient } from './baileys/index.js';
-import QRCode from 'qrcode';
+﻿// src/adapters/whatsapp/index.js
+// Seleciona o adapter de WhatsApp via ENV e expõe uma interface única.
+// Requer: "type": "module" no package.json (ESM) e Node 18+.
 
-export const whichAdapter = 'baileys';
+const NAME = String(process.env.WPP_ADAPTER || 'baileys').toLowerCase();
 
-export function makeAdapter({ session = 'main', loggerLevel = 'error' } = {}) {
-  let client = null;
-  let ready = false;
-  let lastQR = null;
+let impl;
 
-  const listeners = {
-    message: new Set()
+if (NAME === 'baileys') {
+  // Adapter Baileys (QR Code)
+  // Caminho relativo ao próprio diretório
+  const mod = await import('./baileys/index.js');
+
+  // padroniza a interface exportada
+  impl = {
+    adapter: mod.adapter,         // { onMessage(fn), sendMessage(to, text), sendImage(...) }
+    isReady: mod.isReady,         // () => boolean
+    getQrDataURL: mod.getQrDataURL, // () => dataURL | null
+    init: mod.init,               // () => Promise<void>
+    stop: mod.stop,               // () => Promise<void>
   };
-
-  async function init() {
-    if (client) return client;
-
-    client = await createBaileysClient({ session, loggerLevel });
-
-    // Conexão / QR / estado
-    client.onConnectionUpdate(async (update) => {
-      // qr vem como string (base64 do payload); transformamos em dataURL quando solicitarem
-      if (update.qr) {
-        ready = false;
-        lastQR = update.qr;
-      }
-
-      if (update.connection === 'open') {
-        ready = true;
-        lastQR = null;
-      }
-
-      await client.gracefulCloseIfNeeded(update);
-    });
-
-    // Mensagens
-    client.onMessagesUpsert(async ({ messages, type }) => {
-      if (type !== 'notify' || !messages?.length) return;
-      const m = messages[0];
-      for (const fn of listeners.message) {
-        try { await fn(m); } catch (e) { /* silencia listener */ }
-      }
-    });
-
-    return client;
-  }
-
-  // === API exposta ===
-  async function isReady() {
-    return ready === true;
-  }
-
-  async function getQrDataURL() {
-    // Se já está pronto, não tem QR
-    if (ready) return null;
-    if (!lastQR) return null;
-    // Gera DataURL do QR
-    return await QRCode.toDataURL(lastQR, { errorCorrectionLevel: 'M' });
-  }
-
-  async function sendMessage(to, text, extra = {}) {
-    await init();
-    const jid = normalizeJid(to);
-    return client.sock.sendMessage(jid, { text, ...extra });
-  }
-
-  async function sendImage(to, bufferOrUrl, caption = '') {
-    await init();
-    const jid = normalizeJid(to);
-    let image = null;
-
-    if (Buffer.isBuffer(bufferOrUrl)) {
-      image = bufferOrUrl;
-    } else if (typeof bufferOrUrl === 'string') {
-      // Aceita URL pública
-      // Evita dependência externa: delega para o próprio Baileys baixar (passando url)
-      image = { url: bufferOrUrl };
-    } else {
-      throw new Error('sendImage: informe Buffer ou URL');
-    }
-
-    return client.sock.sendMessage(jid, { image, caption });
-  }
-
-  function onMessage(fn) {
-    if (typeof fn !== 'function') return () => {};
-    listeners.message.add(fn);
-    return () => listeners.message.delete(fn);
-  }
-
-  return {
-    whichAdapter,
-    init,
-    isReady,
-    getQrDataURL,
-    sendMessage,
-    sendImage,
-    onMessage
-  };
+} else if (NAME === 'meta' || NAME === 'cloudapi') {
+  // Espaço reservado para o adapter da Cloud API do WhatsApp (futuro)
+  throw new Error('Adapter "meta/cloudapi" ainda não implementado neste serviço.');
+} else {
+  throw new Error(`WPP_ADAPTER desconhecido: ${NAME}`);
 }
 
-// Helpers
-function normalizeJid(raw) {
-  const onlyDigits = String(raw).replace(/\D/g, '');
-  return onlyDigits.endsWith('@s.whatsapp.net')
-    ? onlyDigits
-    : `${onlyDigits}@s.whatsapp.net`;
-}
+// Reexports usados pelo servidor HTTP (src/index.js)
+export const adapter = impl.adapter;
+export const isReady = impl.isReady;
+export const getQrDataURL = impl.getQrDataURL;
+export const init = impl.init;
+export const stop = impl.stop;
 
-export default makeAdapter;
+// (Opcional) export default para compat com imports antigos
+export default { adapter, isReady, getQrDataURL, init, stop };
