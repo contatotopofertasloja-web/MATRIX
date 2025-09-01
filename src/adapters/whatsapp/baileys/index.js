@@ -1,53 +1,128 @@
-﻿// Baileys adapter “baixo nível”: cria o socket e devolve utilitários.
-// ATENÇÃO: makeWASocket é *named export* no Baileys 6.x.
-import {
-  makeWASocket,
-  useMultiFileAuthState,
+﻿// deps
+import makeWASocket, {
   fetchLatestBaileysVersion,
-  DisconnectReason,
-  Browsers
+  useMultiFileAuthState,
+  DisconnectReason
 } from '@whiskeysockets/baileys';
-import Pino from 'pino';
+import * as qrcode from 'qrcode';
 
-export async function createBaileysClient({ session, loggerLevel = 'error' }) {
-  // Armazena a sessão em disco (pasta .wpp-sessions/<session>)
-  const { state, saveCreds } = await useMultiFileAuthState(`.wpp-sessions/${session}`);
-  const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 0] }));
+// ENVs importantes
+const AUTH_DIR  = process.env.WPP_AUTH_DIR || './baileys-auth';
+const SESSION   = process.env.WPP_SESSION || 'default';
+const PRINT_QR  = String(process.env.WPP_PRINT_QR || 'true') === 'true';
 
-  const sock = makeWASocket({
+let sock;
+let _isReady = false;
+let _lastQrText = null;               // <-- garante cache do QR
+let _onMessage = null;
+
+// util: caminho de sessão (multi-file)
+import path from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+const AUTH_PATH = path.join(AUTH_DIR, SESSION);
+if (!existsSync(AUTH_PATH)) mkdirSync(AUTH_PATH, { recursive: true });
+
+// API pública
+export const adapter = {
+  onMessage(fn) { _onMessage = typeof fn === 'function' ? fn : null; },
+  async sendMessage(to, text) {
+    if (!sock) throw new Error('WhatsApp não inicializado');
+    const jid = normalize(to);
+    return sock.sendMessage(jid, { text: String(text ?? '') });
+  },
+  async sendImage(to, url, caption='') {
+    if (!sock) throw new Error('WhatsApp não inicializado');
+    const jid = normalize(to);
+    return sock.sendMessage(jid, { image: { url: String(url) }, caption: String(caption) });
+  },
+};
+
+export function isReady() { return _isReady && !!sock; }
+
+// >>> usado pelo endpoint /wpp/qr
+export async function getQrDataURL() {
+  if (!_lastQrText) return null;
+  return qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 });
+}
+
+// normaliza número
+function normalize(s) {
+  const d = String(s).replace(/\D/g, '');
+  return d.endsWith('@s.whatsapp.net') ? d : `${d}@s.whatsapp.net`;
+}
+
+// boot
+boot().catch(err => console.error('[baileys][boot]', err));
+
+async function boot() {
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
+  const { version } = await fetchLatestBaileysVersion();
+
+  sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: false,
-    browser: Browsers.appropriate('Matrix', 'Chrome'),
-    logger: Pino({ level: loggerLevel })
+    printQRInTerminal: PRINT_QR,      // QR também no log
+    browser: ['Matrix', 'Claudia', '1.0.0'],
+    markOnlineOnConnect: false,
+    generateHighQualityLinkPreview: true,
   });
 
-  // Persistência de credenciais
   sock.ev.on('creds.update', saveCreds);
 
-  // Exponho alguns helpers úteis para o wrapper “alto nível”
-  function onConnectionUpdate(cb) {
-    sock.ev.on('connection.update', cb);
-  }
+  // <<< chave: guardar o QR para o endpoint
+  sock.ev.on('connection.update', async (u) => {
+    const { connection, lastDisconnect, qr } = u;
 
-  function onMessagesUpsert(cb) {
-    sock.ev.on('messages.upsert', cb);
-  }
-
-  async function gracefulCloseIfNeeded(update) {
-    if (update.connection === 'close') {
-      const statusCode = update?.lastDisconnect?.error?.output?.statusCode;
-      // 401/DisconnectReason.loggedOut => precisa relogar
-      if (statusCode === DisconnectReason.loggedOut) {
-        try { await sock.logout(); } catch (_) {}
-      }
+    if (qr) {
+      _lastQrText = qr;               // <-- sem isso, /wpp/qr fica “indisponível”
+      if (!PRINT_QR) console.log('[WPP] QR atualizado (use GET /wpp/qr)');
     }
-  }
 
-  return {
-    sock,
-    onConnectionUpdate,
-    onMessagesUpsert,
-    gracefulCloseIfNeeded
-  };
+    if (connection === 'open') {
+      _isReady = true;
+      _lastQrText = null;             // após parear, some do endpoint
+      console.log('[WPP] Conectado ✅');
+    }
+
+    if (connection === 'close') {
+      _isReady = false;
+      const err = lastDisconnect?.error;
+      const code = err?.output?.statusCode || err?.code || 'unknown';
+      console.warn('[WPP] Conexão fechada', code, err?.message);
+      const shouldReconnect = code !== DisconnectReason.loggedOut;
+      if (shouldReconnect) setTimeout(() => boot().catch(console.error), 2000);
+    }
+  });
+
+  sock.ev.on('messages.upsert', async (m) => {
+    try {
+      if (m.type !== 'notify') return;
+      const msg = m.messages?.[0];
+      if (!msg || msg.key.fromMe) return;
+      const from = msg.key.remoteJid;
+      if (!from || from.endsWith('@g.us')) return;
+
+      const text =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
+        msg.message?.videoMessage?.caption ||
+        '';
+
+      if (typeof _onMessage === 'function') {
+        const maybe = await _onMessage({ from, text, hasMedia: !!(
+          msg.message?.imageMessage ||
+          msg.message?.videoMessage ||
+          msg.message?.audioMessage ||
+          msg.message?.documentMessage ||
+          msg.message?.stickerMessage
+        ), raw: msg });
+        if (typeof maybe === 'string' && maybe.trim()) {
+          await adapter.sendMessage(from, maybe);
+        }
+      }
+    } catch (e) {
+      console.error('[baileys][upsert]', e);
+    }
+  });
 }
