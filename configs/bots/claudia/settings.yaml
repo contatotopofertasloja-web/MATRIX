@@ -1,4 +1,5 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml
+bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -12,15 +13,15 @@ product:
 
 flags:
   has_cod: true
-  send_opening_photo: true             # envia foto de abertura (se existir no flow)
-  guardrails_strict: true              # regras rígidas (não inventar preço/link)
-  use_telemetry: true                  # envia eventos para Postgres (CoNexus)
-  use_thompson: true                   # Thompson/AB para oferta
-  allow_audio_in: true                 # cliente pode enviar áudio
-  allow_audio_out: false               # TTS depois
-  small_talk_soften: true              # tom leve e vendedor
+  send_opening_photo: true        # envia foto de abertura (se existir no flow)
+  guardrails_strict: true         # regras rígidas (não inventar preço/link)
+  use_telemetry: true             # envia eventos para Postgres (CoNexus)
+  use_thompson: true              # Thompson/AB para oferta
+  allow_audio_in: true            # cliente pode enviar áudio
+  allow_audio_out: false          # TTS depois
+  small_talk_soften: true         # tom leve e vendedor
 
-# ⚠️ Padronizei nomes SEM acento para casar com intents/flows
+# Modelos por etapa — padronizados (minúsculos, sem acentos) para casar com o código
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"

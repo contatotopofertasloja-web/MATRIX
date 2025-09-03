@@ -1,4 +1,9 @@
 // src/core/settings.js
+// Leitura centralizada das configurações do BOT (ENV + YAML por bot).
+// - Suporta ausência do YAML (usa defaults).
+// - Normaliza chaves de estágio (sem acento, minúsculas).
+// - Mantém compatibilidade com variáveis de ambiente existentes.
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,28 +11,58 @@ import YAML from 'yaml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const ROOT       = path.resolve(__dirname, '..', '..');
+const ROOT       = path.resolve(__dirname, '..', '..'); // -> raiz do projeto (onde está /configs)
 
 function env(name, def) {
   const v = process.env[name];
   return v === undefined || v === null || v === '' ? def : v;
 }
 
+// -------------------- BOT / CAMINHOS --------------------
 export const BOT_ID = env('BOT_ID', 'claudia');
 const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
-// --------- Defaults globais vindos das ENVs ----------
+// -------------------- NORMALIZAÇÃO -----------------------
+const STAGE_KEY_ALIASES = new Map([
+  ['recepção', 'recepcao'],
+  ['recepcao', 'recepcao'],
+  ['qualificação', 'qualificacao'],
+  ['qualificacao', 'qualificacao'],
+  ['oferta', 'oferta'],
+  ['objeções', 'objecoes'],
+  ['objeções', 'objecoes'],
+  ['objecoes', 'objecoes'],
+  ['obstrucoes', 'objecoes'],
+  ['fechamento', 'fechamento'],
+  ['pós-venda', 'posvenda'],
+  ['posvenda', 'posvenda'],
+  ['postsale', 'posvenda'],
+]);
+
+function normalizeStageKey(k) {
+  if (!k) return k;
+  const base = String(k).trim().toLowerCase();
+  return STAGE_KEY_ALIASES.get(base) || base;
+}
+
+function normalizeModelsByStage(map) {
+  const out = {};
+  if (map && typeof map === 'object') {
+    for (const [k, v] of Object.entries(map)) {
+      out[normalizeStageKey(k)] = String(v || '').trim();
+    }
+  }
+  return out;
+}
+
+// -------------------- DEFAULTS (ENV) --------------------
 const GLOBAL_MODELS = {
-  recepcao:     env('LLM_MODEL_RECEPCAO',     'GPT-5-nano'),
-  qualificacao: env('LLM_MODEL_QUALIFICACAO', 'GPT-5-nano'),
-  oferta:       env('LLM_MODEL_OFERTA',       'GPT-5-mini'),
-  obstrucoes:   env('LLM_MODEL_OBJECOES',     'GPT-5'),
-  objeções:     env('LLM_MODEL_OBJECOES',     'GPT-5'),
-  objecoes:     env('LLM_MODEL_OBJECOES',     'GPT-5'),
-  fechamento:   env('LLM_MODEL_FECHAMENTO',   'GPT-5-mini'),
-  posvenda:     env('LLM_MODEL_POSVENDA',     'GPT-5-nano'),
-  pósvenda:     env('LLM_MODEL_POSVENDA',     'GPT-5-nano'),
-  postsale:     env('LLM_MODEL_POSVENDA',     'GPT-5-nano'),
+  recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
+  qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
+  oferta:       env('LLM_MODEL_OFERTA',       'gpt-5-mini'),
+  objecoes:     env('LLM_MODEL_OBJECOES',     'gpt-5'),
+  fechamento:   env('LLM_MODEL_FECHAMENTO',   'gpt-5-mini'),
+  posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
 const FLAGS = {
@@ -36,7 +71,7 @@ const FLAGS = {
 };
 
 const AUDIO = {
-  asrProvider: env('ASR_PROVIDER', 'openai'),
+  asrProvider: env('ASR_PROVIDER', 'openai'), // whisper
   asrModel:    env('ASR_MODEL',    'whisper-1'),
   ttsProvider: env('TTS_PROVIDER', 'none'),
   ttsVoice:    env('TTS_VOICE',    'alloy'),
@@ -54,6 +89,7 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
+// -------------------- DEFAULT DO ARQUIVO ----------------
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -62,10 +98,15 @@ let fileSettings = {
   flags: { has_cod: true, send_opening_photo: true },
 };
 
+// -------------------- CARREGA YAML ----------------------
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
     const parsed = YAML.parse(text) || {};
+    // normaliza modelos por estágio
+    if (parsed.models_by_stage) {
+      parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
+    }
     fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
@@ -75,6 +116,7 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
+// -------------------- EXPORTA UNIFICADO -----------------
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,
