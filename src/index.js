@@ -4,23 +4,17 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
-import OpenAI from 'openai';
 
-// WhatsApp adapter (escolhido por WPP_ADAPTER=baileys|meta)
 import { adapter, isReady as wppReady, getQrDataURL } from './adapters/whatsapp/index.js';
 
-// Core (configs, flows e NLU leve)
+// Core
 import { BOT_ID } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 
-// Opcional: util do Baileys para baixar áudio do raw message
-// (não requer mudanças no adapter)
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
-
-// ---------------------------------------------------------
+// ---------------------------------------------
 // App base
-// ---------------------------------------------------------
+// ---------------------------------------------
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
@@ -30,102 +24,48 @@ app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 
-// ---------------------------------------------------------
-// Flags/ENV
-// ---------------------------------------------------------
-const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
+// ---------------------------------------------
+// Configs e flags
+// ---------------------------------------------
 const ECHO_MODE = String(process.env.ECHO_MODE || 'false').toLowerCase() === 'true';
+const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
 
-// OpenAI (Whisper + LLM se quiser evoluir depois)
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// Rate limit só nas rotas sensíveis
+// Rate limit só para envio manual
 const sendLimiter = rateLimit({
-  windowMs: 60 * 1000,
+  windowMs: 60 * 1000, // 1 min
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// ---------------------------------------------------------
-// Flows do BOT
-// (compatível com src/bots/<bot>/flows ou configs/bots/<bot>/flow)
-// ---------------------------------------------------------
+// ---------------------------------------------
+// Carregar flows do BOT
+// ---------------------------------------------
 const flows = await loadFlows(BOT_ID);
 
-// ---------------------------------------------------------
-// Auxiliar: baixa e transcreve áudio do raw message (Baileys)
-// ---------------------------------------------------------
-async function transcribeFromRaw(raw) {
-  try {
-    const a =
-      raw?.message?.audioMessage ||
-      raw?.message?.voiceMessage || // algumas builds
-      raw?.message?.pttMessage;     // alias raro
-
-    if (!a) return null;
-
-    // baixa o stream de áudio com o Baileys
-    const stream = await downloadContentFromMessage(a, 'audio');
-    const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
-    const buffer = Buffer.concat(chunks);
-
-    // chama Whisper (OpenAI)
-    // nome do arquivo é apenas informativo
-    const file = new File([buffer], 'audio.ogg', { type: 'audio/ogg' });
-    const res = await openai.audio.transcriptions.create({
-      file,
-      model: 'whisper-1',
-      // language: 'pt', // opcional; Whisper detecta idioma
-    });
-
-    const text = (res?.text || '').trim();
-    return text || null;
-  } catch (e) {
-    console.error('[audio][transcribe][error]', e);
-    return null;
-  }
-}
-
-// ---------------------------------------------------------
-// Pipeline: mensagens recebidas do WhatsApp
-// - texto: roteia direto
-// - áudio: transcreve → roteia como texto
-// ---------------------------------------------------------
+// ---------------------------------------------
+// Pipeline de mensagens vindas do WhatsApp
+// ---------------------------------------------
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   try {
-    // 1) ECHO rápido (debug)
-    if (ECHO_MODE && (text?.trim() || '')) return `Echo: ${text}`;
+    // Modo debug (eco)
+    if (ECHO_MODE && text) return `Echo: ${text}`;
 
-    // 2) Se não há texto mas tem áudio, tenta transcrever
-    let msgText = (text || '').trim();
-    if (!msgText && hasMedia && raw) {
-      const transcript = await transcribeFromRaw(raw);
-      if (transcript) msgText = transcript;
-    }
+    if (!text && !hasMedia) return '';
 
-    // 3) Nada pra dizer? evita SPAM
-    if (!msgText) return '';
+    const intent = intentOf(text);
+    const handler = flows[intent] || flows[intent?.toLowerCase?.()] || null;
 
-    // 4) Intenção e roteamento
-    const intent = intentOf(msgText);
-    const handler =
-      flows[intent] ||
-      flows[intent?.toLowerCase?.()] ||
-      null;
-
-    // 5) Executa flow específico
     if (typeof handler === 'function') {
       const reply = await handler({
         userId: from,
-        text: msgText,
-        context: { hasMedia, raw, cameFromAudio: (!!text ? false : true) },
+        text,
+        context: { hasMedia, raw },
       });
       return typeof reply === 'string' ? reply : '';
     }
 
-    // 6) Defaults úteis (fallback)
+    // Defaults úteis
     switch (intent) {
       case 'delivery':
         return 'Me passa seu CEP rapidinho que já te confirmo prazo e frete 🚚';
@@ -134,13 +74,9 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       case 'features':
         return 'É um tratamento sem formol que alinha e nutre. Quer o passo a passo de uso?';
       case 'objection':
-        return 'Te entendo! É produto regularizado, com garantia e suporte. Posso te enviar resultados e modo de uso?';
-      case 'offer':
-        return 'Consigo te fazer uma condição especial hoje. Quer que eu te explique? 😉';
-      case 'close':
-        return 'Posso te mandar o link do checkout pra garantir o valor agora?';
+        return 'Te entendo! É produto regularizado, com garantia e suporte. Posso te mandar resultados e como usar?';
       default:
-        return 'Consegue me contar rapidinho como é seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)';
+        return 'Consegue me contar rapidinho sobre seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)';
     }
   } catch (e) {
     console.error('[onMessage][error]', e);
@@ -148,9 +84,9 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   }
 });
 
-// ---------------------------------------------------------
+// ---------------------------------------------
 // Rotas HTTP
-// ---------------------------------------------------------
+// ---------------------------------------------
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -163,37 +99,40 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/wpp/health', (_req, res) => {
-  res.json({ ok: true, ready: wppReady(), adapter: ADAPTER_NAME, session: process.env.WPP_SESSION });
+  res.json({ ok: true, ready: wppReady(), adapter: ADAPTER_NAME });
 });
 
-// QR em DataURL (para UI/admin)
-// - 204 se ainda não gerou (ou já conectou)
-// - 200 { qr: "data:image/png;base64,..." }
 app.get('/wpp/qr', async (_req, res) => {
   try {
     const dataURL = await getQrDataURL();
     if (!dataURL) return res.status(204).end();
-    res.json({ qr: dataURL, adapter: ADAPTER_NAME, bot: BOT_ID });
+    res.json({ ok: true, qr: dataURL, bot: BOT_ID, adapter: ADAPTER_NAME });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// Envio manual (teste) — protegido com rate limit
 app.post('/wpp/send', sendLimiter, async (req, res) => {
   try {
-    const { to, text } = req.body || {};
-    if (!to || !text) return res.status(400).json({ ok: false, error: 'Informe { to, text }' });
-    await adapter.sendMessage(to, text);
+    const { to, text, imageUrl, caption } = req.body || {};
+    if (!to || (!text && !imageUrl)) {
+      return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
+    }
+
+    if (imageUrl) await adapter.sendImage(to, imageUrl, caption || '');
+    if (text) await adapter.sendMessage(to, text);
+
     res.json({ ok: true });
   } catch (e) {
+    console.error('[POST /wpp/send][error]', e);
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// ---------------------------------------------------------
-// Boot HTTP
-// ---------------------------------------------------------
+// ---------------------------------------------
+// Start server
+// ---------------------------------------------
 app.listen(PORT, HOST, () => {
-  console.log(`[server] Matrix on http://${HOST}:${PORT} — adapter=${ADAPTER_NAME} bot=${BOT_ID}`);
+  console.log(`[HTTP] Matrix rodando em http://${HOST}:${PORT}`);
+  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | POST /wpp/send`);
 });
