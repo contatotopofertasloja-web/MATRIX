@@ -6,6 +6,9 @@ const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
 const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 const REDIS_DB   = Number(process.env.REDIS_DB || 0);
 const REDIS_PASS = process.env.REDIS_PASS || undefined;
+- const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379/0';
++ const REDIS_URL = process.env.REDIS_URL || '';
+
 
 export const redis = REDIS_URL
   ? new IORedis(REDIS_URL)
