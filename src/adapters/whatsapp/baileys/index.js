@@ -1,9 +1,14 @@
-﻿// deps
-import makeWASocket, {
+﻿// src/adapters/whatsapp/baileys/index.js
+
+// Import robusto (namespace) — evita "makeWASocket is not a function" em builds diferentes
+import * as baileys from '@whiskeysockets/baileys';
+const {
+  default: makeWASocket,                // default export (função) em versões atuais
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
-  DisconnectReason
-} from '@whiskeysockets/baileys';
+  DisconnectReason,
+} = baileys;
+
 import * as qrcode from 'qrcode';
 import path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -49,9 +54,7 @@ export async function getQrDataURL() {
 }
 
 export async function stop() {
-  try {
-    if (sock) await sock.logout();
-  } catch {}
+  try { if (sock) await sock.logout(); } catch {}
   sock = null;
   _isReady = false;
   _lastQrText = null;
@@ -64,6 +67,11 @@ export async function init() {
   try {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
     const { version } = await fetchLatestBaileysVersion();
+
+    if (typeof makeWASocket !== 'function') {
+      console.error('[baileys] makeWASocket não é função — import fallback falhou');
+      throw new Error('makeWASocket import error');
+    }
 
     sock = makeWASocket({
       version,
@@ -140,10 +148,7 @@ export async function init() {
 }
 
 // ————————————————————————————————————————————————
-// Compatibilidade com código legado
-// Alguns trechos antigos importavam `createBaileysClient`.
-// Abaixo mantemos esse nome para evitar crashes.
-// ————————————————————————————————————————————————
+// Compat: alguns trechos antigos importavam `createBaileysClient`
 export async function createBaileysClient() {
   await init();
   return { onMessage: adapter.onMessage, sendMessage: adapter.sendMessage, sendImage: adapter.sendImage, stop, isReady, getQrDataURL };
