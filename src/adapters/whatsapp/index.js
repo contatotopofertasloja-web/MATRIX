@@ -1,17 +1,29 @@
 ﻿// src/adapters/whatsapp/index.js
-const DRIVER = (process.env.WPP_ADAPTER || 'baileys').toLowerCase();
+// Seleciona o adapter via ENV e expõe *named exports* que o src/index.js usa.
+const NAME = String(process.env.WPP_ADAPTER || 'baileys').toLowerCase();
 
-let driver;
-if (DRIVER === 'meta') {
-  driver = await import('./meta/index.js').then(m => m.default || m);
+let impl;
+if (NAME === 'baileys') {
+  const mod = await import('./baileys/index.js');
+  impl = {
+    adapter: mod.adapter,
+    isReady: mod.isReady,
+    getQrDataURL: mod.getQrDataURL,
+    init: mod.init,
+    stop: mod.stop,
+  };
+} else if (NAME === 'meta' || NAME === 'cloudapi') {
+  throw new Error('Adapter "meta/cloudapi" ainda não implementado.');
 } else {
-  driver = await import('./baileys/index.js').then(m => m.default || m);
+  throw new Error(`WPP_ADAPTER desconhecido: ${NAME}`);
 }
 
-export const init = driver.init;
-export const onMessage = driver.onMessage;
-export const sendMessage = driver.sendMessage;
-export const stop = driver.stop;
+// *Named exports* esperados por src/index.js
+export const adapter = impl.adapter;
+export const isReady = impl.isReady;
+export const getQrDataURL = impl.getQrDataURL;
+export const init = impl.init;
+export const stop = impl.stop;
 
-export function whichAdapter() { return DRIVER; }
-export default { init, onMessage, sendMessage, stop, whichAdapter };
+// Default para compat com imports antigos (se existirem)
+export default { adapter, isReady, getQrDataURL, init, stop };
