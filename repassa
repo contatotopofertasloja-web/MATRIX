@@ -1,0 +1,7 @@
+New-Item : NÆo ‚ poss¡vel localizar um parƒmetro posicional que aceite o argumento '^'.
+No linha:1 caractere:1
++ New-Item -ItemType Directory -Force 'configs/src/core' ^| Out-Null; S ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [New-Item], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,Microsoft.PowerShell.Commands.NewItemCommand
+ 
