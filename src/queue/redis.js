@@ -1,18 +1,12 @@
 // src/queue/redis.js
 import Redis from 'ioredis';
 
-/**
- * Removido fallback hardcoded para localhost.
- * Em DEV, se quiser usar Redis local, defina REDIS_URL no .env (apenas em dev).
- */
-const REDIS_URL = process.env.REDIS_URL || '';
+// Override seguro primeiro
+const REDIS_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
 
 let client;
 
-/**
- * Retorna (ou cria) um cliente ioredis singleton para outras filas/consumidores.
- * - TLS automático quando for rediss://
- */
+/** Cliente Redis para publishers/consumers auxiliares */
 export function getRedisClient() {
   if (client) return client;
 
@@ -35,5 +29,4 @@ export function getRedisClient() {
   return client;
 }
 
-// Compat: export default para usos antigos (import client from ...)
 export default getRedisClient();
