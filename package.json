@@ -16,15 +16,15 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.3.0",
+    "express-rate-limit": "^7.4.0",
     "ioredis": "^5.7.0",
     "morgan": "^1.10.0",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^6.9.10",
+    "nodemailer": "^6.9.14",
     "openai": "^4.56.0",
     "pino": "^9.0.0",
     "qrcode": "^1.5.4",
-    "yaml": "^2.8.1"
+    "yaml": "^2.4.5"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
