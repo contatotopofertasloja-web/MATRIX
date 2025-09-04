@@ -1,13 +1,9 @@
 ﻿// src/adapters/whatsapp/baileys/index.js
 
-// Import robusto (namespace) — evita "makeWASocket is not a function" em builds diferentes
-import * as baileys from '@whiskeysockets/baileys';
-const {
-  default: makeWASocket,                // default export (função) em versões atuais
-  fetchLatestBaileysVersion,
-  useMultiFileAuthState,
-  DisconnectReason,
-} = baileys;
+// Import resiliente (ESM/CJS interop do Baileys)
+import * as Baileys from '@whiskeysockets/baileys';
+const makeWASocket = Baileys.default || Baileys.makeWASocket;
+const { fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason } = Baileys;
 
 import * as qrcode from 'qrcode';
 import path from 'node:path';
@@ -54,7 +50,9 @@ export async function getQrDataURL() {
 }
 
 export async function stop() {
-  try { if (sock) await sock.logout(); } catch {}
+  try {
+    if (sock) await sock.logout();
+  } catch {}
   sock = null;
   _isReady = false;
   _lastQrText = null;
@@ -64,14 +62,15 @@ export async function stop() {
 export async function init() {
   if (_booting) return;
   _booting = true;
-  try {
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
-    const { version } = await fetchLatestBaileysVersion();
 
+  try {
     if (typeof makeWASocket !== 'function') {
       console.error('[baileys] makeWASocket não é função — import fallback falhou');
-      throw new Error('makeWASocket import error');
+      throw new Error('Baileys import error');
     }
+
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
+    const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
       version,
@@ -148,7 +147,7 @@ export async function init() {
 }
 
 // ————————————————————————————————————————————————
-// Compat: alguns trechos antigos importavam `createBaileysClient`
+// Compat com código legado
 export async function createBaileysClient() {
   await init();
   return { onMessage: adapter.onMessage, sendMessage: adapter.sendMessage, sendImage: adapter.sendImage, stop, isReady, getQrDataURL };
