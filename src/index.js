@@ -1,5 +1,4 @@
 ﻿// src/index.js
-import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -12,11 +11,13 @@ import { createOutbox } from './core/queue.js';
 import { BOT_ID } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
-import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';   // ⟵ CANÁRIO
+import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';   // canário
 
-// Só carrega .env em desenvolvimento
+// Carrega .env apenas em desenvolvimento (evita sobrescrever Variables na Railway)
 if (process.env.NODE_ENV !== 'production') {
-  await import('dotenv/config');
+  try {
+    await import('dotenv/config');
+  } catch {}
 }
 
 // 🔔 Heartbeat watcher + alertas
@@ -93,10 +94,9 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!text && !hasMedia) return '';
 
-    // ⟵⟵⟵ Roteamento com canário
     const useCanary = isCanaryUser(from);
     const intent = intentOf(text);
-    let handler =
+    const handler =
       (useCanary && flows[CANARY_FLOW_KEY]) ? flows[CANARY_FLOW_KEY]
       : (flows[intent] || flows[intent?.toLowerCase?.()]);
 
@@ -153,14 +153,11 @@ app.get('/wpp/health', (_req, res) => {
     topic: OUTBOX_TOPIC,
     concurrency: OUTBOX_CONCURRENCY,
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled },
-    redis: {
-      url: process.env.REDIS_URL ? 'set' : 'unset',
-      connected: outbox.isConnected(),
-    },
+    redis: { url: process.env.REDIS_URL ? 'set' : 'unset', connected: outbox.isConnected() },
   });
 });
 
-// QR com visualização (?view=img|png) ou o JSON padrão
+// QR (?view=img|png) ou JSON
 app.get('/wpp/qr', async (req, res) => {
   try {
     const dataURL = await getQrDataURL();
@@ -227,7 +224,7 @@ app.post('/wpp/send', sendLimiter, async (req, res) => {
   }
 });
 
-// --------- Leader Election + Auto-demote (se estiver habilitado) ---------
+// --------- Leader Election + Auto-demote ---------
 const LEADER_ELECTION_ENABLED = envBool(process.env.LEADER_ELECTION_ENABLED, false);
 const LEADER_LOCK_KEY = process.env.LEADER_LOCK_KEY || `matrix:leader:${process.env.WPP_SESSION || 'default'}`;
 const LEADER_LOCK_TTL_MS = Number(process.env.LEADER_LOCK_TTL_MS || 3600000);
