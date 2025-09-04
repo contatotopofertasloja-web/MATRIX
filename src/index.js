@@ -155,7 +155,7 @@ app.get('/wpp/health', (_req, res) => {
   });
 });
 
-// QR com visualização (?view=img|png) ou JSON padrão
+// QR com visualização (?view=img|png) ou o JSON padrão
 app.get('/wpp/qr', async (req, res) => {
   try {
     const dataURL = await getQrDataURL();
