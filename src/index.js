@@ -12,6 +12,7 @@ import { createOutbox } from './core/queue.js';
 import { BOT_ID } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
+import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';   // ⟵ CANÁRIO
 
 // 🔔 Heartbeat watcher + alertas
 import { startHeartbeatWatcher } from './watchers/heartbeat.js';
@@ -27,7 +28,6 @@ const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
 const ECHO_MODE = String(process.env.ECHO_MODE || 'false').toLowerCase() === 'true';
-
 const INSTANCE_ID = process.env.INSTANCE_ID || process.env.WPP_SESSION || 'instance-1';
 
 // --------- Helpers ---------
@@ -74,7 +74,7 @@ await outbox.start(async (job) => {
 // --------- Flows ---------
 const flows = await loadFlows(BOT_ID);
 
-// --------- Entrada WhatsApp ---------
+// --------- Entrada WhatsApp (com CANÁRIO) ---------
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) {
     console.log('[intake] INTAKE_DISABLED — ignoring incoming', { from });
@@ -86,11 +86,15 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await outbox.publish({ to: from, kind: 'text', payload: { text: `Echo: ${text}` } });
       return '';
     }
-
     if (!text && !hasMedia) return '';
 
+    // ⟵⟵⟵ AQUI ESTÁ O TRECHO DO CANÁRIO
+    const useCanary = isCanaryUser(from);
     const intent = intentOf(text);
-    const handler = flows[intent] || flows[intent?.toLowerCase?.()];
+    let handler =
+      (useCanary && flows[CANARY_FLOW_KEY]) ? flows[CANARY_FLOW_KEY]
+      : (flows[intent] || flows[intent?.toLowerCase?.()]);
+
     if (typeof handler === 'function') {
       const reply = await handler({ userId: from, text, context: { hasMedia, raw } });
       if (typeof reply === 'string' && reply.trim()) {
@@ -99,6 +103,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
+    // fallback
     await outbox.publish({
       to: from,
       kind: 'text',
@@ -150,24 +155,40 @@ app.get('/wpp/health', (_req, res) => {
   });
 });
 
-app.get('/wpp/qr', async (_req, res) => {
+// QR com visualização (?view=img|png) ou JSON padrão
+app.get('/wpp/qr', async (req, res) => {
   try {
     const dataURL = await getQrDataURL();
     if (!dataURL) return res.status(204).end();
+
+    const view = (req.query.view || '').toString();
+    if (view === 'img') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>QR</title></head>
+<body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff;font-family:system-ui">
+  <div style="text-align:center">
+    <img src="${dataURL}" alt="WhatsApp QR" style="image-rendering:pixelated;width:320px;height:320px;border-radius:12px;box-shadow:0 0 40px #0006"/>
+    <p style="opacity:.7">Atualize a página para gerar um QR novo se expirar.</p>
+  </div>
+</body></html>`);
+    }
+    if (view === 'png') {
+      const b64 = dataURL.split(',')[1];
+      const buf = Buffer.from(b64, 'base64');
+      res.setHeader('Content-Type', 'image/png');
+      return res.send(buf);
+    }
     res.json({ ok: true, qr: dataURL, bot: BOT_ID, adapter: ADAPTER_NAME });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-app.get('/qr', async (_req, res) => {
-  try {
-    const dataURL = await getQrDataURL();
-    if (!dataURL) return res.status(204).end();
-    res.json({ ok: true, qr: dataURL, alias: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
+// Alias simples
+app.get('/qr', async (req, res) => {
+  req.query.view = req.query.view || 'img';
+  return app._router.handle(req, res, () => {});
 });
 
 let isLeader = false;
@@ -182,6 +203,7 @@ app.get('/ops/status', (_req, res) => {
   });
 });
 
+// Envio manual
 app.post('/wpp/send', sendLimiter, async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
@@ -200,10 +222,10 @@ app.post('/wpp/send', sendLimiter, async (req, res) => {
   }
 });
 
-// --------- Leader Election + Auto-demote ---------
-const LEADER_ELECTION_ENABLED = envBool(process.env.LEADER_ELECTION_ENABLED, true);
+// --------- Leader Election + Auto-demote (se estiver habilitado) ---------
+const LEADER_ELECTION_ENABLED = envBool(process.env.LEADER_ELECTION_ENABLED, false);
 const LEADER_LOCK_KEY = process.env.LEADER_LOCK_KEY || `matrix:leader:${process.env.WPP_SESSION || 'default'}`;
-const LEADER_LOCK_TTL_MS = Number(process.env.LEADER_LOCK_TTL_MS || 3600000); // 1h
+const LEADER_LOCK_TTL_MS = Number(process.env.LEADER_LOCK_TTL_MS || 3600000);
 const LEADER_RENEW_MS = Math.max(30000, Math.floor(LEADER_LOCK_TTL_MS * 0.5));
 
 const LEADER_OPS_KEY = process.env.LEADER_OPS_KEY || `matrix:ops:${process.env.WPP_SESSION || 'default'}`;
@@ -274,7 +296,6 @@ async function leaderLoop() {
   if (!LEADER_ELECTION_ENABLED || !leaderRedis) return;
 
   const token = INSTANCE_ID;
-
   const got = await leaderRedis.set(LEADER_LOCK_KEY, token, 'PX', LEADER_LOCK_TTL_MS, 'NX');
   if (got === 'OK') {
     await becomeLeader();
@@ -293,12 +314,8 @@ async function leaderLoop() {
 
     const renewTick = async () => {
       const res = await renew();
-      if (res === 'ok') {
-        setTimeout(renewTick, jitter(LEADER_RENEW_MS));
-      } else {
-        await becomeFollower();
-        setTimeout(leaderLoop, jitter(LEADER_RENEW_MS));
-      }
+      if (res === 'ok') setTimeout(renewTick, jitter(LEADER_RENEW_MS));
+      else { await becomeFollower(); setTimeout(leaderLoop, jitter(LEADER_RENEW_MS)); }
     };
     setTimeout(renewTick, jitter(LEADER_RENEW_MS));
   } else {
@@ -324,11 +341,8 @@ app.listen(PORT, HOST, () => {
   });
 
   if (leaderRedis) {
-    setInterval(() => {
-      if (!isLeader) { syncOpsFollower().catch(()=>{}); }
-    }, OP_SYNC_MS);
+    setInterval(() => { if (!isLeader) { syncOpsFollower().catch(()=>{}); } }, OP_SYNC_MS);
   }
-
   if (LEADER_ELECTION_ENABLED && leaderRedis) {
     leaderLoop().catch((e) => console.error('[leader][fatal]', e));
   } else {
