@@ -14,6 +14,11 @@ import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';   // ⟵ CANÁRIO
 
+// Só carrega .env em desenvolvimento
+if (process.env.NODE_ENV !== 'production') {
+  await import('dotenv/config');
+}
+
 // 🔔 Heartbeat watcher + alertas
 import { startHeartbeatWatcher } from './watchers/heartbeat.js';
 import { notifyDown } from './alerts/notifier.js';
