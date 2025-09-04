@@ -1,13 +1,12 @@
-﻿// src/adapters/whatsapp/baileys/index.js
-
-// Import resiliente (ESM/CJS interop do Baileys)
-import * as Baileys from '@whiskeysockets/baileys';
-const makeWASocket = Baileys.default || Baileys.makeWASocket;
-const { fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason } = Baileys;
-
+﻿// deps (robusto ao ESM/CJS)
+import * as baileys from '@whiskeysockets/baileys';
 import * as qrcode from 'qrcode';
 import path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+
+// destruturação segura: em alguns ambientes o default não vem direto
+const makeWASocket = baileys.default || baileys.makeWASocket || baileys;
+const { fetchLatestBaileysVersion, useMultiFileAuthState, DisconnectReason } = baileys;
 
 // ENVs importantes
 const AUTH_DIR  = process.env.WPP_AUTH_DIR || './baileys-auth';
@@ -50,9 +49,7 @@ export async function getQrDataURL() {
 }
 
 export async function stop() {
-  try {
-    if (sock) await sock.logout();
-  } catch {}
+  try { if (sock) await sock.logout(); } catch {}
   sock = null;
   _isReady = false;
   _lastQrText = null;
@@ -62,15 +59,14 @@ export async function stop() {
 export async function init() {
   if (_booting) return;
   _booting = true;
-
   try {
-    if (typeof makeWASocket !== 'function') {
-      console.error('[baileys] makeWASocket não é função — import fallback falhou');
-      throw new Error('Baileys import error');
-    }
-
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_PATH);
     const { version } = await fetchLatestBaileysVersion();
+
+    if (typeof makeWASocket !== 'function') {
+      console.error('[baileys] makeWASocket não é função — verifique versões/interop');
+      throw new Error('makeWASocket import error');
+    }
 
     sock = makeWASocket({
       version,
@@ -146,11 +142,15 @@ export async function init() {
   }
 }
 
-// ————————————————————————————————————————————————
-// Compat com código legado
+// Compat com código legado que chamava createBaileysClient()
 export async function createBaileysClient() {
   await init();
-  return { onMessage: adapter.onMessage, sendMessage: adapter.sendMessage, sendImage: adapter.sendImage, stop, isReady, getQrDataURL };
+  return {
+    onMessage: adapter.onMessage,
+    sendMessage: adapter.sendMessage,
+    sendImage: adapter.sendImage,
+    stop, isReady, getQrDataURL
+  };
 }
 
 // helpers
