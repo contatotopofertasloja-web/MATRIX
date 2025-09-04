@@ -88,7 +88,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!text && !hasMedia) return '';
 
-    // ⟵⟵⟵ AQUI ESTÁ O TRECHO DO CANÁRIO
+    // ⟵⟵⟵ Roteamento com canário
     const useCanary = isCanaryUser(from);
     const intent = intentOf(text);
     let handler =
