@@ -1,25 +1,41 @@
-// src/core/redis.js
-import IORedis from 'ioredis';
+// src/core/queue/redis.js
+import Redis from 'ioredis';
 
-const REDIS_URL = process.env.REDIS_URL || null;
-const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
-const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
-const REDIS_DB   = Number(process.env.REDIS_DB || 0);
-const REDIS_PASS = process.env.REDIS_PASS || undefined;
-- const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379/0';
-+ const REDIS_URL = process.env.REDIS_URL || '';
+/**
+ * NUNCA force fallback para localhost em produção.
+ * Se REDIS_URL não vier do ambiente, deixamos vazio
+ * e o serviço deve falhar visivelmente (melhor do que
+ * conectar no lugar errado).
+ */
+const REDIS_URL = process.env.REDIS_URL || '';
 
+let client;
 
-export const redis = REDIS_URL
-  ? new IORedis(REDIS_URL)
-  : new IORedis({
-      host: REDIS_HOST,
-      port: REDIS_PORT,
-      db:   REDIS_DB,
-      password: REDIS_PASS,
-      maxRetriesPerRequest: null,
-      enableReadyCheck: true,
-    });
+/**
+ * Retorna (ou cria) um cliente ioredis singleton.
+ * - Ativa TLS automaticamente se a URL começar com rediss://
+ */
+export function getRedis() {
+  if (client) return client;
 
-redis.on('connect', () => console.log('[redis] connected'));
-redis.on('error', (e) => console.error('[redis] error', e?.message || e));
+  if (!REDIS_URL) {
+    throw new Error('[redis] REDIS_URL não definido no ambiente');
+  }
+
+  const useTLS = REDIS_URL.startsWith('rediss://');
+
+  client = new Redis(REDIS_URL, {
+    lazyConnect: false,
+    maxRetriesPerRequest: null, // evita timeout de pipeline
+    enableReadyCheck: true,
+    tls: useTLS ? {} : undefined,
+  });
+
+  client.on('connect', () => console.log('[redis][core/queue] connected'));
+  client.on('error', (err) => console.error('[redis][core/queue][error]', err?.message || err));
+
+  return client;
+}
+
+// Compat: export default mantém módulos antigos funcionando
+export default getRedis();

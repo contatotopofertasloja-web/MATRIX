@@ -1,42 +1,39 @@
-// src/core/queue/redis.js
+// src/queue/redis.js
 import Redis from 'ioredis';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const KEY_PREFIX = process.env.REDIS_PREFIX || 'matrix';
+/**
+ * Removido fallback hardcoded para localhost.
+ * Em DEV, se quiser usar Redis local, defina REDIS_URL no .env (apenas em dev).
+ */
+const REDIS_URL = process.env.REDIS_URL || '';
 
 let client;
 
-export function getRedis() {
+/**
+ * Retorna (ou cria) um cliente ioredis singleton para outras filas/consumidores.
+ * - TLS automático quando for rediss://
+ */
+export function getRedisClient() {
   if (client) return client;
+
+  if (!REDIS_URL) {
+    throw new Error('[redis] REDIS_URL não definido no ambiente');
+  }
+
+  const useTLS = REDIS_URL.startsWith('rediss://');
+
   client = new Redis(REDIS_URL, {
+    lazyConnect: false,
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
-    lazyConnect: false,
-    retryStrategy: (times) => Math.min(times * 100, 3000),
+    tls: useTLS ? {} : undefined,
   });
 
-  client.on('connect', () => console.log('[redis] connect'));
-  client.on('ready',   () => console.log('[redis] ready'));
-  client.on('error',   (e) => console.error('[redis] error', e?.message || e));
-  client.on('end',     () => console.warn('[redis] end'));
+  client.on('connect', () => console.log('[redis][queue] connected'));
+  client.on('error', (err) => console.error('[redis][queue][error]', err?.message || err));
 
   return client;
 }
 
-// Helpers de fila
-export function qname(name) {
-  return `${KEY_PREFIX}:${name}`;
-}
-
-export async function qpushLeft(queue, payload) {
-  const redis = getRedis();
-  return redis.lpush(qname(queue), JSON.stringify(payload));
-}
-
-export async function qpopRightBlocking(queue, timeoutSec = 5) {
-  const redis = getRedis();
-  // BRPOP retorna [key, value] ou null em timeout
-  const res = await redis.brpop(qname(queue), timeoutSec);
-  if (!res) return null;
-  try { return JSON.parse(res[1]); } catch { return null; }
-}
+// Compat: export default para usos antigos (import client from ...)
+export default getRedisClient();
