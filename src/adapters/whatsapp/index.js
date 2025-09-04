@@ -1,37 +1,17 @@
 ﻿// src/adapters/whatsapp/index.js
-// Seleciona o adapter de WhatsApp via ENV e expõe uma interface única.
-// Requer: "type": "module" no package.json (ESM) e Node 18+.
+const DRIVER = (process.env.WPP_ADAPTER || 'baileys').toLowerCase();
 
-const NAME = String(process.env.WPP_ADAPTER || 'baileys').toLowerCase();
-
-let impl;
-
-if (NAME === 'baileys') {
-  // Adapter Baileys (QR Code)
-  // Caminho relativo ao próprio diretório
-  const mod = await import('./baileys/index.js');
-
-  // padroniza a interface exportada
-  impl = {
-    adapter: mod.adapter,         // { onMessage(fn), sendMessage(to, text), sendImage(...) }
-    isReady: mod.isReady,         // () => boolean
-    getQrDataURL: mod.getQrDataURL, // () => dataURL | null
-    init: mod.init,               // () => Promise<void>
-    stop: mod.stop,               // () => Promise<void>
-  };
-} else if (NAME === 'meta' || NAME === 'cloudapi') {
-  // Espaço reservado para o adapter da Cloud API do WhatsApp (futuro)
-  throw new Error('Adapter "meta/cloudapi" ainda não implementado neste serviço.');
+let driver;
+if (DRIVER === 'meta') {
+  driver = await import('./meta/index.js').then(m => m.default || m);
 } else {
-  throw new Error(`WPP_ADAPTER desconhecido: ${NAME}`);
+  driver = await import('./baileys/index.js').then(m => m.default || m);
 }
 
-// Reexports usados pelo servidor HTTP (src/index.js)
-export const adapter = impl.adapter;
-export const isReady = impl.isReady;
-export const getQrDataURL = impl.getQrDataURL;
-export const init = impl.init;
-export const stop = impl.stop;
+export const init = driver.init;
+export const onMessage = driver.onMessage;
+export const sendMessage = driver.sendMessage;
+export const stop = driver.stop;
 
-// (Opcional) export default para compat com imports antigos
-export default { adapter, isReady, getQrDataURL, init, stop };
+export function whichAdapter() { return DRIVER; }
+export default { init, onMessage, sendMessage, stop, whichAdapter };
