@@ -1,37 +1,42 @@
-#gitignore 
-
-# =====================
-# Node / NPM
-# =====================
+# Node / runtime
 node_modules/
+.npmrc
 npm-debug.log*
-yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-package-lock.json
+.pnpm-debug.log*
 
-# =====================
-# Ambiente / Config
-# =====================
+# Env & segredos
 .env
-.env.local
-.env.*.local
-.wpp-auth/
-baileys-auth/
-app/baileys-auth/
+.env.*
+!.env.example
 
-# =====================
-# Logs
-# =====================
-logs/
+# Baileys (auth local)
+baileys-auth*/
+app/baileys-auth*/
+app/baileys-auth-v2*/
+baileys_store*/
+
+# Builds / artefatos
+dist/
+build/
+coverage/
+tmp/
+temp/
 *.log
-telemetry.log.json
+logs/
+*.pid
+*.seed
+*.tgz
 
-# =====================
-# Sistema / IDE
-# =====================
+# Sist. operacional / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Test snapshots (se usar)
+__snapshots__/
+
+# Outros
+*.local.json

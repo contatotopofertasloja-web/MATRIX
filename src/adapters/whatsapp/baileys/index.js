@@ -1,6 +1,4 @@
-﻿// Adapter Baileys robusto (ESM) + QR + alerts + heartbeat
-// Corrige o erro "makeWASocket não é função" via interop seguro.
-
+﻿// src/adapters/whatsapp/baileys/index.js
 import * as baileys from '@whiskeysockets/baileys';
 import pino from 'pino';
 import * as qrcode from 'qrcode';
@@ -8,16 +6,20 @@ import * as qrcode from 'qrcode';
 import { notifyDown, notifyUp } from '../../../alerts/notifier.js';
 import { beat } from '../../../watchers/heartbeat.js';
 
-// ----------- ENV -----------
 const {
   WPP_AUTH_DIR = '/app/baileys-auth-v2',
   WPP_SESSION  = 'claudia-main',
   WPP_DEVICE   = 'Matrix-Node',
   WPP_LOG_LEVEL = 'warn',
-  WPP_PRINT_QR = 'false', // já servimos o dataURL por /wpp/qr
+  WPP_PRINT_QR = 'false',
+
+  SEND_TYPING = 'true',
+  TYPING_MS_PER_CHAR = '35',
+  TYPING_MIN_MS = '800',
+  TYPING_MAX_MS = '4000',
+  TYPING_VARIANCE_PCT = '0.2',
 } = process.env;
 
-// ----------- Interop seguro -----------
 const makeWASocket =
   (baileys && (baileys.makeWASocket || baileys.default)) || null;
 if (typeof makeWASocket !== 'function') {
@@ -32,19 +34,48 @@ const {
   DisconnectReason
 } = baileys;
 
-// ----------- State -----------
 let sock;
 let _isReady = false;
 let _lastQrText = null;
 let _onMessageHandler = null;
 
-// ----------- Helpers -----------
+const logger = pino({ level: WPP_LOG_LEVEL });
+
+// ---------- helpers ----------
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 function normalizeJid(input) {
   const digits = String(input || '').replace(/\D/g, '');
   if (!digits) throw new Error('destinatário inválido');
   return digits.endsWith('@s.whatsapp.net') ? digits : `${digits}@s.whatsapp.net`;
 }
 
+function calcTypingDelay(chars = 12) {
+  const per = Math.max(0, Number(TYPING_MS_PER_CHAR) || 0);
+  const min = Math.max(0, Number(TYPING_MIN_MS) || 0);
+  const max = Math.max(min, Number(TYPING_MAX_MS) || min);
+  const base = Math.min(max, Math.max(min, Math.round(per * chars)));
+  const varPct = Math.max(0, Math.min(1, Number(TYPING_VARIANCE_PCT) || 0));
+  const jitter = Math.round(base * varPct);
+  const delta = Math.floor(Math.random() * (2 * jitter + 1)) - jitter;
+  return Math.min(max, Math.max(min, base + delta));
+}
+
+async function simulateTyping(jid, approxChars = 12) {
+  if (String(SEND_TYPING).toLowerCase() !== 'true') return;
+  if (!sock) return;
+  try {
+    await sock.presenceSubscribe(jid);
+    await sleep(250);
+    await sock.sendPresenceUpdate('composing', jid);
+    await sleep(calcTypingDelay(approxChars));
+  } catch {}
+  finally {
+    try { await sock.sendPresenceUpdate('paused', jid); } catch {}
+  }
+}
+
+// ---------- exports ----------
 export async function getQrDataURL() {
   if (!_lastQrText) return null;
   return qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 });
@@ -57,30 +88,31 @@ export const adapter = {
   async sendMessage(to, text) {
     if (!sock) throw new Error('WhatsApp não inicializado');
     const jid = normalizeJid(to);
-    const res = await sock.sendMessage(jid, { text: String(text ?? '') });
-    beat(); // atividade OK
+    const msg = String(text ?? '');
+    await simulateTyping(jid, msg.length);
+    const res = await sock.sendMessage(jid, { text: msg });
+    beat();
     return res;
   },
 
   async sendImage(to, url, caption = '') {
     if (!sock) throw new Error('WhatsApp não inicializado');
     const jid = normalizeJid(to);
+    await simulateTyping(jid, String(caption || '').length || 12);
     const res = await sock.sendMessage(jid, { image: { url }, caption: String(caption || '') });
     beat();
     return res;
   },
 };
 
-// ----------- Boot -----------
+// ---------- boot ----------
 boot().catch(e => {
   console.error('[baileys][boot][fatal]', e);
   process.exitCode = 1;
 });
 
 async function boot() {
-  const logger = pino({ level: WPP_LOG_LEVEL });
-
-  const authDir = `${WPP_AUTH_DIR}/${WPP_SESSION}`; // separa por sessão
+  const authDir = `${WPP_AUTH_DIR}/${WPP_SESSION}`;
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -100,7 +132,6 @@ async function boot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Conexão / QR
   sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect, qr } = u;
 
@@ -133,7 +164,6 @@ async function boot() {
         meta: { lib: 'baileys', session: WPP_SESSION, msg: String(err?.message || err) }
       });
 
-      // Reconnect se não for logout
       if (code !== DisconnectReason.loggedOut) {
         console.warn('[baileys] Reconectando em 2s…');
         setTimeout(() => boot().catch(e => console.error('[baileys][reboot][err]', e)), 2000);
@@ -143,7 +173,6 @@ async function boot() {
     }
   });
 
-  // Mensagens
   sock.ev.on('messages.upsert', async (m) => {
     try {
       if (m.type !== 'notify') return;
@@ -174,7 +203,7 @@ async function boot() {
       beat();
 
       if (typeof _onMessageHandler === 'function') {
-        const maybe = await _onMessageHandler({ from, text: String(text || '').trim(), hasMedia });
+        const maybe = await _onMessageHandler({ from, text: String(text || '').trim(), hasMedia, raw: msg });
         if (typeof maybe === 'string' && maybe.trim()) {
           await adapter.sendMessage(from, maybe);
         }

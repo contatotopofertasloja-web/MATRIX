@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import Redis from 'ioredis';
 
 import { adapter, isReady as wppReady, getQrDataURL } from './adapters/whatsapp/index.js';
 import { createOutbox } from './core/queue.js';
@@ -11,6 +12,10 @@ import { createOutbox } from './core/queue.js';
 import { BOT_ID } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
+
+// 🔔 Heartbeat watcher + alertas
+import { startHeartbeatWatcher } from './watchers/heartbeat.js';
+import { notifyDown } from './alerts/notifier.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -23,6 +28,19 @@ const HOST = process.env.HOST || '0.0.0.0';
 const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
 const ECHO_MODE = String(process.env.ECHO_MODE || 'false').toLowerCase() === 'true';
 
+const INSTANCE_ID = process.env.INSTANCE_ID || process.env.WPP_SESSION || 'instance-1';
+
+// --------- Helpers ---------
+const envBool = (v, d = false) => {
+  if (v === undefined || v === null) return d;
+  const s = String(v).trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'y' || s === 'yes' || s === 'on';
+};
+
+// --------- Flags mutáveis (auto-demote/leader controla) ---------
+let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
+let sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
+
 // --------- Fila Outbox ---------
 const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || 'default'}`;
 const OUTBOX_CONCURRENCY = Number(process.env.QUEUE_OUTBOX_CONCURRENCY || '4');
@@ -33,15 +51,22 @@ const outbox = await createOutbox({
   redisUrl: process.env.REDIS_URL || '',
 });
 
-// Consumer: envia via adapter
+// Consumer: envia via adapter (respeita sendEnabled)
 await outbox.start(async (job) => {
   const { to, kind = 'text', payload = {} } = job || {};
   if (!to) return;
+
+  if (!sendEnabled) {
+    console.log('[outbox] SEND_DISABLED — drop job', { to, kind });
+    return;
+  }
+
   if (kind === 'image') {
     const { url, caption = '' } = payload || {};
     if (url) await adapter.sendImage(to, url, caption);
     return;
   }
+
   const text = String(payload?.text || '');
   if (text) await adapter.sendMessage(to, text);
 });
@@ -49,7 +74,13 @@ await outbox.start(async (job) => {
 // --------- Flows ---------
 const flows = await loadFlows(BOT_ID);
 
+// --------- Entrada WhatsApp ---------
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
+  if (!intakeEnabled) {
+    console.log('[intake] INTAKE_DISABLED — ignoring incoming', { from });
+    return '';
+  }
+
   try {
     if (ECHO_MODE && text) {
       await outbox.publish({ to: from, kind: 'text', payload: { text: `Echo: ${text}` } });
@@ -68,7 +99,6 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // fallback
     await outbox.publish({
       to: from,
       kind: 'text',
@@ -99,6 +129,7 @@ app.get('/health', (_req, res) => {
     adapter: ADAPTER_NAME,
     ready: wppReady(),
     env: process.env.NODE_ENV || 'production',
+    ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled },
   });
 });
 
@@ -111,6 +142,7 @@ app.get('/wpp/health', (_req, res) => {
     backend: outbox.backend(),
     topic: OUTBOX_TOPIC,
     concurrency: OUTBOX_CONCURRENCY,
+    ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled },
     redis: {
       url: process.env.REDIS_URL ? 'set' : 'unset',
       connected: outbox.isConnected(),
@@ -128,12 +160,36 @@ app.get('/wpp/qr', async (_req, res) => {
   }
 });
 
-// Envio manual (passa pela fila!)
+app.get('/qr', async (_req, res) => {
+  try {
+    const dataURL = await getQrDataURL();
+    if (!dataURL) return res.status(204).end();
+    res.json({ ok: true, qr: dataURL, alias: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+let isLeader = false;
+app.get('/ops/status', (_req, res) => {
+  res.json({
+    ok: true,
+    intake_enabled: intakeEnabled,
+    send_enabled: sendEnabled,
+    is_leader: isLeader,
+    session: process.env.WPP_SESSION || 'default',
+    instance_id: INSTANCE_ID,
+  });
+});
+
 app.post('/wpp/send', sendLimiter, async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
     if (!to || (!text && !imageUrl)) {
       return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
+    }
+    if (!sendEnabled) {
+      return res.status(202).json({ ok: true, enqueued: false, note: 'SEND_DISABLED — instância silenciosa' });
     }
     if (imageUrl) await outbox.publish({ to, kind: 'image', payload: { url: imageUrl, caption: caption || '' } });
     if (text)     await outbox.publish({ to, kind: 'text',  payload: { text } });
@@ -144,8 +200,138 @@ app.post('/wpp/send', sendLimiter, async (req, res) => {
   }
 });
 
-// --------- Boot ---------
+// --------- Leader Election + Auto-demote ---------
+const LEADER_ELECTION_ENABLED = envBool(process.env.LEADER_ELECTION_ENABLED, true);
+const LEADER_LOCK_KEY = process.env.LEADER_LOCK_KEY || `matrix:leader:${process.env.WPP_SESSION || 'default'}`;
+const LEADER_LOCK_TTL_MS = Number(process.env.LEADER_LOCK_TTL_MS || 3600000); // 1h
+const LEADER_RENEW_MS = Math.max(30000, Math.floor(LEADER_LOCK_TTL_MS * 0.5));
+
+const LEADER_OPS_KEY = process.env.LEADER_OPS_KEY || `matrix:ops:${process.env.WPP_SESSION || 'default'}`;
+const OP_SYNC_MS = Number(process.env.OP_SYNC_MS || 15000);
+
+const redisUrl = process.env.REDIS_URL || '';
+const leaderRedis = redisUrl ? new Redis(redisUrl, { lazyConnect: false }) : null;
+
+async function publishOps() {
+  if (!leaderRedis) return;
+  await leaderRedis.hset(LEADER_OPS_KEY, {
+    leader_id: INSTANCE_ID,
+    intake_enabled: intakeEnabled ? '1' : '0',
+    send_enabled:   sendEnabled   ? '1' : '0',
+    ts: Date.now().toString(),
+  });
+}
+
+async function fetchOps() {
+  if (!leaderRedis) return null;
+  const h = await leaderRedis.hgetall(LEADER_OPS_KEY);
+  return Object.keys(h).length ? h : null;
+}
+
+async function syncOpsFollower() {
+  try {
+    const ops = await fetchOps();
+    if (!ops) return;
+    const amLeader = ops.leader_id === INSTANCE_ID;
+    if (!amLeader) {
+      if (intakeEnabled || sendEnabled || isLeader) {
+        console.log('[ops] auto-demote (not leader). intake/send -> false');
+      }
+      isLeader = false;
+      intakeEnabled = false;
+      sendEnabled = false;
+    }
+  } catch (e) {
+    console.warn('[ops][sync][warn]', e?.message || e);
+  }
+}
+
+async function becomeLeader() {
+  if (!isLeader) {
+    isLeader = true;
+    intakeEnabled = true;
+    sendEnabled = true;
+    console.log(`[leader] Became LEADER — ${INSTANCE_ID}`);
+  }
+  await publishOps();
+}
+
+async function becomeFollower() {
+  if (isLeader || intakeEnabled || sendEnabled) {
+    console.log(`[leader] Became FOLLOWER — ${INSTANCE_ID}`);
+  }
+  isLeader = false;
+  intakeEnabled = false;
+  sendEnabled = false;
+}
+
+function jitter(ms, pct = 0.2) {
+  const delta = ms * pct;
+  return Math.floor(ms + (Math.random() * delta - delta / 2));
+}
+
+async function leaderLoop() {
+  if (!LEADER_ELECTION_ENABLED || !leaderRedis) return;
+
+  const token = INSTANCE_ID;
+
+  const got = await leaderRedis.set(LEADER_LOCK_KEY, token, 'PX', LEADER_LOCK_TTL_MS, 'NX');
+  if (got === 'OK') {
+    await becomeLeader();
+
+    const renew = async () => {
+      try {
+        const ttl = await leaderRedis.pttl(LEADER_LOCK_KEY);
+        if (ttl < 0) return 'reacquire';
+        await leaderRedis.pexpire(LEADER_LOCK_KEY, LEADER_LOCK_TTL_MS);
+        return 'ok';
+      } catch (e) {
+        console.error('[leader][renew][err]', e);
+        return 'error';
+      }
+    };
+
+    const renewTick = async () => {
+      const res = await renew();
+      if (res === 'ok') {
+        setTimeout(renewTick, jitter(LEADER_RENEW_MS));
+      } else {
+        await becomeFollower();
+        setTimeout(leaderLoop, jitter(LEADER_RENEW_MS));
+      }
+    };
+    setTimeout(renewTick, jitter(LEADER_RENEW_MS));
+  } else {
+    await becomeFollower();
+    setTimeout(leaderLoop, jitter(LEADER_RENEW_MS));
+  }
+}
+
+// --------- Boot + Watchers ---------
 app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix on http://${HOST}:${PORT}`);
-  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | POST /wpp/send`);
+  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | GET /qr | GET /ops/status | POST /wpp/send`);
+  console.log(`[Leader] mode: ${LEADER_ELECTION_ENABLED ? 'ENABLED' : 'DISABLED'} key=${LEADER_LOCK_KEY} ttl=${LEADER_LOCK_TTL_MS}ms`);
+
+  startHeartbeatWatcher(async ({ age, windowMs }) => {
+    const secs = Math.round(age / 1000);
+    console.warn(`[HB] heartbeat-timeout ${secs}s (window=${windowMs}ms)`);
+    try {
+      await notifyDown({ reason: `heartbeat-timeout ${secs}s`, meta: { windowMs } });
+    } catch (err) {
+      console.error('[HB] notifyDown error:', err);
+    }
+  });
+
+  if (leaderRedis) {
+    setInterval(() => {
+      if (!isLeader) { syncOpsFollower().catch(()=>{}); }
+    }, OP_SYNC_MS);
+  }
+
+  if (LEADER_ELECTION_ENABLED && leaderRedis) {
+    leaderLoop().catch((e) => console.error('[leader][fatal]', e));
+  } else {
+    console.warn('[leader] election disabled or REDIS_URL missing — using static flags');
+  }
 });
