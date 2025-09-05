@@ -1,22 +1,35 @@
 // src/queue/redis.js
 import Redis from 'ioredis';
 
-// Override seguro primeiro
-const REDIS_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
+function getEnvUrl() {
+  const url = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
+  if (!url) {
+    throw new Error(
+      '[redis][queue] Nenhuma URL definida. ' +
+      'Defina MATRIX_REDIS_URL=${{ Redis.REDIS_PUBLIC_URL }} no Railway.'
+    );
+  }
+  return url.trim();
+}
+
+function shouldUseTLS(url) {
+  if (url.startsWith('rediss://')) return true;
+  try {
+    const u = new URL(url);
+    if ((u.searchParams.get('tls') || '').toLowerCase() === 'true') return true;
+  } catch (_) {}
+  return false;
+}
 
 let client;
 
-/** Cliente Redis para publishers/consumers auxiliares */
 export function getRedisClient() {
   if (client) return client;
 
-  if (!REDIS_URL) {
-    throw new Error('[redis] REDIS_URL não definido no ambiente');
-  }
+  const url = getEnvUrl();
+  const useTLS = shouldUseTLS(url);
 
-  const useTLS = REDIS_URL.startsWith('rediss://');
-
-  client = new Redis(REDIS_URL, {
+  client = new Redis(url, {
     lazyConnect: false,
     maxRetriesPerRequest: null,
     enableReadyCheck: true,

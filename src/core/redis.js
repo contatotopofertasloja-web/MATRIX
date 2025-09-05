@@ -2,33 +2,36 @@
 import IORedis from 'ioredis';
 
 /**
- * Resolve a URL de conexão priorizando um override seguro.
- * - Em produção, defina MATRIX_REDIS_URL ou REDIS_URL nas Variables do serviço.
- * - Em dev, se quiser Redis local, defina REDIS_URL no .env (apenas em dev).
+ * Lê MATRIX_REDIS_URL como prioridade.
+ * Se não achar, cai no REDIS_URL (que o Railway injeta automático).
  */
-function resolveRedisUrl() {
-  return (
-    process.env.MATRIX_REDIS_URL ||
-    process.env.REDIS_URL ||
-    ''
-  );
+function getEnvUrl() {
+  const url = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
+  if (!url) {
+    throw new Error(
+      '[redis][core] Nenhuma URL definida. ' +
+      'Defina MATRIX_REDIS_URL=${{ Redis.REDIS_PUBLIC_URL }} no Railway.'
+    );
+  }
+  return url.trim();
+}
+
+function shouldUseTLS(url) {
+  if (url.startsWith('rediss://')) return true;
+  try {
+    const u = new URL(url);
+    if ((u.searchParams.get('tls') || '').toLowerCase() === 'true') return true;
+  } catch (_) {}
+  return false;
 }
 
 let client = null;
 
-/**
- * Singleton com conexão LAZY:
- * Só instancia quando alguém chama getRedis() pela 1ª vez.
- */
 export function getRedis() {
   if (client) return client;
 
-  const url = resolveRedisUrl();
-  if (!url) {
-    throw new Error('[redis] REDIS_URL não definido no ambiente');
-  }
-
-  const useTLS = url.startsWith('rediss://');
+  const url = getEnvUrl();
+  const useTLS = shouldUseTLS(url);
 
   client = new IORedis(url, {
     lazyConnect: false,
@@ -37,33 +40,20 @@ export function getRedis() {
     tls: useTLS ? {} : undefined,
   });
 
-  // Logs básicos
-  client.on('connect',   () => console.log('[redis][core] connected'));
-  client.on('ready',     () => console.log('[redis][core] ready'));
-  client.on('reconnecting', (t) => console.log('[redis][core] reconnecting', t));
-  client.on('error',     (e) => console.error('[redis][core][error]', e?.message || e));
+  client.on('connect', () => console.log('[redis][core] connected'));
+  client.on('ready', () => console.log('[redis][core] ready'));
+  client.on('reconnecting', () => console.log('[redis][core] reconnecting...'));
+  client.on('error', (e) => console.error('[redis][core][error]', e?.message || e));
 
-  // Diagnóstico amigável na subida
-  const tag =
-    url.includes('redis.railway.internal') ? 'internal'
-    : url.startsWith('rediss://') ? 'public+TLS'
-    : 'custom/env';
-  console.log('[ENV] REDIS_URL effective:', tag);
+  console.log('[redis][core] URL usado =', url.includes('proxy') ? 'public' : 'internal');
 
   return client;
 }
 
-/** Fecha a conexão (útil em testes/shutdowns) */
 export async function closeRedis() {
   if (!client) return;
-  try {
-    await client.quit();
-  } catch {
-    try { await client.disconnect(); } catch {}
-  } finally {
-    client = null;
-  }
+  try { await client.quit(); } catch { try { client.disconnect(); } catch {} }
+  client = null;
 }
 
-// Compatibilidade: alguns módulos podem importar default
 export default getRedis;
