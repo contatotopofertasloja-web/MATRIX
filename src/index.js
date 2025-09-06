@@ -27,16 +27,6 @@ if (process.env.NODE_ENV !== 'production') {
 import { startHeartbeatWatcher } from './watchers/heartbeat.js';
 import { notifyDown } from './alerts/notifier.js';
 
-// no topo do arquivo (depois dos imports)
-const WPP_ENABLED = String(process.env.WPP_ENABLED || 'true').toLowerCase() === 'true';
-
-// no final, onde hoje tem: boot().catch(...)
-if (WPP_ENABLED) {
-  boot().catch(e => { console.error('[baileys][boot][fatal]', e); process.exitCode = 1; });
-} else {
-  console.log('[baileys] disabled via WPP_ENABLED=false');
-}
-
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
