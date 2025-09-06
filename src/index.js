@@ -45,6 +45,10 @@ const envBool = (v, d = false) => {
   const s = String(v).trim().toLowerCase();
   return s === '1' || s === 'true' || s === 'y' || s === 'yes' || s === 'on';
 };
+const envNum = (v, d) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
 
 // --------- Flags mutáveis ---------
 let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
@@ -52,7 +56,7 @@ let sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
 
 // --------- Fila Outbox ---------
 const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || 'default'}`;
-const OUTBOX_CONCURRENCY = Number(process.env.QUEUE_OUTBOX_CONCURRENCY || '4');
+const OUTBOX_CONCURRENCY = envNum(process.env.QUEUE_OUTBOX_CONCURRENCY, 4);
 
 const outbox = await createOutbox({
   topic: OUTBOX_TOPIC,
@@ -289,11 +293,11 @@ app.post('/webhook/payment', async (req, res) => {
 // --------- Leader Election + Auto-demote ---------
 const LEADER_ELECTION_ENABLED = envBool(process.env.LEADER_ELECTION_ENABLED, false);
 const LEADER_LOCK_KEY = process.env.LEADER_LOCK_KEY || `matrix:leader:${process.env.WPP_SESSION || 'default'}`;
-const LEADER_LOCK_TTL_MS = Number(process.env.LEADER_LOCK_TTL_MS || 3600000);
+const LEADER_LOCK_TTL_MS = envNum(process.env.LEADER_LOCK_TTL_MS, 3600000);
 const LEADER_RENEW_MS = Math.max(30000, Math.floor(LEADER_LOCK_TTL_MS * 0.5));
 
 const LEADER_OPS_KEY = process.env.LEADER_OPS_KEY || `matrix:ops:${process.env.WPP_SESSION || 'default'}`;
-const OP_SYNC_MS = Number(process.env.OP_SYNC_MS || 15000);
+const OP_SYNC_MS = envNum(process.env.OP_SYNC_MS, 15000);
 
 const redisUrl = process.env.REDIS_URL || process.env.MATRIX_REDIS_URL || '';
 const leaderRedis = redisUrl ? new Redis(redisUrl, { lazyConnect: false }) : null;

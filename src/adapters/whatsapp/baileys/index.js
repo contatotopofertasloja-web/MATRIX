@@ -6,19 +6,39 @@ import * as qrcode from 'qrcode';
 import { notifyDown, notifyUp } from '../../../alerts/notifier.js';
 import { beat } from '../../../watchers/heartbeat.js';
 
+// ===== helpers p/ env =====
+const bool = (v, d=false) => {
+  if (v === undefined || v === null || v === '') return d;
+  const s = String(v).trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'y' || s === 'yes' || s === 'on';
+};
+const num = (v, d) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
+
 const {
   WPP_AUTH_DIR = '/app/baileys-auth-v2',
   WPP_SESSION  = 'claudia-main',
   WPP_DEVICE   = 'Matrix-Node',
   WPP_LOG_LEVEL = 'warn',
-  WPP_PRINT_QR = 'false',
 
+  // booleans/números serão convertidos abaixo
+  WPP_PRINT_QR = 'false',
   SEND_TYPING = 'true',
   TYPING_MS_PER_CHAR = '35',
   TYPING_MIN_MS = '800',
   TYPING_MAX_MS = '4000',
   TYPING_VARIANCE_PCT = '0.2',
 } = process.env;
+
+// conversões seguras (evita “false” virar true)
+const PRINT_QR = bool(WPP_PRINT_QR, false);
+const SEND_TYPING_B = bool(SEND_TYPING, true);
+const TYPING_PER = num(TYPING_MS_PER_CHAR, 35);
+const TYPING_MIN = num(TYPING_MIN_MS, 800);
+const TYPING_MAX = num(TYPING_MAX_MS, 4000);
+const TYPING_VAR = Math.max(0, Math.min(1, Number(TYPING_VARIANCE_PCT) || 0.2));
 
 const makeWASocket =
   (baileys && (baileys.makeWASocket || baileys.default)) || null;
@@ -51,18 +71,17 @@ function normalizeJid(input) {
 }
 
 function calcTypingDelay(chars = 12) {
-  const per = Math.max(0, Number(TYPING_MS_PER_CHAR) || 0);
-  const min = Math.max(0, Number(TYPING_MIN_MS) || 0);
-  const max = Math.max(min, Number(TYPING_MAX_MS) || min);
+  const per = Math.max(0, TYPING_PER);
+  const min = Math.max(0, TYPING_MIN);
+  const max = Math.max(min, TYPING_MAX);
   const base = Math.min(max, Math.max(min, Math.round(per * chars)));
-  const varPct = Math.max(0, Math.min(1, Number(TYPING_VARIANCE_PCT) || 0));
-  const jitter = Math.round(base * varPct);
+  const jitter = Math.round(base * TYPING_VAR);
   const delta = Math.floor(Math.random() * (2 * jitter + 1)) - jitter;
   return Math.min(max, Math.max(min, base + delta));
 }
 
 async function simulateTyping(jid, approxChars = 12) {
-  if (String(SEND_TYPING).toLowerCase() !== 'true') return;
+  if (!SEND_TYPING_B) return;
   if (!sock) return;
   try {
     await sock.presenceSubscribe(jid);
@@ -105,6 +124,14 @@ export const adapter = {
   },
 };
 
+// permite encerrar a sessão com segurança (logout) sem derrubar o processo
+export async function stop() {
+  try { if (sock) await sock.logout(); } catch {}
+  sock = null;
+  _isReady = false;
+  _lastQrText = null;
+}
+
 // ---------- boot ----------
 boot().catch(e => {
   console.error('[baileys][boot][fatal]', e);
@@ -122,7 +149,7 @@ async function boot() {
   sock = makeWASocket({
     version,
     logger,
-    printQRInTerminal: WPP_PRINT_QR === 'true',
+    printQRInTerminal: PRINT_QR, // (ANTES: WPP_PRINT_QR === 'true')
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
     browser: ['Matrix', WPP_DEVICE, '1.0.0'],
     generateHighQualityLinkPreview: true,
@@ -137,7 +164,7 @@ async function boot() {
 
     if (qr) {
       _lastQrText = qr;
-      if (WPP_PRINT_QR !== 'true') {
+      if (!PRINT_QR) {
         console.log('[baileys] QR atualizado — use GET /wpp/qr para dataURL');
       }
     }
@@ -157,14 +184,14 @@ async function boot() {
         err?.output?.statusCode ||
         err?.status?.code ||
         err?.code ||
-        (String(err?.message || '').includes('logged out') ? baileys.DisconnectReason.loggedOut : 'unknown');
+        (String(err?.message || '').includes('logged out') ? DisconnectReason.loggedOut : 'unknown');
 
       await notifyDown({
         reason: `connection=close code=${code}`,
         meta: { lib: 'baileys', session: WPP_SESSION, msg: String(err?.message || err) }
       });
 
-      if (code !== baileys.DisconnectReason.loggedOut) {
+      if (code !== DisconnectReason.loggedOut) {
         console.warn('[baileys] Reconectando em 2s…');
         setTimeout(() => boot().catch(e => console.error('[baileys][reboot][err]', e)), 2000);
       } else {
