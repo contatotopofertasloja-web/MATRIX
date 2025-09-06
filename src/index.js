@@ -1,4 +1,4 @@
-﻿// src/index.js
+﻿// src/index.js — Matrix IA 2.0 (Cláudia) — LLM + Opening Photo + Coupon-after-payment
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -11,13 +11,16 @@ import { createOutbox } from './core/queue.js';
 import { BOT_ID } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
-import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';   // canário
+import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';
 
-// Carrega .env apenas em desenvolvimento (evita sobrescrever Variables na Railway)
+// 👇 NOVOS imports (LLM + prompts + settings)
+import { callLLM } from './core/llm.js';
+import { settings } from './core/settings.js';
+import { buildPrompt } from '../configs/bots/claudia/prompts/index.js';
+
+// Carrega .env em dev
 if (process.env.NODE_ENV !== 'production') {
-  try {
-    await import('dotenv/config');
-  } catch {}
+  try { await import('dotenv/config'); } catch {}
 }
 
 // 🔔 Heartbeat watcher + alertas
@@ -43,7 +46,7 @@ const envBool = (v, d = false) => {
   return s === '1' || s === 'true' || s === 'y' || s === 'yes' || s === 'on';
 };
 
-// --------- Flags mutáveis (auto-demote/leader controla) ---------
+// --------- Flags mutáveis ---------
 let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
 let sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
 
@@ -54,7 +57,7 @@ const OUTBOX_CONCURRENCY = Number(process.env.QUEUE_OUTBOX_CONCURRENCY || '4');
 const outbox = await createOutbox({
   topic: OUTBOX_TOPIC,
   concurrency: OUTBOX_CONCURRENCY,
-  redisUrl: process.env.REDIS_URL || '',
+  redisUrl: process.env.REDIS_URL || process.env.MATRIX_REDIS_URL || '',
 });
 
 // Consumer: envia via adapter (respeita sendEnabled)
@@ -77,10 +80,31 @@ await outbox.start(async (job) => {
   if (text) await adapter.sendMessage(to, text);
 });
 
-// --------- Flows ---------
+// --------- Flows (mantidos p/ canário) ---------
 const flows = await loadFlows(BOT_ID);
 
-// --------- Entrada WhatsApp (com CANÁRIO) ---------
+// --------- Controle de "foto de abertura" ---------
+const sentOpening = new Set(); // memória por processo (suficiente pro canário)
+
+// --------- Util: pós-pagamento → mensagens + cupom ---------
+async function handlePaymentConfirmed(jid) {
+  try {
+    // 1) mensagem padrão de pós-venda (sem cupom)
+    for (const line of settings.messages?.postsale_pre_coupon ?? []) {
+      await outbox.publish({ to: jid, kind: 'text', payload: { text: line } });
+    }
+    // 2) cupom apenas se habilitado para pós-pagamento
+    if (settings.product?.coupon_post_payment_only && settings.product?.coupon_code) {
+      const msgTpl = settings.messages?.postsale_after_payment_with_coupon?.[0] || '';
+      const msg = msgTpl.replace('{{coupon_code}}', settings.product.coupon_code);
+      if (msg) await outbox.publish({ to: jid, kind: 'text', payload: { text: msg } });
+    }
+  } catch (e) {
+    console.error('[payment][confirm][error]', e);
+  }
+}
+
+// --------- Entrada WhatsApp (LLM + canário + foto de abertura) ---------
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) {
     console.log('[intake] INTAKE_DISABLED — ignoring incoming', { from });
@@ -88,27 +112,53 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   }
 
   try {
+    // 0) Foto de abertura (apenas 1x por contato)
+    if (settings.flags?.send_opening_photo && !sentOpening.has(from) && settings.media?.opening_photo_url) {
+      await outbox.publish({
+        to: from,
+        kind: 'image',
+        payload: { url: settings.media.opening_photo_url, caption: '' },
+      });
+      sentOpening.add(from);
+    }
+
+    // 1) ECHO (debug)
     if (ECHO_MODE && text) {
       await outbox.publish({ to: from, kind: 'text', payload: { text: `Echo: ${text}` } });
       return '';
     }
-    if (!text && !hasMedia) return '';
 
+    // 2) Ignora vazios absolutos
+    const msgText = (text || '').trim();
+    if (!msgText && !hasMedia) return '';
+
+    // 3) Confirmação de pagamento por texto (manual)
+    if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
+      await handlePaymentConfirmed(from);
+      return '';
+    }
+
+    // 4) CANÁRIO (se existir flow canário, usa ele)
     const useCanary = isCanaryUser(from);
-    const intent = intentOf(text);
-    const handler =
-      (useCanary && flows[CANARY_FLOW_KEY]) ? flows[CANARY_FLOW_KEY]
-      : (flows[intent] || flows[intent?.toLowerCase?.()]);
-
-    if (typeof handler === 'function') {
-      const reply = await handler({ userId: from, text, context: { hasMedia, raw } });
+    if (useCanary && typeof flows[CANARY_FLOW_KEY] === 'function') {
+      const reply = await flows[CANARY_FLOW_KEY]({ userId: from, text: msgText, context: { hasMedia, raw } });
       if (typeof reply === 'string' && reply.trim()) {
         await outbox.publish({ to: from, kind: 'text', payload: { text: reply } });
       }
       return '';
     }
 
-    // fallback
+    // 5) Roteia intenção → prompt por etapa → LLM
+    const intent = intentOf(msgText) || 'greet';
+    const { system, user } = buildPrompt({ stage: intent, message: msgText });
+    const { text: reply } = await callLLM({ stage: intent, system, prompt: user });
+
+    if (reply && reply.trim()) {
+      await outbox.publish({ to: from, kind: 'text', payload: { text: reply } });
+      return '';
+    }
+
+    // 6) Fallback simpático
     await outbox.publish({
       to: from,
       kind: 'text',
@@ -153,7 +203,7 @@ app.get('/wpp/health', (_req, res) => {
     topic: OUTBOX_TOPIC,
     concurrency: OUTBOX_CONCURRENCY,
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled },
-    redis: { url: process.env.REDIS_URL ? 'set' : 'unset', connected: outbox.isConnected() },
+    redis: { url: (process.env.REDIS_URL || process.env.MATRIX_REDIS_URL) ? 'set' : 'unset', connected: outbox.isConnected() },
   });
 });
 
@@ -224,6 +274,21 @@ app.post('/wpp/send', sendLimiter, async (req, res) => {
   }
 });
 
+// ✅ Webhook simples p/ confirmação de pagamento (opcional)
+app.post('/webhook/payment', async (req, res) => {
+  try {
+    const { token, to, status } = req.body || {};
+    if (token !== process.env.WEBHOOK_TOKEN) return res.status(401).end();
+    if (String(status).toLowerCase() === 'paid' && to) {
+      await handlePaymentConfirmed(String(to));
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[webhook/payment][error]', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 // --------- Leader Election + Auto-demote ---------
 const LEADER_ELECTION_ENABLED = envBool(process.env.LEADER_ELECTION_ENABLED, false);
 const LEADER_LOCK_KEY = process.env.LEADER_LOCK_KEY || `matrix:leader:${process.env.WPP_SESSION || 'default'}`;
@@ -233,7 +298,7 @@ const LEADER_RENEW_MS = Math.max(30000, Math.floor(LEADER_LOCK_TTL_MS * 0.5));
 const LEADER_OPS_KEY = process.env.LEADER_OPS_KEY || `matrix:ops:${process.env.WPP_SESSION || 'default'}`;
 const OP_SYNC_MS = Number(process.env.OP_SYNC_MS || 15000);
 
-const redisUrl = process.env.REDIS_URL || '';
+const redisUrl = process.env.REDIS_URL || process.env.MATRIX_REDIS_URL || '';
 const leaderRedis = redisUrl ? new Redis(redisUrl, { lazyConnect: false }) : null;
 
 async function publishOps() {
@@ -329,7 +394,7 @@ async function leaderLoop() {
 // --------- Boot + Watchers ---------
 app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix on http://${HOST}:${PORT}`);
-  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | GET /qr | GET /ops/status | POST /wpp/send`);
+  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | GET /qr | GET /ops/status | POST /wpp/send | POST /webhook/payment`);
   console.log(`[Leader] mode: ${LEADER_ELECTION_ENABLED ? 'ENABLED' : 'DISABLED'} key=${LEADER_LOCK_KEY} ttl=${LEADER_LOCK_TTL_MS}ms`);
 
   startHeartbeatWatcher(async ({ age, windowMs }) => {
@@ -348,6 +413,6 @@ app.listen(PORT, HOST, () => {
   if (LEADER_ELECTION_ENABLED && leaderRedis) {
     leaderLoop().catch((e) => console.error('[leader][fatal]', e));
   } else {
-    console.warn('[leader] election disabled or REDIS_URL missing — using static flags');
+    console.warn('[leader] election disabled or REDIS_URL/MATRIX_REDIS_URL missing — using static flags');
   }
 });
