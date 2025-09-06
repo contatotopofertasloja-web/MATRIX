@@ -1,127 +1,123 @@
-// src/core/settings.js
-// Leitura centralizada das configurações do BOT (ENV + YAML por bot).
-// - Suporta ausência do YAML (usa defaults).
-// - Normaliza chaves de estágio (sem acento, minúsculas).
-// - Mantém compatibilidade com variáveis de ambiente existentes.
-
+// src/core/settings.js — loader com fallback YAML e override por ENV
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-const ROOT       = path.resolve(__dirname, '..', '..'); // -> raiz do projeto (onde está /configs)
+const ROOT = process.cwd();
+export const BOT_ID = process.env.BOT_ID || 'claudia';
 
-function env(name, def) {
-  const v = process.env[name];
-  return v === undefined || v === null || v === '' ? def : v;
+function readYamlSafe(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return {};
+    const txt = fs.readFileSync(filePath, 'utf8');
+    return YAML.parse(txt) || {};
+  } catch (e) {
+    console.error('[settings] erro lendo', filePath, e?.message || e);
+    return {};
+  }
 }
 
-// -------------------- BOT / CAMINHOS --------------------
-export const BOT_ID = env('BOT_ID', 'claudia');
-const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
+// ————————— Base: settings.yaml
+const basePath = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
+let fileSettings = readYamlSafe(basePath);
 
-// -------------------- NORMALIZAÇÃO -----------------------
-const STAGE_KEY_ALIASES = new Map([
-  ['recepção', 'recepcao'],
-  ['recepcao', 'recepcao'],
-  ['qualificação', 'qualificacao'],
-  ['qualificacao', 'qualificacao'],
-  ['oferta', 'oferta'],
-  ['objeções', 'objecoes'],
-  ['objeções', 'objecoes'],
-  ['objecoes', 'objecoes'],
-  ['obstrucoes', 'objecoes'],
-  ['fechamento', 'fechamento'],
-  ['pós-venda', 'posvenda'],
-  ['posvenda', 'posvenda'],
-  ['postsale', 'posvenda'],
-]);
-
-function normalizeStageKey(k) {
-  if (!k) return k;
-  const base = String(k).trim().toLowerCase();
-  return STAGE_KEY_ALIASES.get(base) || base;
+// ————————— Normalização de nomes de modelo
+function normalizeModelName(name) {
+  if (!name) return '';
+  const s = String(name).trim().toLowerCase();
+  // aceita várias grafias
+  if (/nano/.test(s)) return 'gpt-5-nano';
+  if (/mini/.test(s)) return 'gpt-5-mini';
+  if (/full|pro|max|gpt-5$/.test(s)) return 'gpt-5-full';
+  // fallback (não quebra)
+  return s;
 }
 
-function normalizeModelsByStage(map) {
+// ————————— Map de ENVs → stages
+const envModelMap = {
+  LLM_MODEL_RECEPCAO:  'greet',
+  LLM_MODEL_QUALIFICACAO: 'qualify',
+  LLM_MODEL_OFERTA:    'offer',
+  LLM_MODEL_OBJECOES:  'objection',
+  LLM_MODEL_FECHAMENTO:'close',
+  LLM_MODEL_POSVENDA:  'post_sale',
+  // extras (caso queira no futuro)
+  LLM_MODEL_ENTREGA:   'delivery',
+  LLM_MODEL_PAGAMENTO: 'payment',
+  LLM_MODEL_RECURSOS:  'features',
+};
+
+// ————————— Overrides de produto por ENV (opcionais)
+function buildEnvProductOverrides() {
+  const p = {};
+  if (process.env.CHECKOUT_LINK) p.checkout_link = process.env.CHECKOUT_LINK;
+  if (process.env.PRICE_TARGET)  p.price_target  = Number(process.env.PRICE_TARGET);
+  if (process.env.COUPON_CODE !== undefined) {
+    p.coupon_code = process.env.COUPON_CODE; // pode ser string vazia
+  }
+  // mantém regra “cupom só após pagamento” — se já estiver no YAML, não mexe
+  return Object.keys(p).length ? { product: p } : {};
+}
+
+// ————————— Overrides de modelos por ENV (opcionais)
+function buildEnvModelsOverrides() {
   const out = {};
-  if (map && typeof map === 'object') {
-    for (const [k, v] of Object.entries(map)) {
-      out[normalizeStageKey(k)] = String(v || '').trim();
+  for (const [envKey, stage] of Object.entries(envModelMap)) {
+    const val = process.env[envKey];
+    if (!val) continue;
+    out[stage] = normalizeModelName(val);
+  }
+  return Object.keys(out).length ? { models_by_stage: out } : {};
+}
+
+// ————————— Deep merge raso (suficiente aqui)
+function deepMerge(a = {}, b = {}) {
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b || {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = deepMerge(a?.[k] || {}, v);
+    } else {
+      out[k] = v;
     }
   }
   return out;
 }
 
-// -------------------- DEFAULTS (ENV) --------------------
-const GLOBAL_MODELS = {
-  recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
-  qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
-  oferta:       env('LLM_MODEL_OFERTA',       'gpt-5-mini'),
-  objecoes:     env('LLM_MODEL_OBJECOES',     'gpt-5'),
-  fechamento:   env('LLM_MODEL_FECHAMENTO',   'gpt-5-mini'),
-  posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
-};
+// ————————— Aplica overrides (ENV > YAML)
+const envProduct = buildEnvProductOverrides();
+const envModels  = buildEnvModelsOverrides();
+const merged = deepMerge(fileSettings, deepMerge(envProduct, envModels));
 
-const FLAGS = {
-  useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
-  fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
-};
-
-const AUDIO = {
-  asrProvider: env('ASR_PROVIDER', 'openai'), // whisper
-  asrModel:    env('ASR_MODEL',    'whisper-1'),
-  ttsProvider: env('TTS_PROVIDER', 'none'),
-  ttsVoice:    env('TTS_VOICE',    'alloy'),
-};
-
-const LLM_DEFAULTS = {
-  provider:    env('LLM_PROVIDER', 'openai'),
-  temperature: Number(env('LLM_TEMPERATURE', '0.5')),
-  timeouts: { defaultMs: Number(env('LLM_TIMEOUT_MS', '25000')) },
-  maxTokens: {
-    nano: Number(env('LLM_MAX_TOKENS_NANO', '512')),
-    mini: Number(env('LLM_MAX_TOKENS_MINI', '1024')),
-    full: Number(env('LLM_MAX_TOKENS_FULL', '2048')),
-  },
-  retries: Number(env('LLM_RETRIES', '2')),
-};
-
-// -------------------- DEFAULT DO ARQUIVO ----------------
-let fileSettings = {
-  bot_id: BOT_ID,
-  persona_name: 'Cláudia',
-  product: { price_original: 197, price_target: 170, checkout_link: '', coupon_code: '' },
-  models_by_stage: {},
-  flags: { has_cod: true, send_opening_photo: true },
-};
-
-// -------------------- CARREGA YAML ----------------------
-try {
-  if (fs.existsSync(BOT_SETTINGS_PATH)) {
-    const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
-    const parsed = YAML.parse(text) || {};
-    // normaliza modelos por estágio
-    if (parsed.models_by_stage) {
-      parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
-    }
-    fileSettings = { ...fileSettings, ...parsed };
-    console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
-  } else {
-    console.warn(`[SETTINGS] Arquivo não encontrado: ${BOT_SETTINGS_PATH}`);
-  }
-} catch (e) {
-  console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
+// ————————— Defaults úteis (caso falte algo no YAML)
+if (!merged.product) merged.product = {};
+if (merged.product.price_target == null) merged.product.price_target = 170;
+if (!merged.product.checkout_link && process.env.CHECKOUT_LINK) {
+  merged.product.checkout_link = process.env.CHECKOUT_LINK;
+}
+if (!merged.models_by_stage) {
+  merged.models_by_stage = {
+    greet: 'gpt-5-nano',
+    qualify: 'gpt-5-nano',
+    offer: 'gpt-5-mini',
+    objection: 'gpt-5-full',
+    close: 'gpt-5-mini',
+    post_sale: 'gpt-5-nano',
+    delivery: 'gpt-5-nano',
+    payment: 'gpt-5-nano',
+    features: 'gpt-5-nano',
+  };
 }
 
-// -------------------- EXPORTA UNIFICADO -----------------
-export const settings = {
-  botId: BOT_ID,
-  ...fileSettings,
-  llm: LLM_DEFAULTS,
-  flags: { ...fileSettings.flags, ...FLAGS },
-  audio: AUDIO,
-  global_models: GLOBAL_MODELS,
+// ————————— Export final
+export const settings = merged;
+
+// logzinho amigável (curto)
+const logProbe = {
+  price_target: settings.product?.price_target,
+  checkout_link: settings.product?.checkout_link ? 'set' : 'unset',
+  coupon_code: settings.product?.coupon_code ? 'set' : 'unset',
+  greet_model: settings.models_by_stage?.greet,
+  offer_model: settings.models_by_stage?.offer,
+  objection_model: settings.models_by_stage?.objection,
 };
+console.log('[settings] loaded', logProbe);

@@ -157,14 +157,14 @@ async function boot() {
         err?.output?.statusCode ||
         err?.status?.code ||
         err?.code ||
-        (String(err?.message || '').includes('logged out') ? DisconnectReason.loggedOut : 'unknown');
+        (String(err?.message || '').includes('logged out') ? baileys.DisconnectReason.loggedOut : 'unknown');
 
       await notifyDown({
         reason: `connection=close code=${code}`,
         meta: { lib: 'baileys', session: WPP_SESSION, msg: String(err?.message || err) }
       });
 
-      if (code !== DisconnectReason.loggedOut) {
+      if (code !== baileys.DisconnectReason.loggedOut) {
         console.warn('[baileys] Reconectando em 2s…');
         setTimeout(() => boot().catch(e => console.error('[baileys][reboot][err]', e)), 2000);
       } else {

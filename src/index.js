@@ -13,7 +13,7 @@ import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';
 
-// 👇 NOVOS imports (LLM + prompts + settings)
+// 👇 LLM + prompts + settings
 import { callLLM } from './core/llm.js';
 import { settings } from './core/settings.js';
 import { buildPrompt } from '../configs/bots/claudia/prompts/index.js';
@@ -237,11 +237,8 @@ app.get('/wpp/qr', async (req, res) => {
   }
 });
 
-// Alias simples
-app.get('/qr', async (req, res) => {
-  req.query.view = req.query.view || 'img';
-  return app._router.handle(req, res, () => {});
-});
+// Alias simples → redireciona para a view em HTML do QR
+app.get('/qr', (_req, res) => res.redirect(302, '/wpp/qr?view=img'));
 
 let isLeader = false;
 app.get('/ops/status', (_req, res) => {

@@ -8,27 +8,52 @@ product:
   price_original: 197
   price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  site_url: "https://tpofertas.com/collections/cod-todos"
+
+  # Cupom só depois do pagamento confirmado (próxima compra)
   coupon_code: "TOP-AGO2025-PROGRVG-150"
-  has_cod: true
+  coupon_post_payment_only: true
+
+  # SLA de entrega (Logzz)
+  delivery_sla:
+    capitals_hours: 24   # capitais até 24h
+    others_hours: 72     # demais localidades até 72h
+
+  # Modo de uso (features)
+  how_to_use: >
+    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
+    Opcional para maior durabilidade: finalize com chapinha.
+
+  # Upsell possível (chapinha)
+  upsell_flatiron:
+    enabled: true
+    pitch: "Se quiser, te indico uma chapinha com ótimo custo-benefício para potencializar o efeito."
+
+# Mídia de abertura (imagem enviada antes da 1ª fala)
+media:
+  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 flags:
   has_cod: true
-  send_opening_photo: true        # envia foto de abertura (se existir no flow)
-  guardrails_strict: true         # regras rígidas (não inventar preço/link)
-  use_telemetry: true             # envia eventos para Postgres (CoNexus)
-  use_thompson: true              # Thompson/AB para oferta
-  allow_audio_in: true            # cliente pode enviar áudio
-  allow_audio_out: false          # TTS depois
-  small_talk_soften: true         # tom leve e vendedor
+  send_opening_photo: true         # envia a imagem de abertura
+  guardrails_strict: true          # regras rígidas (não inventar preço/link)
+  use_telemetry: true              # envia eventos para Postgres (CoNexus)
+  use_thompson: true               # habilita experimentos de oferta
+  allow_audio_in: true             # cliente pode enviar áudio
+  allow_audio_out: false           # (TTS futuro)
+  small_talk_soften: true          # tom leve e vendedor
 
-# Modelos por etapa — padronizados (minúsculos, sem acentos) para casar com o código
+# Modelos por etapa — nomes exatamente como usados pelo código/prompts
 models_by_stage:
-  recepcao:     "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5-mini"
-  objecoes:     "gpt-5-full"
-  fechamento:   "gpt-5-mini"
-  posvenda:     "gpt-5-nano"
+  greet:        "gpt-5-nano"
+  qualify:      "gpt-5-nano"
+  offer:        "gpt-5-mini"
+  objection:    "gpt-5-full"
+  close:        "gpt-5-mini"
+  post_sale:    "gpt-5-nano"
+  delivery:     "gpt-5-nano"
+  payment:      "gpt-5-nano"
+  features:     "gpt-5-nano"
 
 typing:
   ms_per_char: 35
@@ -38,19 +63,31 @@ typing:
 messages:
   opening:
     - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
+
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
+
+  # Oferta NÃO menciona cupom (cupom vai só pós-pagamento)
   offer_templates:
     - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
-    - "Tenho cupom {{coupon_code}} que reduz para R${{price_target}}. Quer aproveitar?"
+    - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
+
   objection_handles:
     - "Te entendo! É sem formol, com registro e garantia. Posso te mostrar resultados reais e o modo de uso?"
-    - "Se não amar o resultado, a gente orienta até acertar. Quer ver o passo a passo simples?"
+    - "Se não amar o resultado, eu te acompanho no passo a passo até acertar. Quer ver como aplicar?"
+
+  # Fechamento sem cupom; reforça COD + agendamento/acompanhamento via WhatsApp
   closing:
-    - "Perfeito! Te mando o link do checkout agora? Assim já garante o valor com o cupom 😉"
-  postsale:
-    - "Qualquer dúvida no uso me chama aqui, combinado? Posso te mandar uma rotina de manutenção ✨"
+    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para agendar e acompanhar; se houver imprevisto, avise o entregador 💚"
+
+  # Blocos usados pelo handler pós-pagamento (texto “paguei/comprovante” ou webhook)
+  postsale_pre_coupon:
+    - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega. Qualquer imprevisto, avise o entregador, tá bem? 💚"
+    - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
+
+  postsale_after_payment_with_coupon:
+    - "Como agradecimento, aqui vai um cupom de desconto para a PRÓXIMA compra: {{coupon_code}} 🎁"
 
 guardrails:
   price_min: 149
@@ -58,6 +95,7 @@ guardrails:
   allow_links_only_from_list: true
   allowed_links:
     - "{{checkout_link}}"
+    - "{{site_url}}"
   freeze_fields:
     - "price_target"
     - "checkout_link"

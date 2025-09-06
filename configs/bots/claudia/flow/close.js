@@ -15,18 +15,18 @@ export async function closeDeal({ userId, text }) {
   const checkout = onlyAllowedLink(settings?.product?.checkout_link || '');
   const price = settings?.product?.price_target ?? 170;
   const closingLines = settings?.messages?.closing || [
-    'Perfeito! Te mando o link do checkout agora? Assim já garante o valor com o cupom 😉'
+    'Perfeito! Te envio o link do checkout e seguimos por aqui 😉'
   ];
 
   const base = checkout
-    ? `Aqui está seu link seguro: ${checkout}\nValor: R$${price}. Qualquer dúvida fico aqui 💖`
-    : closingLines[0];
+    ? `Aqui está seu link seguro: ${checkout}\nValor: R$${price}. Pagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendamento e acompanhamento; se houver qualquer imprevisto, avise o entregador 💖`
+    : `${closingLines[0]}\nPagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendamento e acompanhamento; se houver qualquer imprevisto, avise o entregador 💖`;
 
   const { text: llm } = await callLLM({
     stage: 'fechamento',
     system: `Você é ${settings?.persona_name || 'Cláudia'}.
-Fechamento objetivo, 1-2 linhas, com CTA claro. Se houver link permitido, inclua; caso contrário, peça autorização.`,
-    prompt: `Cliente: ${text || '(sem texto)'}\nResponda fechando a compra.`,
+Fechamento objetivo (1-2 linhas), CTA e, se houver link permitido, inclua. Reforce COD e o aviso de agendamento/acompanhamento por WhatsApp.`,
+    prompt: `Cliente: ${text || '(sem texto)'}\nResponda fechando a compra (NÃO mencione cupom).`,
   });
 
   const out = (llm || base);
