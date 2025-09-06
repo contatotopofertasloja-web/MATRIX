@@ -54,6 +54,32 @@ const envNum = (v, d) => {
 let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
 let sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
 
+// --------- Redis (prioriza MATRIX_REDIS_URL) ---------
+const REDIS_MAIN_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
+const useTLS = REDIS_MAIN_URL.startsWith('rediss://');
+
+const redisOpts = {
+  lazyConnect: false,
+  enableReadyCheck: true,
+  connectTimeout: 8000,
+  keepAlive: 15000,
+  maxRetriesPerRequest: null,
+  autoResubscribe: true,
+  autoResendUnfulfilledCommands: true,
+  retryStrategy: (times) => Math.min(30000, 1000 + times * 500), // backoff 1s→30s
+  reconnectOnError: (err) => {
+    const code = err?.code || '';
+    const msg  = String(err?.message || '');
+    return (
+      code === 'ECONNRESET' ||
+      code === 'EPIPE' ||
+      code === 'ETIMEDOUT' ||
+      msg.includes('READONLY')
+    );
+  },
+  tls: useTLS ? { rejectUnauthorized: false } : undefined, // proxy com cert self-signed
+};
+
 // --------- Fila Outbox ---------
 const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || 'default'}`;
 const OUTBOX_CONCURRENCY = envNum(process.env.QUEUE_OUTBOX_CONCURRENCY, 4);
@@ -61,7 +87,8 @@ const OUTBOX_CONCURRENCY = envNum(process.env.QUEUE_OUTBOX_CONCURRENCY, 4);
 const outbox = await createOutbox({
   topic: OUTBOX_TOPIC,
   concurrency: OUTBOX_CONCURRENCY,
-  redisUrl: process.env.REDIS_URL || process.env.MATRIX_REDIS_URL || '',
+  // usa o mesmo endpoint padrão
+  redisUrl: REDIS_MAIN_URL,
 });
 
 // Consumer: envia via adapter (respeita sendEnabled)
@@ -207,7 +234,7 @@ app.get('/wpp/health', (_req, res) => {
     topic: OUTBOX_TOPIC,
     concurrency: OUTBOX_CONCURRENCY,
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled },
-    redis: { url: (process.env.REDIS_URL || process.env.MATRIX_REDIS_URL) ? 'set' : 'unset', connected: outbox.isConnected() },
+    redis: { url: REDIS_MAIN_URL ? 'set' : 'unset', connected: outbox.isConnected() },
   });
 });
 
@@ -299,8 +326,15 @@ const LEADER_RENEW_MS = Math.max(30000, Math.floor(LEADER_LOCK_TTL_MS * 0.5));
 const LEADER_OPS_KEY = process.env.LEADER_OPS_KEY || `matrix:ops:${process.env.WPP_SESSION || 'default'}`;
 const OP_SYNC_MS = envNum(process.env.OP_SYNC_MS, 15000);
 
-const redisUrl = process.env.REDIS_URL || process.env.MATRIX_REDIS_URL || '';
-const leaderRedis = redisUrl ? new Redis(redisUrl, { lazyConnect: false }) : null;
+const leaderRedis = REDIS_MAIN_URL ? new Redis(REDIS_MAIN_URL, redisOpts) : null;
+
+// listeners (evita "Unhandled error event")
+if (leaderRedis) {
+  leaderRedis.on('connect', () => console.log('[redis][leader] connected'));
+  leaderRedis.on('ready',   () => console.log('[redis][leader] ready'));
+  leaderRedis.on('end',     () => console.warn('[redis][leader] connection ended'));
+  leaderRedis.on('error',   (e) => console.warn('[redis][leader] error:', e?.code || e?.message || e));
+}
 
 async function publishOps() {
   if (!leaderRedis) return;
