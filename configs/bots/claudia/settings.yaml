@@ -1,4 +1,5 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml
+bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -9,7 +10,7 @@ product:
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
 
-  # Cupom só depois do pagamento confirmado (próxima compra)
+  # Cupom só após pagamento confirmado (próxima compra)
   coupon_code: "TOP-AGO2025-PROGRVG-150"
   coupon_post_payment_only: true
 
@@ -34,40 +35,40 @@ media:
 
 flags:
   has_cod: true
-  send_opening_photo: true         # envia a imagem de abertura
-  guardrails_strict: true          # regras rígidas (não inventar preço/link)
-  use_telemetry: true              # envia eventos para Postgres (CoNexus)
-  use_thompson: true               # habilita experimentos de oferta
-  allow_audio_in: true             # cliente pode enviar áudio
-  allow_audio_out: false           # (TTS futuro)
-  small_talk_soften: true          # tom leve e vendedor
+  send_opening_photo: true          # envia a imagem de abertura
+  guardrails_strict: true           # regras rígidas (não inventar preço/link)
+  use_telemetry: true               # envia eventos para Postgres (CoNexus)
+  use_thompson: true                # habilita experimentos de oferta
+  allow_audio_in: true              # cliente pode enviar áudio
+  allow_audio_out: false            # (TTS futuro)
+  small_talk_soften: true           # tom leve e vendedor
 
-  # >>> compatibilidade com o core/llm.js
-  useModelsByStage: true           # prioriza models_by_stage
-  fallbackToGlobal: true           # se faltar, usa globais
+  # Compat com core/llm.js
+  useModelsByStage: true
+  fallbackToGlobal: true
 
 # Prova social / marketing
 marketing:
-  sold_count: 40000                # usado nas mensagens de objeção (prova social)
+  sold_count: 40000                 # usado nas mensagens de objeção (prova social)
 
-# Modelos por etapa — chaves canônicas usadas pelos flows/LLM (pt-BR)
+# Modelos por etapa — use chaves CANÔNICAS
 models_by_stage:
-  recepcao:     "GPT-5-nano"   # greet
-  qualificacao: "GPT-5-nano"   # qualify
-  oferta:       "GPT-5-mini"   # offer
-  objeções:     "GPT-5-full"   # objection
-  fechamento:   "GPT-5-mini"   # close
-  posvenda:     "GPT-5-nano"   # post_sale
-  entrega:      "GPT-5-nano"   # delivery
-  pagamento:    "GPT-5-nano"   # payment
-  features:     "GPT-5-nano"
+  recepcao:     "GPT-5-nano"  # greet
+  qualificacao: "GPT-5-nano"  # qualify
+  oferta:       "GPT-5-mini"  # offer
+  objecoes:     "GPT-5-full"  # objection  (normalizado)
+  fechamento:   "GPT-5-mini"  # close
+  posvenda:     "GPT-5-nano"  # post_sale
+  entrega:      "GPT-5-nano"  # delivery (opcional)
+  pagamento:    "GPT-5-nano"  # payment (opcional)
+  features:     "GPT-5-nano"  # como-usar (opcional)
 
-# (opcional) modelos globais por etapa — usados como fallback
+# Fallbacks globais por etapa
 global_models:
   recepcao:     "GPT-5-nano"
   qualificacao: "GPT-5-nano"
   oferta:       "GPT-5-mini"
-  objeções:     "GPT-5-full"
+  objecoes:     "GPT-5-full"
   fechamento:   "GPT-5-mini"
   posvenda:     "GPT-5-nano"
 
@@ -77,9 +78,11 @@ typing:
   max_ms: 5000
 
 messages:
+  # Saudação inicial (texto aparece junto/abaixo da foto, se habilitada)
   opening:
     - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
 
+  # Perguntas curtas de diagnóstico (o LLM escolhe só 1)
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
@@ -107,6 +110,19 @@ messages:
   postsale_after_payment_with_coupon:
     - "Como agradecimento, aqui vai um cupom de desconto para a PRÓXIMA compra: {{coupon_code}} 🎁"
 
+  # Quantos dias depois do pagamento a Cláudia retorna no pós-venda
+  postsale_followup_days: 7
+
+  # (opcionais) mensagens auxiliares para features/delivery/payment
+  features_intro:
+    - "Claro! Te passo o modo de uso resumido:"
+
+  delivery_info:
+    - "Nosso prazo é de até {{delivery_sla.capitals_hours}}h para capitais e até {{delivery_sla.others_hours}}h para demais regiões."
+
+  payment_info:
+    - "Pagamento na entrega (COD). O link que eu envio é apenas para confirmar o pedido e acompanhar pelo WhatsApp 🙂"
+
 guardrails:
   price_min: 149
   price_max: 249
@@ -114,15 +130,17 @@ guardrails:
   allowed_links:
     - "{{checkout_link}}"
     - "{{site_url}}"
+
+  # Campos que NÃO devem ser alterados por operadores
   freeze_fields:
     - "price_target"
     - "checkout_link"
     - "coupon_code"
-    - "sold_count"    # (opcional) congela a prova social
+    - "sold_count"
 
 telemetry:
   enabled: true
-  db: "postgres"               # CoNexus
+  db: "postgres"              # CoNexus
   tables:
     events: "telemetry_events"
     sessions: "telemetry_sessions"
