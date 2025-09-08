@@ -1,8 +1,7 @@
 ﻿// configs/bots/claudia/prompts/index.js
 // Builder de prompt por etapa (greet, qualify, offer, close, postsale)
-// — ajustado para recomendar APENAS 1 produto.
+// — recomenda APENAS 1 produto.
 
-// Base (tom/guardrails) + catálogo (ranking de 1 produto)
 import { buildBaseContext } from '../../../src/core/prompts/base.js';
 import { pickOneProduct, formatRecommendation } from '../../../src/core/prompts/product.js';
 
@@ -38,29 +37,32 @@ function stageHeader(stage) {
   }
 }
 
-/**
- * Monta o prompt para o LLM, por etapa.
- * Compatível com o uso no src/index.js:
- *   const { system, user } = buildPrompt({ stage, message })
- */
+/** Monta o prompt para o LLM por etapa. */
 export function buildPrompt({ stage = 'greet', message = '', settings = {}, extra = {} } = {}) {
   const { system, ctx } = buildBaseContext({ userMessage: message, stage, settings, extra });
 
-  // Heurística leve para a etapa "offer": tenta pré-computar 1 produto.
-  let preface = stageHeader(stage);
-  if (stage === 'offer') {
-    const hairType = detectHairType(message);
-    const concerns = detectConcerns(message);
-    const picked = pickOneProduct({ hairType, concerns });
-    if (picked) {
-      const rec = formatRecommendation(picked); // "Nome — motivo (uso: ...)"
-      preface += `\nSugestão interna (não citar que é heurística): ${rec}`;
-    }
-    preface += `\nInstrução: recomende apenas 1 produto e explique o porquê em UMA frase.`;
+  const hairType = detectHairType(message);
+  const concerns = detectConcerns(message);
+  const product = pickOneProduct({ hairType, concerns });
+
+  let user = message?.toString()?.trim() || '';
+  let recommendation = '';
+
+  if (stage === 'offer' && product) {
+    recommendation = formatRecommendation(product); // "Nome — motivo (uso: ...)"
   }
 
-  const user = `${preface}\n\nUsuário: ${message}`.trim();
-  return { system, user, ctx };
+  return {
+    system: `${system}\n\n${stageHeader(stage)}`,
+    user: user || 'Início de conversa.',
+    ctx: {
+      ...ctx,
+      hairType,
+      concerns,
+      product,
+      recommendation,
+    },
+  };
 }
 
 export default { buildPrompt };
