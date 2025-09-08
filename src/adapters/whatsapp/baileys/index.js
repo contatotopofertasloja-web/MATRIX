@@ -2,20 +2,15 @@
 // Adapter Baileys: QR estável, reconexão e compat com createBaileysClient.
 // Sem dependências opcionais (pino/notifier/heartbeat) para evitar module not found.
 
-import makeWASocket, {
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  DisconnectReason
-} from '@whiskeysockets/baileys';
-import * as qrcode from 'qrcode';
 // --------- IMPORT ROBUSTO DO BAILEYS (compat ESM/CJS e versões) ----------
 import * as Baileys from '@whiskeysockets/baileys';
+import * as qrcode from 'qrcode';
 
 // escolhe a função correta independente da forma de export da lib
 const makeWASocket =
-  Baileys.default                     // ESM default
-  || Baileys.makeWASocket             // named export (algumas builds)
-  || Baileys.makeWALegacySocket       // fallback raro
+  Baileys.default               // ESM default
+  || Baileys.makeWASocket       // Named export (algumas builds)
+  || Baileys.makeWALegacySocket // Fallback raro
   || null;
 
 if (typeof makeWASocket !== 'function') {
@@ -25,10 +20,8 @@ if (typeof makeWASocket !== 'function') {
 const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  DisconnectReason
+  DisconnectReason,
 } = Baileys;
-
-// (resto do arquivo continua igual daqui pra baixo)
 
 // ------------------------- ENV HELPERS -------------------------
 const bool = (v, d = false) => {
@@ -246,5 +239,12 @@ async function boot() {
 // ---------- Compatibilidade com código legado ----------
 export async function createBaileysClient() {
   await init();
-  return { onMessage: adapter.onMessage, sendMessage: adapter.sendMessage, sendImage: adapter.sendImage, stop, isReady, getQrDataURL };
+  return {
+    onMessage: adapter.onMessage,
+    sendMessage: adapter.sendMessage,
+    sendImage: adapter.sendImage,
+    stop,
+    isReady,
+    getQrDataURL,
+  };
 }
