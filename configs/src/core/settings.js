@@ -1,8 +1,7 @@
-﻿// src/core/settings.js
+﻿// configs/src/core/settings.js
 // Leitura centralizada das configs do BOT (ENV + YAML por bot).
-// - Corrigido: export default settings incluído.
-// - UTF-8 friendly.
-// - Normaliza chaves dos estágios.
+// Corrigido: export default settings incluído.
+// Normaliza chaves dos estágios.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +10,7 @@ import YAML from 'yaml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const ROOT       = path.resolve(__dirname, '..', '..'); // raiz do projeto
+const ROOT       = path.resolve(__dirname, '..', '..', '..'); // raiz do projeto (sobe de configs/src/core)
 
 function env(name, def) {
   const v = process.env[name];
@@ -120,5 +119,5 @@ export const settings = {
   global_models: GLOBAL_MODELS,
 };
 
-// 🔑 Corrigido: agora tem default export
-export default settings;
+// ✅ Default export incluído
+expor
