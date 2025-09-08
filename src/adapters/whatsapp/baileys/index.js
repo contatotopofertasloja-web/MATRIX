@@ -8,6 +8,27 @@ import makeWASocket, {
   DisconnectReason
 } from '@whiskeysockets/baileys';
 import * as qrcode from 'qrcode';
+// --------- IMPORT ROBUSTO DO BAILEYS (compat ESM/CJS e versões) ----------
+import * as Baileys from '@whiskeysockets/baileys';
+
+// escolhe a função correta independente da forma de export da lib
+const makeWASocket =
+  Baileys.default                     // ESM default
+  || Baileys.makeWASocket             // named export (algumas builds)
+  || Baileys.makeWALegacySocket       // fallback raro
+  || null;
+
+if (typeof makeWASocket !== 'function') {
+  throw new TypeError('[baileys] makeWASocket indisponível — verifique a versão de @whiskeysockets/baileys instalada');
+}
+
+const {
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  DisconnectReason
+} = Baileys;
+
+// (resto do arquivo continua igual daqui pra baixo)
 
 // ------------------------- ENV HELPERS -------------------------
 const bool = (v, d = false) => {
