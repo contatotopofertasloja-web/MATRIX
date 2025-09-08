@@ -1,7 +1,4 @@
 ﻿// configs/bots/claudia/prompts/index.js
-// Builder de prompt por etapa (greet, qualify, offer, close, postsale)
-// — recomenda APENAS 1 produto.
-
 import { buildBaseContext } from '../../../src/core/prompts/base.js';
 import { pickOneProduct, formatRecommendation } from '../../../src/core/prompts/product.js';
 
@@ -37,7 +34,6 @@ function stageHeader(stage) {
   }
 }
 
-/** Monta o prompt para o LLM por etapa. */
 export function buildPrompt({ stage = 'greet', message = '', settings = {}, extra = {} } = {}) {
   const { system, ctx } = buildBaseContext({ userMessage: message, stage, settings, extra });
 
@@ -45,23 +41,13 @@ export function buildPrompt({ stage = 'greet', message = '', settings = {}, extr
   const concerns = detectConcerns(message);
   const product = pickOneProduct({ hairType, concerns });
 
-  let user = message?.toString()?.trim() || '';
-  let recommendation = '';
-
-  if (stage === 'offer' && product) {
-    recommendation = formatRecommendation(product); // "Nome — motivo (uso: ...)"
-  }
+  const user = message?.toString()?.trim() || '';
+  const recommendation = stage === 'offer' && product ? formatRecommendation(product) : '';
 
   return {
     system: `${system}\n\n${stageHeader(stage)}`,
     user: user || 'Início de conversa.',
-    ctx: {
-      ...ctx,
-      hairType,
-      concerns,
-      product,
-      recommendation,
-    },
+    ctx: { ...ctx, hairType, concerns, product, recommendation },
   };
 }
 
