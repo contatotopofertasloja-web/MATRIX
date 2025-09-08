@@ -1,27 +1,55 @@
 ﻿// src/adapters/whatsapp/baileys/index.js
-// Adapter Baileys: QR estável, reconexão e compat com createBaileysClient.
-// Sem dependências opcionais (pino/notifier/heartbeat) para evitar module not found.
+// ---------------------------------------------------------------------------
+// Adapter Baileys robusto (ESM/CJS e pacotes @whiskeysockets / @adiwajshing)
+// ---------------------------------------------------------------------------
 
-// --------- IMPORT ROBUSTO DO BAILEYS (compat ESM/CJS e versões) ----------
-import * as Baileys from '@whiskeysockets/baileys';
 import * as qrcode from 'qrcode';
 
-// escolhe a função correta independente da forma de export da lib
-const makeWASocket =
-  Baileys.default               // ESM default
-  || Baileys.makeWASocket       // Named export (algumas builds)
-  || Baileys.makeWALegacySocket // Fallback raro
-  || null;
-
-if (typeof makeWASocket !== 'function') {
-  throw new TypeError('[baileys] makeWASocket indisponível — verifique a versão de @whiskeysockets/baileys instalada');
+// 🔑 carrega dinamicamente o Baileys do pacote novo; se falhar, tenta o antigo
+let B = null;
+try {
+  B = await import('@whiskeysockets/baileys');
+} catch {
+  try {
+    B = await import('@adiwajshing/baileys');
+  } catch {
+    B = null;
+  }
 }
 
-const {
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  DisconnectReason,
-} = Baileys;
+function pick(fnName) {
+  // tenta pegar tanto de B quanto de B.default (CJS ↔ ESM)
+  return (
+    B?.[fnName] ||
+    B?.default?.[fnName] ||
+    null
+  );
+}
+function pickMakeWASocket() {
+  // algumas builds expõem como default, outras como named export
+  return (
+    pick('makeWASocket') ||
+    (typeof B?.default === 'function' ? B.default : null) ||
+    (typeof B === 'function' ? B : null)
+  );
+}
+
+const makeWASocket = pickMakeWASocket();
+const useMultiFileAuthState = pick('useMultiFileAuthState');
+const fetchLatestBaileysVersion = pick('fetchLatestBaileysVersion');
+const DisconnectReason = pick('DisconnectReason');
+
+// validações claras (ajudam a diagnosticar se o pacote está ausente desinstalado)
+if (typeof makeWASocket !== 'function') {
+  throw new TypeError(
+    '[baileys] makeWASocket indisponível — verifique se @whiskeysockets/baileys (ou @adiwajshing/baileys) está instalado e compatível'
+  );
+}
+if (typeof useMultiFileAuthState !== 'function' || typeof fetchLatestBaileysVersion !== 'function') {
+  throw new TypeError(
+    '[baileys] exports essenciais ausentes (useMultiFileAuthState/fetchLatestBaileysVersion)'
+  );
+}
 
 // ------------------------- ENV HELPERS -------------------------
 const bool = (v, d = false) => {
@@ -31,13 +59,13 @@ const bool = (v, d = false) => {
 };
 const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
-// ENVs com defaults seguros
+// ENVs
 const {
   WPP_AUTH_DIR = '/app/baileys-auth-v2',
   WPP_SESSION = 'claudia-main',
   WPP_DEVICE = 'Matrix-Node',
 
-  WPP_PRINT_QR = 'true',            // manter true até parear
+  WPP_PRINT_QR = 'true',
   SEND_TYPING = 'true',
   TYPING_MS_PER_CHAR = '35',
   TYPING_MIN_MS = '800',
@@ -52,14 +80,13 @@ const TYPING_MIN = num(TYPING_MIN_MS, 800);
 const TYPING_MAX = num(TYPING_MAX_MS, 4000);
 const TYPING_VAR = Math.max(0, Math.min(1, Number(TYPING_VARIANCE_PCT) || 0.2));
 
-// ------------------------- ESTADO INTERNO -------------------------
+// ------------------------- ESTADO -------------------------
 let sock = null;
 let _isReady = false;
-let _lastQrText = null;        // cache do QR para /wpp/qr
+let _lastQrText = null;
 let _onMessageHandler = null;
 let _booting = false;
 
-// ------------------------- UTILS -------------------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function normalizeJid(input) {
@@ -67,7 +94,6 @@ function normalizeJid(input) {
   if (!digits) throw new Error('destinatário inválido');
   return digits.endsWith('@s.whatsapp.net') ? digits : `${digits}@s.whatsapp.net`;
 }
-
 function typingDelay(chars = 12) {
   const per = Math.max(0, TYPING_PER);
   const min = Math.max(0, TYPING_MIN);
@@ -77,7 +103,6 @@ function typingDelay(chars = 12) {
   const delta = Math.floor(Math.random() * (2 * jitter + 1)) - jitter;
   return Math.min(max, Math.max(min, base + delta));
 }
-
 async function simulateTyping(jid, approxChars = 12) {
   if (!SEND_TYPING_B || !sock) return;
   try {
@@ -85,24 +110,19 @@ async function simulateTyping(jid, approxChars = 12) {
     await sleep(200);
     await sock.sendPresenceUpdate('composing', jid);
     await sleep(typingDelay(approxChars));
-  } catch {
-    // silencioso
-  } finally {
+  } catch {} finally {
     try { await sock.sendPresenceUpdate('paused', jid); } catch {}
   }
 }
 
-// ------------------------- API / EXPORTS -------------------------
+// ------------------------- API -------------------------
 export function isReady() { return _isReady && !!sock; }
-
 export async function getQrDataURL() {
   if (!_lastQrText) return null;
   return qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 });
 }
-
 export const adapter = {
   onMessage(fn) { _onMessageHandler = typeof fn === 'function' ? fn : null; },
-
   async sendMessage(to, text) {
     if (!sock) throw new Error('WhatsApp não inicializado');
     const jid = normalizeJid(to);
@@ -110,7 +130,6 @@ export const adapter = {
     await simulateTyping(jid, msg.length || 12);
     return sock.sendMessage(jid, { text: msg });
   },
-
   async sendImage(to, url, caption = '') {
     if (!sock) throw new Error('WhatsApp não inicializado');
     const jid = normalizeJid(to);
@@ -118,21 +137,14 @@ export const adapter = {
     return sock.sendMessage(jid, { image: { url: String(url) }, caption: String(caption || '') });
   },
 };
-
 export async function stop() {
   try { if (sock) await sock.logout(); } catch {}
-  sock = null;
-  _isReady = false;
-  _lastQrText = null;
+  sock = null; _isReady = false; _lastQrText = null;
 }
 
-// Boot automático (idempotente)
+// Boot automático
 boot().catch(err => console.error('[baileys][boot][fatal]', err));
-
-export async function init() {
-  // init explícito (se alguém chamar)
-  return boot();
-}
+export async function init() { return boot(); }
 
 async function boot() {
   if (_booting) return;
@@ -147,8 +159,8 @@ async function boot() {
 
     sock = makeWASocket({
       version,
-      auth: state,                        // forma oficial de passar as credenciais
-      printQRInTerminal: PRINT_QR,        // QR ASCII nos logs (útil no Railway)
+      auth: state,
+      printQRInTerminal: PRINT_QR,
       browser: ['Matrix', WPP_DEVICE, '1.0.0'],
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: true,
@@ -156,21 +168,15 @@ async function boot() {
     });
 
     sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', async (u) => {
-      const { connection, lastDisconnect, qr } = u;
-
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       if (qr) {
-        _lastQrText = qr;                 // chave para /wpp/qr
+        _lastQrText = qr;
         if (!PRINT_QR) console.log('[baileys] QR atualizado (GET /wpp/qr)');
       }
-
       if (connection === 'open') {
-        _isReady = true;
-        _lastQrText = null;
+        _isReady = true; _lastQrText = null;
         console.log('[baileys] Conectado ✅');
       }
-
       if (connection === 'close') {
         _isReady = false;
         const err = lastDisconnect?.error;
@@ -178,13 +184,10 @@ async function boot() {
           err?.output?.statusCode ||
           err?.status?.code ||
           err?.code ||
-          (String(err?.message || '').includes('logged out') ? DisconnectReason.loggedOut : 'unknown');
-
-        console.warn('[baileys] Conexão fechada — code:', code, '-', err?.message || '');
-
-        // Reconnect automático, exceto quando fez logout
-        if (code !== DisconnectReason.loggedOut) {
-          console.warn('[baileys] Tentando reconectar em 2s…');
+          (String(err?.message || '').includes('logged out') ? DisconnectReason?.loggedOut : 'unknown');
+        console.warn('[baileys] close — code:', code, '-', err?.message || '');
+        if (code !== (DisconnectReason?.loggedOut ?? 'loggedOut')) {
+          console.warn('[baileys] Reconnecting in 2s…');
           setTimeout(() => boot().catch(e => console.error('[baileys][reboot]', e)), 2000);
         } else {
           console.error('[baileys] Logout detectado — reescaneie o QR.');
@@ -197,7 +200,6 @@ async function boot() {
         if (m.type !== 'notify') return;
         const msg = m.messages?.[0];
         if (!msg || msg.key.fromMe || !msg.message) return;
-
         const from = msg.key.remoteJid;
         if (!from || from.endsWith('@g.us')) return;
 
@@ -236,7 +238,7 @@ async function boot() {
   }
 }
 
-// ---------- Compatibilidade com código legado ----------
+// Compat legado
 export async function createBaileysClient() {
   await init();
   return {
