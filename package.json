@@ -9,7 +9,11 @@
     "start": "node src/index.js",
     "lint": "eslint . --ext .js",
     "matrix:init": "node tools/scaffold-bot.mjs init",
-    "matrix:add": "node tools/scaffold-bot.mjs add"
+    "matrix:add": "node tools/scaffold-bot.mjs add",
+
+    "sanity:settings": "node scripts/sanity-check.mjs",
+    "sanity:flows": "node scripts/check-flows-static.mjs",
+    "sanity:all": "npm run sanity:settings && npm run sanity:flows"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.7",
@@ -24,7 +28,7 @@
     "openai": "^4.56.0",
     "pino": "^9.0.0",
     "qrcode": "^1.5.4",
-    "yaml": "^2.4.5"
+    "yaml": "^2.5.0"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",

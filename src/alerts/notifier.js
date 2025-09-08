@@ -1,76 +1,96 @@
 // src/alerts/notifier.js
+// Notificador de alertas: Discord (principal) + E-mail opcional via ./email.js
+
+import fetch from 'node-fetch'; // se o runtime for Node >=18, pode trocar por globalThis.fetch
 import { sendAlertEmail } from './email.js';
 
-// Vars já usadas no projeto — preservadas
-const {
-  ALERT_WEBHOOK_URL,
-  PROJECT_NAME = 'Matrix',
-  INSTANCE_ID = 'unknown',
-} = process.env;
+// ENV
+const WEBHOOK_URL =
+  process.env.DISCORD_WEBHOOK_URL ||
+  process.env.ALERT_WEBHOOK_URL || ''; // compat com antigo
 
-// opcional: throttle simples no webhook pra evitar spam (independente do e-mail)
-const WEBHOOK_THROTTLE_MS = Number(process.env.ALERT_WEBHOOK_THROTTLE_MS || 60000);
-const _lastWebhook = new Map();
-const _canWebhook = (key) => {
+const EMAIL_ENABLED = String(process.env.ALERT_EMAIL_DISABLE || '').trim().toLowerCase()
+  ? false
+  : true; // email.js também checa FROM/TO/providers; aqui só não bloqueamos à força
+
+// throttle simples por "reason" (evita flood)
+const lastNotify = new Map();
+const THROTTLE_MS = Number(process.env.ALERT_THROTTLE_MS || 60_000); // 60s
+
+function canNotify(key) {
   const now = Date.now();
-  const last = _lastWebhook.get(key) || 0;
-  if (now - last < WEBHOOK_THROTTLE_MS) return false;
-  _lastWebhook.set(key, now);
+  const last = lastNotify.get(key) || 0;
+  if (now - last < THROTTLE_MS) return false;
+  lastNotify.set(key, now);
   return true;
-};
-
-// formata corpo de mensagem (texto simples)
-function buildBody({ title, reason, meta }) {
-  const lines = [
-    `Projeto: ${PROJECT_NAME}`,
-    `Instância: ${INSTANCE_ID}`,
-    ...(reason ? [`Motivo: ${reason}`] : []),
-    `Quando: ${new Date().toLocaleString()}`
-  ];
-  const extra = meta && Object.keys(meta).length
-    ? '\n' + Object.entries(meta).map(([k, v]) => `${k}: ${String(v)}`).join('\n')
-    : '';
-  return [title, '', lines.join('\n'), extra].join('\n');
 }
 
-export async function notifyDown({ reason, meta = {} }) {
-  const title = `🛑 Sessão WhatsApp CAIU — ${INSTANCE_ID}`;
-  const subject = `🛑 WhatsApp DOWN — ${INSTANCE_ID}`;
-  const bodyTxt = buildBody({ title, reason, meta });
+function buildDiscordPayload({ reason, meta = {}, level = 'ERROR' }) {
+  const prettyMeta = '```json\n' + JSON.stringify(meta || {}, null, 2).slice(0, 1800) + '\n```';
+  const content = `🚨 **Matrix alerta** — ${reason}`;
+  return {
+    content,
+    embeds: [
+      {
+        title: `Status: ${level}`,
+        description: prettyMeta,
+        color: 0xff0033,
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
 
-  // e-mail com try/catch interno (em sendAlertEmail)
-  await sendAlertEmail({ subject, text: bodyTxt });
-
-  // webhook opcional
-  if (ALERT_WEBHOOK_URL && _canWebhook('DOWN')) {
-    try {
-      await fetch(ALERT_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: bodyTxt })
-      });
-    } catch (e) {
-      console.error('[alerts] webhook error (DOWN):', e?.message || e);
-    }
+async function postToDiscord(payload) {
+  if (!WEBHOOK_URL) {
+    console.warn('[alerts] Discord WEBHOOK_URL não configurado — pulando envio.');
+    return false;
   }
+  const res = await fetch(WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`webhook ${res.status} ${res.statusText} ${body}`);
+  }
+  return true;
 }
 
-export async function notifyUp({ meta = {} } = {}) {
-  const title = `✅ Sessão WhatsApp OK — ${INSTANCE_ID}`;
-  const subject = `✅ WhatsApp UP — ${INSTANCE_ID}`;
-  const bodyTxt = buildBody({ title, reason: null, meta });
+/**
+ * Envia notificação de queda/desconexão
+ * @param {{reason: string, meta?: object}} opts
+ */
+export async function notifyDown({ reason, meta = {} }) {
+  const subject = `🚨 Matrix alerta: ${reason}`;
+  const key = reason || 'alert';
 
-  await sendAlertEmail({ subject, text: bodyTxt });
+  // 0) Console sempre
+  console.warn('[alerts][notifyDown]', { reason, meta });
 
-  if (ALERT_WEBHOOK_URL && _canWebhook('UP')) {
-    try {
-      await fetch(ALERT_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: bodyTxt })
-      });
-    } catch (e) {
-      console.error('[alerts] webhook error (UP):', e?.message || e);
+  // 1) Throttle
+  if (!canNotify(key)) {
+    console.log('[alerts] throttled:', key);
+    return;
+  }
+
+  // 2) Discord (principal)
+  try {
+    const payload = buildDiscordPayload({ reason, meta, level: 'DOWN' });
+    await postToDiscord(payload);
+    console.log('[alerts] Discord enviado com sucesso');
+  } catch (err) {
+    console.error('[alerts] falha no Discord:', err?.message || err);
+  }
+
+  // 3) E-mail (opcional; email.js já respeita ALERT_EMAIL_DISABLE e valida FROM/TO)
+  try {
+    if (EMAIL_ENABLED) {
+      const text = `Alerta: ${reason}\n\nMeta:\n${JSON.stringify(meta, null, 2)}`;
+      await sendAlertEmail({ subject, text, html: undefined });
     }
+  } catch (err) {
+    console.error('[alerts] falha no e-mail:', err?.message || err);
   }
 }

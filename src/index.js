@@ -1,4 +1,4 @@
-﻿// src/index.js — Matrix IA 2.0 (Cláudia) — LLM + Opening Photo + Coupon-after-payment
+﻿// src/index.js — Matrix IA 2.0 (Cláudia) — HTTP + WPP + Outbox (Redis)
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -13,7 +13,7 @@ import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';
 
-// 👇 LLM + prompts + settings
+// LLM + prompts + settings
 import { callLLM } from './core/llm.js';
 import { settings } from './core/settings.js';
 import { buildPrompt } from '../configs/bots/claudia/prompts/index.js';
@@ -23,9 +23,22 @@ if (process.env.NODE_ENV !== 'production') {
   try { await import('dotenv/config'); } catch {}
 }
 
-// 🔔 Heartbeat watcher + alertas
-import { startHeartbeatWatcher } from './watchers/heartbeat.js';
+// Alertas (mantidos)
 import { notifyDown } from './alerts/notifier.js';
+
+// (Opcional) Canary Gate — se existir, aplicamos
+let canaryGate = null;
+try {
+  const mod = await import('./middlewares/canaryGate.js');
+  canaryGate = mod?.default || mod?.canaryGate || null;
+} catch { /* ignore if missing */ }
+
+// (Opcional) Heartbeat watcher — agora **opcional** (não quebra se ausente)
+let startHeartbeatWatcher = null;
+try {
+  const mod = await import('./watchers/heartbeat.js');
+  startHeartbeatWatcher = mod?.startHeartbeatWatcher || mod?.default || null;
+} catch { /* ignore if missing */ }
 
 const app = express();
 app.set('trust proxy', 1);
@@ -33,13 +46,7 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 
-const PORT = Number(process.env.PORT || 8080);
-const HOST = process.env.HOST || '0.0.0.0';
-const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
-const ECHO_MODE = String(process.env.ECHO_MODE || 'false').toLowerCase() === 'true';
-const INSTANCE_ID = process.env.INSTANCE_ID || process.env.WPP_SESSION || 'instance-1';
-
-// --------- Helpers ---------
+// Helpers ENV
 const envBool = (v, d = false) => {
   if (v === undefined || v === null) return d;
   const s = String(v).trim().toLowerCase();
@@ -50,14 +57,20 @@ const envNum = (v, d) => {
   return Number.isFinite(n) ? n : d;
 };
 
-// --------- Flags mutáveis ---------
+// Configs básicas
+const PORT = envNum(process.env.PORT, 8080);
+const HOST = process.env.HOST || '0.0.0.0';
+const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
+const ECHO_MODE = envBool(process.env.ECHO_MODE, false);
+const INSTANCE_ID = process.env.INSTANCE_ID || process.env.WPP_SESSION || 'instance-1';
+
+// Flags mutáveis (publicadas em /wpp/health e /ops/status)
 let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
 let sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
 
-// --------- Redis (prioriza MATRIX_REDIS_URL) ---------
+// Redis principal (prioriza MATRIX_REDIS_URL)
 const REDIS_MAIN_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
 const useTLS = REDIS_MAIN_URL.startsWith('rediss://');
-
 const redisOpts = {
   lazyConnect: false,
   enableReadyCheck: true,
@@ -66,28 +79,22 @@ const redisOpts = {
   maxRetriesPerRequest: null,
   autoResubscribe: true,
   autoResendUnfulfilledCommands: true,
-  retryStrategy: (times) => Math.min(30000, 1000 + times * 500), // backoff 1s→30s
+  retryStrategy: (times) => Math.min(30000, 1000 + times * 500),
   reconnectOnError: (err) => {
     const code = err?.code || '';
     const msg  = String(err?.message || '');
-    return (
-      code === 'ECONNRESET' ||
-      code === 'EPIPE' ||
-      code === 'ETIMEDOUT' ||
-      msg.includes('READONLY')
-    );
+    return (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ETIMEDOUT' || msg.includes('READONLY'));
   },
-  tls: useTLS ? { rejectUnauthorized: false } : undefined, // proxy com cert self-signed
+  tls: useTLS ? { rejectUnauthorized: false } : undefined,
 };
 
-// --------- Fila Outbox ---------
+// Fila Outbox
 const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || 'default'}`;
 const OUTBOX_CONCURRENCY = envNum(process.env.QUEUE_OUTBOX_CONCURRENCY, 4);
 
 const outbox = await createOutbox({
   topic: OUTBOX_TOPIC,
   concurrency: OUTBOX_CONCURRENCY,
-  // usa o mesmo endpoint padrão
   redisUrl: REDIS_MAIN_URL,
 });
 
@@ -111,20 +118,18 @@ await outbox.start(async (job) => {
   if (text) await adapter.sendMessage(to, text);
 });
 
-// --------- Flows (mantidos p/ canário) ---------
+// Flows (mantidos p/ canário)
 const flows = await loadFlows(BOT_ID);
 
-// --------- Controle de "foto de abertura" ---------
-const sentOpening = new Set(); // memória por processo (suficiente pro canário)
+// Controle de "foto de abertura"
+const sentOpening = new Set(); // memória por processo é suficiente pro canário
 
-// --------- Util: pós-pagamento → mensagens + cupom ---------
+// Pós-pagamento (mensagens + cupom, se habilitado)
 async function handlePaymentConfirmed(jid) {
   try {
-    // 1) mensagem padrão de pós-venda (sem cupom)
     for (const line of settings.messages?.postsale_pre_coupon ?? []) {
       await outbox.publish({ to: jid, kind: 'text', payload: { text: line } });
     }
-    // 2) cupom apenas se habilitado para pós-pagamento
     if (settings.product?.coupon_post_payment_only && settings.product?.coupon_code) {
       const msgTpl = settings.messages?.postsale_after_payment_with_coupon?.[0] || '';
       const msg = msgTpl.replace('{{coupon_code}}', settings.product.coupon_code);
@@ -135,11 +140,17 @@ async function handlePaymentConfirmed(jid) {
   }
 }
 
-// --------- Entrada WhatsApp (LLM + canário + foto de abertura) ---------
+// Entrada WhatsApp (LLM + canário + foto de abertura)
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) {
     console.log('[intake] INTAKE_DISABLED — ignoring incoming', { from });
     return '';
+  }
+
+  // Se existir canaryGate, usamos como "valvulinha" (não bloqueia se ausente)
+  if (canaryGate) {
+    const gateOk = await canaryGate.tryPass({ from, text, hasMedia });
+    if (!gateOk) return '';
   }
 
   try {
@@ -203,7 +214,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   }
 });
 
-// --------- Limiters ---------
+// Limiters HTTP
 const sendLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -211,7 +222,7 @@ const sendLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// --------- Rotas ---------
+// Rotas básicas
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -271,6 +282,7 @@ app.get('/wpp/qr', async (req, res) => {
 // Alias simples → redireciona para a view em HTML do QR
 app.get('/qr', (_req, res) => res.redirect(302, '/wpp/qr?view=img'));
 
+// Ops/status (inclui flags e liderança)
 let isLeader = false;
 app.get('/ops/status', (_req, res) => {
   res.json({
@@ -313,6 +325,36 @@ app.post('/webhook/payment', async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     console.error('[webhook/payment][error]', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// 🔹 Inbound genérico (injeção de mensagens — útil p/ testes / integrações)
+app.post('/inbound', async (req, res) => {
+  try {
+    const { to, text } = req.body || {};
+    const jid = String(to || '').trim();
+    const msg = String(text || '').trim();
+    if (!jid || !msg) return res.status(400).json({ ok: false, error: 'Informe { to, text }' });
+    if (!sendEnabled) {
+      return res.status(202).json({ ok: true, enqueued: false, note: 'SEND_DISABLED — instância silenciosa' });
+    }
+    await outbox.publish({ to: jid, kind: 'text', payload: { text: msg } });
+    res.json({ ok: true, enqueued: true });
+  } catch (e) {
+    console.error('[POST /inbound][error]', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// 🔸 Novo: teste de alerta por HTTP (opcional)
+app.post('/ops/test-alert', async (req, res) => {
+  try {
+    const reason = req.body?.reason || 'teste manual';
+    const meta   = req.body?.meta   || { source: '/ops/test-alert' };
+    await notifyDown({ reason, meta });
+    res.json({ ok: true });
+  } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
@@ -427,23 +469,28 @@ async function leaderLoop() {
 }
 
 // --------- Boot + Watchers ---------
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix on http://${HOST}:${PORT}`);
-  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | GET /qr | GET /ops/status | POST /wpp/send | POST /webhook/payment`);
+  console.log(`[HTTP] Rotas: GET /health | GET /wpp/health | GET /wpp/qr | GET /qr | GET /ops/status | POST /wpp/send | POST /webhook/payment | POST /inbound | POST /ops/test-alert`);
   console.log(`[Leader] mode: ${LEADER_ELECTION_ENABLED ? 'ENABLED' : 'DISABLED'} key=${LEADER_LOCK_KEY} ttl=${LEADER_LOCK_TTL_MS}ms`);
 
-  startHeartbeatWatcher(async ({ age, windowMs }) => {
-    const secs = Math.round(age / 1000);
-    console.warn(`[HB] heartbeat-timeout ${secs}s (window=${windowMs}ms)`);
-    try {
-      await notifyDown({ reason: `heartbeat-timeout ${secs}s`, meta: { windowMs } });
-    } catch (err) {
-      console.error('[HB] notifyDown error:', err);
-    }
-  });
+  // Só inicia heartbeat se o watcher existir
+  if (typeof startHeartbeatWatcher === 'function') {
+    startHeartbeatWatcher(async ({ age, windowMs }) => {
+      const secs = Math.round(age / 1000);
+      console.warn(`[HB] heartbeat-timeout ${secs}s (window=${windowMs}ms)`);
+      try {
+        await notifyDown({ reason: `heartbeat-timeout ${secs}s`, meta: { windowMs } });
+      } catch (err) {
+        console.error('[HB] notifyDown error:', err);
+      }
+    });
+  } else {
+    console.log('[HB] watcher ausente — skip');
+  }
 
   if (leaderRedis) {
-    setInterval(() => { if (!isLeader) { syncOpsFollower().catch(()=>{}); } }, OP_SYNC_MS);
+    setInterval(() => { if (!isLeader) { syncOpsFollower().catch(()=>{}); } }, envNum(process.env.OP_SYNC_MS, 15000));
   }
   if (LEADER_ELECTION_ENABLED && leaderRedis) {
     leaderLoop().catch((e) => console.error('[leader][fatal]', e));
@@ -451,3 +498,15 @@ app.listen(PORT, HOST, () => {
     console.warn('[leader] election disabled or REDIS_URL/MATRIX_REDIS_URL missing — using static flags');
   }
 });
+
+// Graceful shutdown
+function gracefulClose(signal) {
+  console.log(`[shutdown] signal=${signal}`);
+  server?.close?.(() => console.log('[http] closed'));
+  try { adapter?.close?.(); } catch {}
+  try { outbox?.close?.(); } catch {}
+  try { leaderRedis?.quit?.(); } catch {}
+  setTimeout(() => process.exit(0), 1500);
+}
+process.on('SIGINT',  () => gracefulClose('SIGINT'));
+process.on('SIGTERM', () => gracefulClose('SIGTERM'));

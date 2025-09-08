@@ -1,25 +1,34 @@
 // configs/bots/claudia/flow/greet.js
-import { settings } from '../../../src/core/settings.js';
+import { settings } from '../../../../src/core/settings.js';
 
 /**
  * Flow: greet
- * - envia a FOTO do produto logo na abertura (antes da 1ª fala)
- * - NÃO envia link aqui
+ * - Envia FOTO do produto na abertura + 1ª fala curta
+ * - Nunca envia link aqui; sem cupom
+ * - Se não houver imagem, cai para texto simples
  */
 export default async function greet() {
   const productImage =
     settings?.media?.opening_photo_url ||
     settings?.product?.image_url ||
-    'https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200';
+    null;
 
   const openingMsgs = settings?.messages?.opening;
-  const opening =
+  const caption =
     (Array.isArray(openingMsgs) && openingMsgs[0]) ||
-    'Oi! 💖 Eu sou a Cláudia. Como é seu cabelo (liso, ondulado, cacheado ou crespo)?';
+    'Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?';
 
+  if (productImage && (settings?.flags?.send_opening_photo ?? true)) {
+    return {
+      type: 'image',
+      imageUrl: productImage,
+      caption,
+    };
+  }
+
+  // Fallback sem imagem
   return {
-    type: 'image',
-    imageUrl: productImage,
-    caption: opening,
+    type: 'text',
+    text: caption,
   };
 }

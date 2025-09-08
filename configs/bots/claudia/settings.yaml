@@ -1,5 +1,4 @@
-﻿# configs/bots/claudia/settings.yaml
-bot_id: claudia
+﻿bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -43,17 +42,34 @@ flags:
   allow_audio_out: false           # (TTS futuro)
   small_talk_soften: true          # tom leve e vendedor
 
-# Modelos por etapa — nomes exatamente como usados pelo código/prompts
+  # >>> compatibilidade com o core/llm.js
+  useModelsByStage: true           # prioriza models_by_stage
+  fallbackToGlobal: true           # se faltar, usa globais
+
+# Prova social / marketing
+marketing:
+  sold_count: 40000                # usado nas mensagens de objeção (prova social)
+
+# Modelos por etapa — chaves canônicas usadas pelos flows/LLM (pt-BR)
 models_by_stage:
-  greet:        "gpt-5-nano"
-  qualify:      "gpt-5-nano"
-  offer:        "gpt-5-mini"
-  objection:    "gpt-5-full"
-  close:        "gpt-5-mini"
-  post_sale:    "gpt-5-nano"
-  delivery:     "gpt-5-nano"
-  payment:      "gpt-5-nano"
-  features:     "gpt-5-nano"
+  recepcao:     "GPT-5-nano"   # greet
+  qualificacao: "GPT-5-nano"   # qualify
+  oferta:       "GPT-5-mini"   # offer
+  objeções:     "GPT-5-full"   # objection
+  fechamento:   "GPT-5-mini"   # close
+  posvenda:     "GPT-5-nano"   # post_sale
+  entrega:      "GPT-5-nano"   # delivery
+  pagamento:    "GPT-5-nano"   # payment
+  features:     "GPT-5-nano"
+
+# (opcional) modelos globais por etapa — usados como fallback
+global_models:
+  recepcao:     "GPT-5-nano"
+  qualificacao: "GPT-5-nano"
+  oferta:       "GPT-5-mini"
+  objeções:     "GPT-5-full"
+  fechamento:   "GPT-5-mini"
+  posvenda:     "GPT-5-nano"
 
 typing:
   ms_per_char: 35
@@ -73,15 +89,17 @@ messages:
     - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
     - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
 
+  # Objeções — prova social + depoimentos no site (no perfil) + modo de uso
   objection_handles:
-    - "Te entendo! É sem formol, com registro e garantia. Posso te mostrar resultados reais e o modo de uso?"
-    - "Se não amar o resultado, eu te acompanho no passo a passo até acertar. Quer ver como aplicar?"
+    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas em todo o Brasil ✅ No nosso site (link no perfil) você confere depoimentos reais e o modo de uso passo a passo. Quer que eu resuma aqui?"
+    - "Fica tranquila: temos registro, garantia e acompanhamento. Passamos de {{sold_count}} unidades vendidas no Brasil e há vários depoimentos no site (link no perfil). Prefere que eu explique rapidinho o modo de uso por aqui?"
+    - "Claro! Hoje passamos de {{sold_count}} unidades vendidas e o site (no perfil) traz avaliações de clientes e como aplicar. Posso te dar um passo a passo resumido agora?"
 
   # Fechamento sem cupom; reforça COD + agendamento/acompanhamento via WhatsApp
   closing:
     - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para agendar e acompanhar; se houver imprevisto, avise o entregador 💚"
 
-  # Blocos usados pelo handler pós-pagamento (texto “paguei/comprovante” ou webhook)
+  # Pós-pagamento (texto “paguei/comprovante” ou webhook)
   postsale_pre_coupon:
     - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega. Qualquer imprevisto, avise o entregador, tá bem? 💚"
     - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
@@ -100,6 +118,7 @@ guardrails:
     - "price_target"
     - "checkout_link"
     - "coupon_code"
+    - "sold_count"    # (opcional) congela a prova social
 
 telemetry:
   enabled: true

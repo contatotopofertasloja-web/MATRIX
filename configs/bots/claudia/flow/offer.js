@@ -31,8 +31,10 @@ export async function offer({ userId, text }) {
 Dados do produto:
 - Preço alvo: R$ ${priceTarget}
 - Checkout: ${checkout || '(definir no settings.yaml)'}
+
 Regras:
 - NÃO mencione cupom na oferta.
+- NÃO envie depoimentos/antes-depois nem links para depoimentos; diga que estão no site "no perfil" (sem colar URL).
 - Não invente valores fora do range ${settings?.guardrails?.price_min ?? '?'}–${settings?.guardrails?.price_max ?? '?'}.
 - Só inclua link se estiver em "allowed_links" (senão, peça autorização para enviar).
 - Máx 2 linhas. Tom vendedor.
@@ -44,7 +46,8 @@ ${templates.map(t => `• ${t}`).join('\n')}
   const { text: llm } = await callLLM({
     stage: 'oferta',
     system: `Você é ${settings?.persona_name || 'Cláudia'}, vendedora confiante.
-Ofereça o produto com clareza e CTA (pergunte se pode enviar o link). Não fale de cupom.`,
+Ofereça o produto com clareza e CTA (pergunte se pode enviar o link). Não fale de cupom.
+Se mencionarem depoimentos, diga que estão no site do perfil, sem colar link.`,
     prompt,
   });
 

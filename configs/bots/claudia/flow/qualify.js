@@ -2,6 +2,11 @@
 import { callLLM } from '../../../../src/core/llm.js';
 import { settings } from '../../../../src/core/settings.js';
 
+/**
+ * Qualificação:
+ * - Faz 1 pergunta objetiva
+ * - Não envia preço, link, nem cupom
+ */
 export async function qualify({ userId, text }) {
   const followups = settings?.messages?.qualify_followups || [
     'Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?',
@@ -11,12 +16,15 @@ export async function qualify({ userId, text }) {
   const { text: reply } = await callLLM({
     stage: 'qualificacao',
     system: `Você é ${settings?.persona_name || 'Cláudia'}, vendedora.
-Faça 1 pergunta objetiva para qualificar a necessidade do cliente.
-Não ofereça preço ainda. Não envie links. Máx 1-2 linhas.`,
-    prompt: `Histórico (última msg): ${text || '(sem texto)'}\n
-Sugestões possíveis: ${followups.join(' | ')}\n
-Escreva UMA pergunta curta e simpática.`,
+Faça APENAS 1 pergunta objetiva para qualificar a necessidade do cliente.
+Sem preço, sem links, sem cupom. Máx 1–2 linhas, tom simpático.`,
+    prompt: `Última mensagem do cliente: ${text || '(sem texto)'}
+Sugestões (use só como ideia): ${followups.join(' | ')}
+Escreva UMA pergunta curta.`,
   });
 
-  return (reply || followups[0]).trim();
+  const out = (reply || followups[0]).trim();
+  // Remove URLs por segurança
+  const clean = out.replace(/https?:\/\/\S+/gi, '');
+  return clean;
 }
