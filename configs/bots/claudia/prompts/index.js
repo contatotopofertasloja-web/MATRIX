@@ -3,8 +3,8 @@
 // — ajustado para recomendar APENAS 1 produto.
 
 // Base (tom/guardrails) + catálogo (ranking de 1 produto)
-import { buildBaseContext } from '../../../src/prompts/base.js';
-import { pickOneProduct, formatRecommendation } from '../../../src/prompts/products.js';
+import { buildBaseContext } from '../../../src/core/prompts/base.js';
+import { pickOneProduct, formatRecommendation } from '../../../src/core/prompts/product.js';
 
 function detectHairType(text) {
   const t = String(text || '').toLowerCase();

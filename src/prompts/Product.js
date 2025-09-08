@@ -1,4 +1,4 @@
-// src/prompts/products.js
+// src/core/prompts/product.js
 // Mini-catálogo e helpers (recomendação retorna só 1 produto)
 
 export const CATALOG = [

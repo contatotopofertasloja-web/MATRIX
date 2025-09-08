@@ -1,42 +1,70 @@
-# Node / runtime
-node_modules/
-.npmrc
-npm-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# Env & segredos
+# -----------------------
+# Ambiente
+# -----------------------
 .env
-.env.*
+.env.local
+.env.*.local
+
+# Nunca versionar chaves sensíveis
 !.env.example
 
-# Baileys (auth local)
-baileys-auth*/
-app/baileys-auth*/
-app/baileys-auth-v2*/
-baileys_store*/
+# -----------------------
+# Dependências
+# -----------------------
+node_modules/
+.pnpm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
 
-# Builds / artefatos
+# -----------------------
+# Build / Output
+# -----------------------
 dist/
 build/
-coverage/
+.cache/
+out/
+.next/
+.vercel/
+.railway/
 tmp/
 temp/
+
+# -----------------------
+# Logs
+# -----------------------
+logs
 *.log
-logs/
+*.log.*
+*.out
 *.pid
 *.seed
-*.tgz
+*.pid.lock
 
-# Sist. operacional / editor
-.DS_Store
-Thumbs.db
+# -----------------------
+# IDE / Editor
+# -----------------------
 .vscode/
 .idea/
 *.swp
+*.swo
+*.swn
+*.bak
+.DS_Store
+Thumbs.db
 
-# Test snapshots (se usar)
-__snapshots__/
+# -----------------------
+# Testes
+# -----------------------
+coverage/
+.nyc_output/
 
+# -----------------------
 # Outros
-*.local.json
+# -----------------------
+*.tgz
+*.tar.gz
+*.zip

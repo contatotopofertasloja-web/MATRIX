@@ -1,4 +1,4 @@
-// src/prompts/base.js
+// src/core/prompts/base.js
 // Diretrizes base para a Cláudia (1 produto por recomendação)
 
 export const BASE_SYSTEM_PROMPT = `
