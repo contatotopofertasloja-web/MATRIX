@@ -16,7 +16,7 @@
     "sanity:all": "npm run sanity:settings && npm run sanity:flows"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.6.0",
+    "@whiskeysockets/baileys": "6.7.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -27,7 +27,7 @@
     "nodemailer": "^6.9.14",
     "openai": "^4.56.0",
     "pino": "^9.0.0",
-    "qrcode": "^1.5.3",
+    "qrcode": "^1.5.4",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
