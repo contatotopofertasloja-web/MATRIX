@@ -1,6 +1,8 @@
 ﻿// configs/bots/claudia/prompts/index.js
-import { buildBaseContext } from '../../../src/core/prompts/base.js';
-import { pickOneProduct, formatRecommendation } from '../../../src/core/prompts/product.js';
+// Builder de prompt por etapa (greet, qualify, offer, close, postsale)
+
+import { buildBaseContext } from '../../../../src/core/prompts/base.js';
+import { pickOneProduct, formatRecommendation } from '../../../../src/core/prompts/product.js';
 
 function detectHairType(text) {
   const t = String(text || '').toLowerCase();
