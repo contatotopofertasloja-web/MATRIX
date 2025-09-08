@@ -28,7 +28,6 @@ function detectConcerns(text) {
 }
 
 function stageHeader(stage) {
-  // pequeno prefixo para orientar o modelo
   switch (stage) {
     case 'greet':    return 'Etapa: saudação e início do diagnóstico.';
     case 'qualify':  return 'Etapa: diagnóstico objetivo do cabelo.';
@@ -55,16 +54,12 @@ export function buildPrompt({ stage = 'greet', message = '', settings = {}, extr
     const picked = pickOneProduct({ hairType, concerns });
     if (picked) {
       const rec = formatRecommendation(picked); // "Nome — motivo (uso: ...)"
-      // Passamos ao modelo um contexto amigável (não obrigatório, mas ajuda a manter 1 produto)
       preface += `\nSugestão interna (não citar que é heurística): ${rec}`;
     }
-    // Reforço da regra de 1 produto (mesmo que base já imponha):
     preface += `\nInstrução: recomende apenas 1 produto e explique o porquê em UMA frase.`;
   }
 
-  // “user” final combina cabeçalho de etapa + mensagem do usuário
   const user = `${preface}\n\nUsuário: ${message}`.trim();
-
   return { system, user, ctx };
 }
 
