@@ -1,4 +1,8 @@
-﻿// src/index.js — Matrix IA 2.0 (Cláudia) — HTTP + WPP + Outbox (Redis)
+﻿// src/index.js — Matrix IA 2.0 (Cláudia) — HTTP + WPP + Outbox (Redis) + ASR (Whisper)
+// Baseado no seu arquivo enviado (mantém rotas/ops/leader/queue).
+// Acrescentado: transcrição de áudio (Whisper) + roteamento flows/LLM usando texto transcrito.
+// (c) Matrix IA 2.0
+
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -17,6 +21,15 @@ import { isCanaryUser, CANARY_FLOW_KEY } from './core/canary.js';
 import { callLLM } from './core/llm.js';
 import { settings } from './core/settings.js';
 import { buildPrompt } from '../configs/bots/claudia/prompts/index.js';
+
+// 🔊 ASR (transcrição)
+let transcribeAudio = null;
+try {
+  const asrMod = await import('./core/asr.js');
+  transcribeAudio = asrMod?.transcribeAudio || asrMod?.default || null;
+} catch {
+  console.warn('[ASR] Módulo ./core/asr.js ausente — áudio será ignorado.');
+}
 
 // Carrega .env em dev
 if (process.env.NODE_ENV !== 'production') {
@@ -140,7 +153,56 @@ async function handlePaymentConfirmed(jid) {
   }
 }
 
-// Entrada WhatsApp (LLM + canário + foto de abertura)
+// ---------- Helpers de mídia/áudio ----------
+
+// Tenta extrair um buffer de áudio a partir do objeto raw do adapter.
+// Prioriza métodos expostos pelo adapter; se ausentes, retorna null (segue só texto).
+async function tryGetAudioBuffer(raw) {
+  try {
+    // Se o adapter expuser um util direto:
+    if (typeof adapter?.getAudioBuffer === 'function') {
+      return await adapter.getAudioBuffer(raw);
+    }
+    if (typeof adapter?.downloadMedia === 'function') {
+      // alguns adapters expõem downloadMedia(raw, {audioOnly:true})
+      return await adapter.downloadMedia(raw, { audioOnly: true });
+    }
+
+    // Fallback leve: detectar se a mensagem parece ter áudio
+    const m = raw?.message || raw?.msg || null;
+    const hasAudio =
+      !!m?.audioMessage ||
+      !!m?.voiceMessage ||
+      !!m?.ptt ||
+      !!m?.extendedTextMessage?.contextInfo?.quotedMessage?.audioMessage;
+    if (!hasAudio) return null;
+
+    console.warn('[ASR] Adapter não expõe getAudioBuffer/downloadMedia — áudio detectado, mas sem como baixar.');
+    return null;
+  } catch (e) {
+    console.warn('[ASR] tryGetAudioBuffer error:', e?.message || e);
+    return null;
+  }
+}
+
+// Transcreve buffer usando o módulo ./core/asr.js (Whisper por padrão)
+async function transcribeIfPossible(buf, mimeGuess = 'audio/ogg') {
+  if (!buf || typeof transcribeAudio !== 'function') return null;
+  try {
+    return await transcribeAudio({
+      buffer: buf,
+      mimeType: mimeGuess,
+      provider: settings?.audio?.asrProvider || 'openai',
+      model: settings?.audio?.asrModel || 'whisper-1',
+      language: settings?.audio?.language || 'pt',
+    });
+  } catch (e) {
+    console.warn('[ASR] transcribeIfPossible error:', e?.message || e);
+    return null;
+  }
+}
+
+// Entrada WhatsApp (LLM + canário + foto de abertura + ÁUDIO→ASR)
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) {
     console.log('[intake] INTAKE_DISABLED — ignoring incoming', { from });
@@ -170,17 +232,28 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // 2) Ignora vazios absolutos
-    const msgText = (text || '').trim();
-    if (!msgText && !hasMedia) return '';
+    // 2) Texto base
+    let msgText = (text || '').trim();
 
-    // 3) Confirmação de pagamento por texto (manual)
+    // 3) Se vier mídia, tentamos extrair/transcrever ÁUDIO
+    if (hasMedia && !msgText) {
+      const audioBuf = await tryGetAudioBuffer(raw);
+      if (audioBuf?.length) {
+        const asr = await transcribeIfPossible(audioBuf);
+        if (asr && asr.trim()) msgText = asr.trim();
+      }
+    }
+
+    // 4) Ignora vazios absolutos
+    if (!msgText) return '';
+
+    // 5) Confirmação de pagamento (texto)
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await handlePaymentConfirmed(from);
       return '';
     }
 
-    // 4) CANÁRIO (se existir flow canário, usa ele)
+    // 6) CANÁRIO (se existir flow canário, usa ele)
     const useCanary = isCanaryUser(from);
     if (useCanary && typeof flows[CANARY_FLOW_KEY] === 'function') {
       const reply = await flows[CANARY_FLOW_KEY]({ userId: from, text: msgText, context: { hasMedia, raw } });
@@ -190,7 +263,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // 5) Roteia intenção → prompt por etapa → LLM
+    // 7) Roteia intenção → prompt por etapa → LLM
     const intent = intentOf(msgText) || 'greet';
     const { system, user } = buildPrompt({ stage: intent, message: msgText });
     const { text: reply } = await callLLM({ stage: intent, system, prompt: user });
@@ -200,7 +273,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // 6) Fallback simpático
+    // 8) Fallback simpático
     await outbox.publish({
       to: from,
       kind: 'text',

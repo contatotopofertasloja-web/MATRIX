@@ -1,40 +1,55 @@
 // src/core/asr.js
-import OpenAI from 'openai';
+// Transcrição de áudio (ASR). Default: OpenAI Whisper.
+// Aceita buffer em memória; devolve string (ou null em erro).
+
 import fs from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
+import path from 'node:path';
 
-const PROVIDER = (process.env.ASR_PROVIDER || 'openai').toLowerCase();
-const MODEL    = process.env.ASR_MODEL || 'whisper-1';
+// Carrega .env em dev
+if (process.env.NODE_ENV !== 'production') {
+  try { await import('dotenv/config'); } catch {}
+}
 
-/**
- * Transcreve Buffer de áudio e retorna string.
- * Salva arquivo temporário apenas para a API aceitar stream de arquivo.
- */
-export async function transcribeAudioBuffer(buffer, mimeType = 'audio/ogg') {
-  if (PROVIDER !== 'openai') throw new Error(`ASR provider "${PROVIDER}" não implementado`);
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const tmp = path.join(os.tmpdir(), `asr-${Date.now()}.${guessExt(mimeType)}`);
-  await fs.promises.writeFile(tmp, buffer);
+const TMP_DIR = path.join(os.tmpdir(), 'matrix-asr');
+if (!fs.existsSync(TMP_DIR)) { try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch {} }
 
-  try {
-    const resp = await client.audio.transcriptions.create({
-      file: fs.createReadStream(tmp),
-      model: MODEL,
-      // language: 'pt', // opcional
-      // prompt: 'Portuguese WhatsApp voice message...', // opcional
-    });
-    return resp?.text?.trim() || '';
-  } finally {
-    fs.promises.unlink(tmp).catch(() => {});
+export async function transcribeAudio({ buffer, mimeType = 'audio/ogg', provider = 'openai', model = 'whisper-1', language = 'pt' }) {
+  if (!buffer || !buffer.length) return null;
+
+  if (String(provider).toLowerCase() === 'openai') {
+    const key = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY;
+    if (!key) throw new Error('OPENAI_API_KEY ausente para ASR');
+
+    // Escreve um arquivo temporário (SDK de áudio via file)
+    const ext = mimeType.includes('wav') ? 'wav' :
+                mimeType.includes('mp3') ? 'mp3' :
+                mimeType.includes('m4a') ? 'm4a' :
+                mimeType.includes('webm') ? 'webm' : 'ogg';
+    const tmpFile = path.join(TMP_DIR, `clip-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+    fs.writeFileSync(tmpFile, buffer);
+
+    // Evita import pesado se não for usar ASR
+    const OpenAI = (await import('openai')).default;
+    const client = new OpenAI({ apiKey: key });
+
+    try {
+      const resp = await client.audio.transcriptions.create({
+        file: fs.createReadStream(tmpFile),
+        model,
+        language, // ajuda em PT-BR
+        temperature: 0,
+      });
+      const txt = resp?.text || '';
+      return txt.trim() || null;
+    } finally {
+      // limpeza best-effort
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
   }
+
+  // Provedores futuros (Deepgram, etc.)
+  throw new Error(`ASR provider não suportado: ${provider}`);
 }
 
-function guessExt(mime) {
-  const m = String(mime || '').toLowerCase();
-  if (m.includes('mp4') || m.includes('m4a')) return 'm4a';
-  if (m.includes('ogg')) return 'ogg';
-  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
-  if (m.includes('wav')) return 'wav';
-  return 'ogg';
-}
+export default transcribeAudio;
