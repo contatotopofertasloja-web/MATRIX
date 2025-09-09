@@ -1,7 +1,6 @@
-﻿// configs/src/core/settings.js
+﻿// src/core/settings.js
 // Leitura centralizada das configs do BOT (ENV + YAML por bot).
-// Corrigido: export default settings incluído.
-// Normaliza chaves dos estágios.
+// Normaliza chaves dos estágios. Exporta também default.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +9,7 @@ import YAML from 'yaml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const ROOT       = path.resolve(__dirname, '..', '..', '..'); // raiz do projeto (sobe de configs/src/core)
+const ROOT       = path.resolve(__dirname, '..'); // raiz (src)
 
 function env(name, def) {
   const v = process.env[name];
@@ -19,7 +18,7 @@ function env(name, def) {
 
 // -------------------- BOT --------------------
 export const BOT_ID = env('BOT_ID', 'claudia');
-const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
+const BOT_SETTINGS_PATH = path.join(ROOT, '..', 'configs', 'bots', BOT_ID, 'settings.yaml');
 
 // -------------------- NORMALIZAÇÃO --------------------
 const STAGE_KEY_ALIASES = new Map([
@@ -119,5 +118,4 @@ export const settings = {
   global_models: GLOBAL_MODELS,
 };
 
-// ✅ Default export incluído
-expor
+export default settings;

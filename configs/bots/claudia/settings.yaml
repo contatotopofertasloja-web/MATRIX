@@ -51,7 +51,7 @@ models_by_stage:
   pagamento:    "gpt-5-nano"
   features:     "gpt-5-nano"
 
-# Fallbacks globais por etapa (indentação fixada)
+# Fallbacks globais por etapa
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -67,7 +67,7 @@ typing:
 
 messages:
   opening:
-    - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
+    - "Oi! Eu sou a Cláudia 😊 Como é seu cabelo: liso, ondulado, cacheado ou crespo?"
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
@@ -75,23 +75,21 @@ messages:
     - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
     - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
   objection_handles:
-    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas em todo o Brasil ✅ No nosso site (link no perfil) você confere depoimentos reais e o modo de uso passo a passo. Quer que eu resuma aqui?"
-    - "Fica tranquila: temos registro, garantia e acompanhamento. Passamos de {{sold_count}} unidades vendidas no Brasil e há vários depoimentos no site (link no perfil). Prefere que eu explique rapidinho o modo de uso por aqui?"
-    - "Claro! Hoje passamos de {{sold_count}} unidades vendidas e o site (no perfil) traz avaliações de clientes e como aplicar. Posso te dar um passo a passo resumido agora?"
+    - "Entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ No site você confere depoimentos e modo de uso. Quer um resumo aqui?"
+    - "Fica tranquila: temos garantia e acompanhamento. Prefere que eu explique rapidinho o passo a passo?"
   closing:
-    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para agendar e acompanhar; se houver imprevisto, avise o entregador 💚"
+    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para acompanhar. Qualquer imprevisto, avise o entregador 💚"
   postsale_pre_coupon:
-    - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega. Qualquer imprevisto, avise o entregador, tá bem? 💚"
-    - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
+    - "Pagamento confirmado! 🎉 Você receberá mensagens para acompanhar a entrega. Dúvidas no uso? Posso te mandar a rotina ✨"
   postsale_after_payment_with_coupon:
-    - "Como agradecimento, aqui vai um cupom de desconto para a PRÓXIMA compra: {{coupon_code}} 🎁"
+    - "Como agradecimento, aqui vai um cupom para a PRÓXIMA compra: {{coupon_code}} 🎁"
   postsale_followup_days: 7
   features_intro:
     - "Claro! Te passo o modo de uso resumido:"
   delivery_info:
-    - "Nosso prazo é de até {{delivery_sla.capitals_hours}}h para capitais e até {{delivery_sla.others_hours}}h para demais regiões."
+    - "Prazo: até {{delivery_sla.capitals_hours}}h capitais e até {{delivery_sla.others_hours}}h demais regiões."
   payment_info:
-    - "Pagamento na entrega (COD). O link que eu envio é apenas para confirmar o pedido e acompanhar pelo WhatsApp 🙂"
+    - "Pagamento na entrega (COD). O link que envio é para confirmar o pedido e acompanhar pelo WhatsApp 🙂"
 
 guardrails:
   price_min: 149
