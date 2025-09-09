@@ -53,24 +53,24 @@ marketing:
 
 # Modelos por etapa — use chaves CANÔNICAS
 models_by_stage:
-  recepcao:     "GPT-5-nano"  # greet
-  qualificacao: "GPT-5-nano"  # qualify
-  oferta:       "GPT-5-mini"  # offer
-  objecoes:     "GPT-5-full"  # objection  (normalizado)
-  fechamento:   "GPT-5-mini"  # close
-  posvenda:     "GPT-5-nano"  # post_sale
-  entrega:      "GPT-5-nano"  # delivery (opcional)
-  pagamento:    "GPT-5-nano"  # payment (opcional)
-  features:     "GPT-5-nano"  # como-usar (opcional)
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5"       # era "GPT-5-full"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
+  entrega:      "gpt-5-nano"
+  pagamento:    "gpt-5-nano"
+  features:     "gpt-5-nano"
 
 # Fallbacks globais por etapa
 global_models:
-  recepcao:     "GPT-5-nano"
-  qualificacao: "GPT-5-nano"
-  oferta:       "GPT-5-mini"
-  objecoes:     "GPT-5-full"
-  fechamento:   "GPT-5-mini"
-  posvenda:     "GPT-5-nano"
+recepcao:     "gpt-5-nano"
+qualificacao: "gpt-5-nano"
+oferta:       "gpt-5-mini"
+objecoes:     "gpt-5"
+fechamento:   "gpt-5"
+posvenda:     "gpt-5-nano"
 
 typing:
   ms_per_char: 35
