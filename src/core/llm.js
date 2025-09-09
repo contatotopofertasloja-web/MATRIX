@@ -2,36 +2,27 @@
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
-// -----------------------------
-// Stage aliases (pt/en) → chave canônica
-// -----------------------------
+// ---- aliases de stage
 const STAGE_KEYS = {
-  recepcao:     ["recepcao", "recepção", "greet", "saudacao", "saudação", "start", "hello"],
-  qualificacao: ["qualificacao", "qualificação", "qualify"],
-  oferta:       ["oferta", "offer", "apresentacao", "apresentação", "pitch"],
-  // tolera ambos: "objeções" com acento e "objecoes" sem acento
-  objecoes:     ["objeções", "objecoes", "objection", "negociacao", "negociação", "objection_handling"],
-  fechamento:   ["fechamento", "close", "checkout", "closing"],
-  posvenda:     ["posvenda", "pósvenda", "postsale", "pos_venda", "pós_venda"],
+  recepcao: ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
+  qualificacao: ["qualificacao","qualificação","qualify"],
+  oferta: ["oferta","offer","apresentacao","apresentação","pitch"],
+  objecoes: ["objeções","objecoes","objection","negociacao","negociação","objection_handling"],
+  fechamento: ["fechamento","close","checkout","closing"],
+  posvenda: ["posvenda","pósvenda","postsale","pos_venda","pós_venda"],
 };
-
 function resolveStageKey(stage) {
   const t = String(stage || "").toLowerCase().trim();
-  for (const canonical in STAGE_KEYS) {
-    if (STAGE_KEYS[canonical].some(k => t.includes(k))) return canonical;
-  }
-  // fallback seguro sempre para chave conhecida
+  for (const canonical in STAGE_KEYS) if (STAGE_KEYS[canonical].some(k => t.includes(k))) return canonical;
   return "recepcao";
 }
 
-// -----------------------------
-// ENV defaults e mapas
-// -----------------------------
+// ---- ENV defaults
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
-              : Number.isFinite(+process.env.LLM_TEMPERATURE) ? +process.env.LLM_TEMPERATURE
-              : 0.5,
+            : Number.isFinite(+process.env.LLM_TEMPERATURE) ? +process.env.LLM_TEMPERATURE
+            : 0.5,
   retries:     Number.isFinite(+process.env.LLM_RETRIES) ? +process.env.LLM_RETRIES : 2,
   maxTokens: {
     nano: Number.isFinite(+settings?.llm?.maxTokens?.nano) ? +settings.llm.maxTokens.nano
@@ -45,61 +36,45 @@ const ENV_DEFAULTS = {
         : 2048,
   },
 };
-
-// Suporte a ENV `LLM_MODEL_*` como fallback global
 const ENV_STAGE_VARS = {
-  recepcao:     "LLM_MODEL_RECEPCAO",
+  recepcao: "LLM_MODEL_RECEPCAO",
   qualificacao: "LLM_MODEL_QUALIFICACAO",
-  oferta:       "LLM_MODEL_OFERTA",
-  objecoes:     "LLM_MODEL_OBJECOES",
-  fechamento:   "LLM_MODEL_FECHAMENTO",
-  posvenda:     "LLM_MODEL_POSVENDA",
+  oferta: "LLM_MODEL_OFERTA",
+  objecoes: "LLM_MODEL_OBJECOES",
+  fechamento: "LLM_MODEL_FECHAMENTO",
+  posvenda: "LLM_MODEL_POSVENDA",
 };
 
-// -----------------------------
-// Tradução automática de modelos "gpt-5-*" → compat hoje
-// -----------------------------
+// ---- Tradução automática 5.x → 4.x (compat)
 function translateModel(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return n;
-
-  // aliases comuns
   if (n === "gpt-5" || n === "gpt-5-full" || n === "gpt-5-pro") return "gpt-4o";
   if (n === "gpt-5-mini")  return "gpt-4o-mini";
   if (n === "gpt-5-nano")  return "gpt-4o-mini";
-
-  // já compatível? mantém
   return name;
 }
 
-// -----------------------------
-// Seleção de modelo por etapa
-// -----------------------------
+// ---- Seleção de modelo por etapa
 export function pickModelForStage(stageRaw) {
   const stage = resolveStageKey(stageRaw);
-
-  // 1) YAML específico por bot
   const fromYaml =
     settings?.models_by_stage?.[stage] ??
     (stage === "objecoes" ? settings?.models_by_stage?.["objeções"] : undefined);
   if (settings?.flags?.useModelsByStage && fromYaml) return fromYaml;
 
-  // 2) ENV global (Railway) — se houver
   const envKey = ENV_STAGE_VARS[stage];
   const fromEnv = envKey ? process.env[envKey] : undefined;
   if (settings?.flags?.fallbackToGlobal && fromEnv) return fromEnv;
 
-  // 3) YAML global_models como fallback
   const fromGlobalYaml =
     settings?.global_models?.[stage] ??
     (stage === "objecoes" ? settings?.global_models?.["objeções"] : undefined);
   if (settings?.flags?.fallbackToGlobal && fromGlobalYaml) return fromGlobalYaml;
 
-  // 4) fallback final
   return "GPT-5-nano";
 }
 
-// Heurística de max_tokens por “tamanho” do modelo
 function defaultMaxTokensForModel(modelName = "") {
   const m = String(modelName).toLowerCase();
   if (m.includes("nano")) return ENV_DEFAULTS.maxTokens.nano;
@@ -107,23 +82,17 @@ function defaultMaxTokensForModel(modelName = "") {
   return ENV_DEFAULTS.maxTokens.full;
 }
 
-// -----------------------------
-// Cliente OpenAI (lazy)
-// -----------------------------
+// ---- OpenAI client
 let openai = null;
 function getOpenAI() {
   if (!openai) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return openai;
 }
 
-// -----------------------------
-// callLLM com retries leves
-// -----------------------------
+// ---- callLLM (com retries leves)
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
-  // seleciona modelo (pode vir "gpt-5-*")
-  const rawModel = model || pickModelForStage(stage);
-  // traduz automaticamente para algo suportado hoje
-  const chosenModel = translateModel(rawModel);
+  const rawModel    = model || pickModelForStage(stage);
+  const chosenModel = translateModel(rawModel); // ↔ compat 4.x/5.x
 
   const temp = typeof temperature === "number" ? temperature : ENV_DEFAULTS.temperature;
   const mt   = Number.isFinite(+maxTokens) ? +maxTokens : defaultMaxTokensForModel(chosenModel);

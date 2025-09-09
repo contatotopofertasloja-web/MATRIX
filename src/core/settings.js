@@ -1,9 +1,4 @@
 // src/core/settings.js
-// Leitura centralizada das configs do BOT (ENV + YAML).
-// - Normaliza nomes dos estágios (recepcao, qualificacao, oferta, objecoes, fechamento, posvenda).
-// - Defaults seguros vindos de ENVs.
-// - Exporta { BOT_ID, settings } e também default=settings.
-
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,32 +6,25 @@ import YAML from 'yaml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const ROOT       = path.resolve(__dirname, '..', '..'); // raiz do projeto
+const ROOT       = path.resolve(__dirname, '..', '..');
 
 function env(name, def) {
   const v = process.env[name];
   return v === undefined || v === null || v === '' ? def : v;
 }
 
-// ---------------- BOT / CAMINHOS ----------------
+// BOT / PATHS
 export const BOT_ID = env('BOT_ID', 'claudia');
 const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
-// ---------------- NORMALIZAÇÃO ------------------
+// ALIASES DE STAGE → CANÔNICO
 const STAGE_KEY_ALIASES = new Map([
-  ['recepção', 'recepcao'],
-  ['recepcao', 'recepcao'],
-  ['qualificação', 'qualificacao'],
-  ['qualificacao', 'qualificacao'],
+  ['recepção', 'recepcao'], ['recepcao', 'recepcao'],
+  ['qualificação', 'qualificacao'], ['qualificacao', 'qualificacao'],
   ['oferta', 'oferta'],
-  ['objeções', 'objecoes'],
-  ['objeções', 'objecoes'],
-  ['objecoes', 'objecoes'],
-  ['obstrucoes', 'objecoes'],
+  ['objeções', 'objecoes'], ['objecoes', 'objecoes'], ['obstrucoes', 'objecoes'],
   ['fechamento', 'fechamento'],
-  ['pós-venda', 'posvenda'],
-  ['posvenda', 'posvenda'],
-  ['postsale', 'posvenda'],
+  ['pós-venda', 'posvenda'], ['posvenda', 'posvenda'], ['postsale', 'posvenda'],
 ]);
 
 function normalizeStageKey(k) {
@@ -44,7 +32,6 @@ function normalizeStageKey(k) {
   const base = String(k).trim().toLowerCase();
   return STAGE_KEY_ALIASES.get(base) || base;
 }
-
 function normalizeModelsByStage(map) {
   const out = {};
   if (map && typeof map === 'object') {
@@ -55,7 +42,7 @@ function normalizeModelsByStage(map) {
   return out;
 }
 
-// ---------------- DEFAULTS (ENV) ----------------
+// DEFAULTS (ENV)
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -89,7 +76,7 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
-// ---------------- DEFAULT DO ARQUIVO ------------
+// DEFAULT DO ARQUIVO (caso YAML ausente)
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -98,7 +85,7 @@ let fileSettings = {
   flags: { has_cod: true, send_opening_photo: true },
 };
 
-// ---------------- CARREGA YAML ------------------
+// CARREGA YAML
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
@@ -115,7 +102,7 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
-// ---------------- EXPORTA UNIFICADO -------------
+// EXPORTA UNIFICADO
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,
@@ -124,6 +111,4 @@ export const settings = {
   audio: AUDIO,
   global_models: GLOBAL_MODELS,
 };
-
-// Export default também (compatibilidade)
 export default settings;

@@ -9,68 +9,56 @@ product:
   price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
-
-  # Cupom só após pagamento confirmado (próxima compra)
   coupon_code: "TOP-AGO2025-PROGRVG-150"
   coupon_post_payment_only: true
-
-  # SLA de entrega (Logzz)
   delivery_sla:
-    capitals_hours: 24   # capitais até 24h
-    others_hours: 72     # demais localidades até 72h
-
-  # Modo de uso (features)
+    capitals_hours: 24
+    others_hours: 72
   how_to_use: >
     Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
     Opcional para maior durabilidade: finalize com chapinha.
-
-  # Upsell possível (chapinha)
   upsell_flatiron:
     enabled: true
     pitch: "Se quiser, te indico uma chapinha com ótimo custo-benefício para potencializar o efeito."
 
-# Mídia de abertura (imagem enviada antes da 1ª fala)
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 flags:
   has_cod: true
-  send_opening_photo: true          # envia a imagem de abertura
-  guardrails_strict: true           # regras rígidas (não inventar preço/link)
-  use_telemetry: true               # envia eventos para Postgres (CoNexus)
-  use_thompson: true                # habilita experimentos de oferta
-  allow_audio_in: true              # cliente pode enviar áudio
-  allow_audio_out: false            # (TTS futuro)
-  small_talk_soften: true           # tom leve e vendedor
-
-  # Compat com core/llm.js
+  send_opening_photo: true
+  guardrails_strict: true
+  use_telemetry: true
+  use_thompson: true
+  allow_audio_in: true
+  allow_audio_out: false
+  small_talk_soften: true
   useModelsByStage: true
   fallbackToGlobal: true
 
-# Prova social / marketing
 marketing:
-  sold_count: 40000                 # usado nas mensagens de objeção (prova social)
+  sold_count: 40000
 
-# Modelos por etapa — use chaves CANÔNICAS
+# Modelos por etapa (podem ser gpt-5-*, o core traduz p/ 4.x se precisar)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
   oferta:       "gpt-5-mini"
-  objecoes:     "gpt-5"       # era "GPT-5-full"
+  objecoes:     "gpt-5"
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
   entrega:      "gpt-5-nano"
   pagamento:    "gpt-5-nano"
   features:     "gpt-5-nano"
 
-# Fallbacks globais por etapa
+# Fallbacks globais por etapa (indentação fixada)
 global_models:
-recepcao:     "gpt-5-nano"
-qualificacao: "gpt-5-nano"
-oferta:       "gpt-5-mini"
-objecoes:     "gpt-5"
-fechamento:   "gpt-5"
-posvenda:     "gpt-5-nano"
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
 
 typing:
   ms_per_char: 35
@@ -78,48 +66,30 @@ typing:
   max_ms: 5000
 
 messages:
-  # Saudação inicial (texto aparece junto/abaixo da foto, se habilitada)
   opening:
     - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
-
-  # Perguntas curtas de diagnóstico (o LLM escolhe só 1)
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
-
-  # Oferta NÃO menciona cupom (cupom vai só pós-pagamento)
   offer_templates:
     - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
     - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
-
-  # Objeções — prova social + depoimentos no site (no perfil) + modo de uso
   objection_handles:
     - "Super entendo! Já são mais de {{sold_count}} unidades vendidas em todo o Brasil ✅ No nosso site (link no perfil) você confere depoimentos reais e o modo de uso passo a passo. Quer que eu resuma aqui?"
     - "Fica tranquila: temos registro, garantia e acompanhamento. Passamos de {{sold_count}} unidades vendidas no Brasil e há vários depoimentos no site (link no perfil). Prefere que eu explique rapidinho o modo de uso por aqui?"
     - "Claro! Hoje passamos de {{sold_count}} unidades vendidas e o site (no perfil) traz avaliações de clientes e como aplicar. Posso te dar um passo a passo resumido agora?"
-
-  # Fechamento sem cupom; reforça COD + agendamento/acompanhamento via WhatsApp
   closing:
     - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para agendar e acompanhar; se houver imprevisto, avise o entregador 💚"
-
-  # Pós-pagamento (texto “paguei/comprovante” ou webhook)
   postsale_pre_coupon:
     - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega. Qualquer imprevisto, avise o entregador, tá bem? 💚"
     - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
-
   postsale_after_payment_with_coupon:
     - "Como agradecimento, aqui vai um cupom de desconto para a PRÓXIMA compra: {{coupon_code}} 🎁"
-
-  # Quantos dias depois do pagamento a Cláudia retorna no pós-venda
   postsale_followup_days: 7
-
-  # (opcionais) mensagens auxiliares para features/delivery/payment
   features_intro:
     - "Claro! Te passo o modo de uso resumido:"
-
   delivery_info:
     - "Nosso prazo é de até {{delivery_sla.capitals_hours}}h para capitais e até {{delivery_sla.others_hours}}h para demais regiões."
-
   payment_info:
     - "Pagamento na entrega (COD). O link que eu envio é apenas para confirmar o pedido e acompanhar pelo WhatsApp 🙂"
 
@@ -130,8 +100,6 @@ guardrails:
   allowed_links:
     - "{{checkout_link}}"
     - "{{site_url}}"
-
-  # Campos que NÃO devem ser alterados por operadores
   freeze_fields:
     - "price_target"
     - "checkout_link"
@@ -140,7 +108,7 @@ guardrails:
 
 telemetry:
   enabled: true
-  db: "postgres"              # CoNexus
+  db: "postgres"
   tables:
     events: "telemetry_events"
     sessions: "telemetry_sessions"
