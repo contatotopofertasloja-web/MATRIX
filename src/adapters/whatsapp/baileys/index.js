@@ -1,11 +1,11 @@
 ﻿// src/adapters/whatsapp/baileys/index.js
 // ---------------------------------------------------------------------------
-// Adapter Baileys robusto (ESM/CJS e pacotes @whiskeysockets / @adiwajshing)
+// Adapter Baileys robusto (ESM) com compatibilidade para código legado.
 // ---------------------------------------------------------------------------
 
 import * as qrcode from 'qrcode';
 
-// 🔑 carrega dinamicamente o Baileys do pacote novo; se falhar, tenta o antigo
+// tenta importar do pacote oficial ou fallback antigo
 let B = null;
 try {
   B = await import('@whiskeysockets/baileys');
@@ -18,15 +18,9 @@ try {
 }
 
 function pick(fnName) {
-  // tenta pegar tanto de B quanto de B.default (CJS ↔ ESM)
-  return (
-    B?.[fnName] ||
-    B?.default?.[fnName] ||
-    null
-  );
+  return B?.[fnName] || B?.default?.[fnName] || null;
 }
 function pickMakeWASocket() {
-  // algumas builds expõem como default, outras como named export
   return (
     pick('makeWASocket') ||
     (typeof B?.default === 'function' ? B.default : null) ||
@@ -39,32 +33,21 @@ const useMultiFileAuthState = pick('useMultiFileAuthState');
 const fetchLatestBaileysVersion = pick('fetchLatestBaileysVersion');
 const DisconnectReason = pick('DisconnectReason');
 
-// validações claras (ajudam a diagnosticar se o pacote está ausente desinstalado)
 if (typeof makeWASocket !== 'function') {
-  throw new TypeError(
-    '[baileys] makeWASocket indisponível — verifique se @whiskeysockets/baileys (ou @adiwajshing/baileys) está instalado e compatível'
-  );
-}
-if (typeof useMultiFileAuthState !== 'function' || typeof fetchLatestBaileysVersion !== 'function') {
-  throw new TypeError(
-    '[baileys] exports essenciais ausentes (useMultiFileAuthState/fetchLatestBaileysVersion)'
-  );
+  throw new TypeError('[baileys] Pacote não encontrado ou incompatível');
 }
 
-// ------------------------- ENV HELPERS -------------------------
+// ------------------------- ENV -------------------------
 const bool = (v, d = false) => {
   if (v === undefined || v === null || v === '') return d;
   const s = String(v).trim().toLowerCase();
-  return s === '1' || s === 'true' || s === 'y' || s === 'yes' || s === 'on';
+  return ['1','true','y','yes','on'].includes(s);
 };
 const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
-// ENVs
 const {
   WPP_AUTH_DIR = '/app/baileys-auth-v2',
   WPP_SESSION = 'claudia-main',
-  WPP_DEVICE = 'Matrix-Node',
-
   WPP_PRINT_QR = 'true',
   SEND_TYPING = 'true',
   TYPING_MS_PER_CHAR = '35',
@@ -87,8 +70,8 @@ let _lastQrText = null;
 let _onMessageHandler = null;
 let _booting = false;
 
+// helpers
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
 function normalizeJid(input) {
   const digits = String(input || '').replace(/\D/g, '');
   if (!digits) throw new Error('destinatário inválido');
@@ -130,68 +113,48 @@ export const adapter = {
     await simulateTyping(jid, msg.length || 12);
     return sock.sendMessage(jid, { text: msg });
   },
-  async sendImage(to, url, caption = '') {
+  async sendImage(to, url, caption='') {
     if (!sock) throw new Error('WhatsApp não inicializado');
     const jid = normalizeJid(to);
-    await simulateTyping(jid, String(caption || '').length || 12);
-    return sock.sendMessage(jid, { image: { url: String(url) }, caption: String(caption || '') });
+    return sock.sendMessage(jid, { image: { url: String(url) }, caption });
   },
 };
+
+// compatibilidade legado
+export async function createBaileysClient() {
+  await init();
+  return { onMessage: adapter.onMessage, sendMessage: adapter.sendMessage, sendImage: adapter.sendImage, isReady, getQrDataURL, stop };
+}
+
+// ------------------------- BOOT -------------------------
 export async function stop() {
   try { if (sock) await sock.logout(); } catch {}
   sock = null; _isReady = false; _lastQrText = null;
 }
-
-// Boot automático
-boot().catch(err => console.error('[baileys][boot][fatal]', err));
-export async function init() { return boot(); }
-
-async function boot() {
+export async function init() {
   if (_booting) return;
   _booting = true;
   try {
-    const authPath = `${WPP_AUTH_DIR}/${WPP_SESSION}`;
-    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+    const { state, saveCreds } = await useMultiFileAuthState(`${WPP_AUTH_DIR}/${WPP_SESSION}`);
     const { version } = await fetchLatestBaileysVersion();
-
-    console.log('[baileys] WA version:', Array.isArray(version) ? version.join('.') : version);
-    console.log('[baileys] Auth path:', authPath);
-
     sock = makeWASocket({
       version,
       auth: state,
       printQRInTerminal: PRINT_QR,
-      browser: ['Matrix', WPP_DEVICE, '1.0.0'],
+      browser: ['Matrix', 'Claudia', '1.0.0'],
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: true,
-      syncFullHistory: false,
     });
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-      if (qr) {
-        _lastQrText = qr;
-        if (!PRINT_QR) console.log('[baileys] QR atualizado (GET /wpp/qr)');
-      }
-      if (connection === 'open') {
-        _isReady = true; _lastQrText = null;
-        console.log('[baileys] Conectado ✅');
-      }
+      if (qr) { _lastQrText = qr; if (!PRINT_QR) console.log('[WPP] QR atualizado (GET /wpp/qr)'); }
+      if (connection === 'open') { _isReady = true; _lastQrText = null; console.log('[WPP] Conectado ✅'); }
       if (connection === 'close') {
         _isReady = false;
-        const err = lastDisconnect?.error;
-        const code =
-          err?.output?.statusCode ||
-          err?.status?.code ||
-          err?.code ||
-          (String(err?.message || '').includes('logged out') ? DisconnectReason?.loggedOut : 'unknown');
-        console.warn('[baileys] close — code:', code, '-', err?.message || '');
-        if (code !== (DisconnectReason?.loggedOut ?? 'loggedOut')) {
-          console.warn('[baileys] Reconnecting in 2s…');
-          setTimeout(() => boot().catch(e => console.error('[baileys][reboot]', e)), 2000);
-        } else {
-          console.error('[baileys] Logout detectado — reescaneie o QR.');
-        }
+        const code = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.code || 'unknown';
+        console.warn('[WPP] Conexão fechada', code);
+        if (code !== DisconnectReason.loggedOut) setTimeout(() => init().catch(console.error), 2000);
       }
     });
 
@@ -199,54 +162,28 @@ async function boot() {
       try {
         if (m.type !== 'notify') return;
         const msg = m.messages?.[0];
-        if (!msg || msg.key.fromMe || !msg.message) return;
+        if (!msg || msg.key.fromMe) return;
         const from = msg.key.remoteJid;
         if (!from || from.endsWith('@g.us')) return;
 
-        const text =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          msg.message.imageMessage?.caption ||
-          msg.message.videoMessage?.caption ||
-          msg.message.buttonsResponseMessage?.selectedDisplayText ||
-          msg.message.listResponseMessage?.singleSelectReply?.selectedRowId ||
-          '';
+        const text = msg.message?.conversation
+          || msg.message?.extendedTextMessage?.text
+          || msg.message?.imageMessage?.caption
+          || msg.message?.videoMessage?.caption
+          || '';
 
-        const hasMedia = Boolean(
-          msg.message.imageMessage ||
-          msg.message.videoMessage ||
-          msg.message.audioMessage ||
-          msg.message.documentMessage ||
-          msg.message.stickerMessage
-        );
+        const hasMedia = !!(msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.audioMessage);
 
         if (typeof _onMessageHandler === 'function') {
-          const reply = await _onMessageHandler({ from, text: String(text || '').trim(), hasMedia, raw: msg });
-          if (typeof reply === 'string' && reply.trim()) {
-            await adapter.sendMessage(from, reply);
+          const maybe = await _onMessageHandler({ from, text, hasMedia, raw: msg });
+          if (typeof maybe === 'string' && maybe.trim()) {
+            await adapter.sendMessage(from, maybe);
           }
         }
-      } catch (e) {
-        console.error('[baileys][onMessage][err]', e);
-      }
+      } catch (e) { console.error('[baileys][upsert]', e); }
     });
-  } catch (e) {
-    console.error('[baileys][boot][error]', e);
-    throw e;
-  } finally {
-    _booting = false;
-  }
+  } finally { _booting = false; }
 }
 
-// Compat legado
-export async function createBaileysClient() {
-  await init();
-  return {
-    onMessage: adapter.onMessage,
-    sendMessage: adapter.sendMessage,
-    sendImage: adapter.sendImage,
-    stop,
-    isReady,
-    getQrDataURL,
-  };
-}
+// boot imediato
+init().catch(err => console.error('[baileys][init]', err));
