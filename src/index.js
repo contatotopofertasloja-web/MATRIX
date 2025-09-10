@@ -1,5 +1,4 @@
-﻿// src/index.js — Cláudia (WhatsApp) — HTTP + WPP + Outbox (Redis) + ASR + LLM
-// Hotfix v2: prompt/LLM failover (sem "travadinha"), mantendo DIRECT_SEND/outbox.
+﻿// src/index.js — Matrix IA 2.0 (enxuto): HTTP + WPP + Outbox/Direct + ASR + LLM via hooks de bot
 
 import express from 'express';
 import cors from 'cors';
@@ -12,7 +11,7 @@ import { BOT_ID, settings } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 import { callLLM } from './core/llm.js';
-import { buildPrompt } from '../configs/bots/claudia/prompts/index.js';
+import { getBotHooks } from './core/bot-registry.js';
 
 let transcribeAudio = null;
 try { const asrMod = await import('./core/asr.js'); transcribeAudio = asrMod?.transcribeAudio || asrMod?.default || null; }
@@ -36,7 +35,7 @@ const ADAPTER_NAME  = String(process.env.WPP_ADAPTER || 'baileys');
 const ECHO_MODE     = envBool(process.env.ECHO_MODE, false);
 let   intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
 let   sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
-let   DIRECT_SEND   = envBool(process.env.DIRECT_SEND, true); // fica true pro estável
+let   DIRECT_SEND   = envBool(process.env.DIRECT_SEND, true);
 
 // Redis / Outbox
 const REDIS_MAIN_URL     = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
@@ -45,7 +44,7 @@ const OUTBOX_CONCURRENCY = envNum(process.env.QUEUE_OUTBOX_CONCURRENCY, 1);
 
 const outbox = await createOutbox({ topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONCURRENCY, redisUrl: REDIS_MAIN_URL });
 
-// Envio direto
+// Envio base
 async function sendViaAdapter(to, kind, payload) {
   if (!to || !sendEnabled) return;
   if (kind === 'image') {
@@ -56,70 +55,36 @@ async function sendViaAdapter(to, kind, payload) {
     if (text) await adapter.sendMessage(to, text);
   }
 }
-
-// Decide fila x direto
 async function enqueueOrDirect({ to, kind='text', payload={} }) {
   try {
     if (DIRECT_SEND || !outbox.isConnected()) {
-      console.log('[send][direct]', { to, kind });
       await sendViaAdapter(to, kind, payload);
       return { path: 'direct' };
     }
     await outbox.publish({ to, kind, payload });
-    console.log('[send][outbox]', { to, kind, topic: OUTBOX_TOPIC });
     return { path: 'outbox' };
-  } catch (e) {
-    console.warn('[send][fallback->direct]', e?.message || e);
+  } catch {
     await sendViaAdapter(to, kind, payload);
     return { path: 'direct-fallback' };
   }
 }
 
-// Worker da fila
+// Worker outbox
 await outbox.start(async (job) => {
   const { to, kind='text', payload={} } = job || {};
   await sendViaAdapter(to, kind, payload);
 });
 
-// Flows
+// Flows e hooks
 await loadFlows(BOT_ID);
+const hooks = await getBotHooks();
 const sentOpening = new Set();
 
-// ====== PROMPT FAILOVER =======================================================
-function safeBuildPrompt({ stage, message }) {
-  try {
-    const p = buildPrompt({ stage, message });
-    if (p && (p.system || p.user)) return p;
-    throw new Error('buildPrompt retornou vazio');
-  } catch (e) {
-    console.error('[prompt][fallback]', e?.message || e);
-    const price    = settings?.product?.price_target || process.env.PRICE_TARGET || 170;
-    const checkout = settings?.product?.checkout_link || process.env.CHECKOUT_LINK || '';
-    const system = [
-      'Você é a Cláudia, vendedora educada e objetiva. Responda em PT-BR, frases curtas.',
-      'Produto ÚNICO. Nunca invente produtos, preços ou links.',
-      `Preço promocional: R$${price}. Link seguro: ${checkout || 'link indisponível no momento'}.`,
-      'Se perguntarem preço → diga R$${price} e ofereça o link.',
-      'Se perguntarem uso → explique passo a passo em 2-3 linhas.',
-      'Se houver objeção → responda com segurança (sem prometer o que não temos).',
-    ].join(' ');
-    const user = String(message || '');
-    return { system, user };
-  }
-}
-
-// ====== FAILOVER DE RESPOSTA COMERCIAL =======================================
-function salesFallbackText() {
-  const price    = settings?.product?.price_target || process.env.PRICE_TARGET || 170;
-  const checkout = settings?.product?.checkout_link || process.env.CHECKOUT_LINK || '';
-  return `Promo: R$${price} na entrega. Posso te mandar o link do checkout${checkout ? ` (${checkout})` : ''}?`;
-}
-
-// ====== ASR helpers ==========================================================
+// Helpers ASR
 async function tryGetAudioBuffer(raw) {
   try {
     if (typeof adapter?.getAudioBuffer === 'function') return await adapter.getAudioBuffer(raw);
-    if (typeof adapter?.downloadMedia === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
+    if (typeof adapter?.downloadMedia  === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
     return null;
   } catch (e) { console.warn('[ASR] tryGetAudioBuffer:', e?.message || e); return null; }
 }
@@ -135,20 +100,26 @@ async function transcribeIfPossible(buf, mime='audio/ogg') {
   } catch (e) { console.warn('[ASR] transcribeIfPossible:', e?.message || e); return null; }
 }
 
-// ====== Handler principal =====================================================
+// Handler principal
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
   try {
-    if (settings.flags?.send_opening_photo && !sentOpening.has(from) && settings.media?.opening_photo_url) {
-      await enqueueOrDirect({ to: from, kind: 'image', payload: { url: settings.media.opening_photo_url, caption: '' } });
+    // (0) mídia de abertura via hook
+    if (!sentOpening.has(from)) {
+      const media = await hooks.openingMedia({ settings });
+      if (media?.url) {
+        await enqueueOrDirect({ to: from, kind: 'image', payload: { url: media.url, caption: media.caption || '' } });
+      }
       sentOpening.add(from);
     }
 
+    // (1) echo
     if (ECHO_MODE && text) {
       await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } });
       return '';
     }
 
+    // (2) texto base
     let msgText = (text || '').trim();
     if (hasMedia && !msgText) {
       const buf = await tryGetAudioBuffer(raw);
@@ -157,13 +128,19 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) return '';
 
+    // (3) pós-venda manual
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
-      await handlePaymentConfirmed(from);
+      await hooks.onPaymentConfirmed({
+        jid: from,
+        settings,
+        send: async (to, text) => enqueueOrDirect({ to, payload: { text } }),
+      });
       return '';
     }
 
+    // (4) LLM com hook de prompt
     const intent = intentOf(msgText) || 'greet';
-    const { system, user } = safeBuildPrompt({ stage: intent, message: msgText });
+    const { system, user } = await hooks.safeBuildPrompt({ stage: intent, message: msgText, settings });
 
     try {
       const { text: reply } = await callLLM({ stage: intent, system, prompt: user });
@@ -171,48 +148,41 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
         await enqueueOrDirect({ to: from, payload: { text: reply } });
         return '';
       }
-      // vazio → fallback comercial
-      await enqueueOrDirect({ to: from, payload: { text: salesFallbackText() } });
+      const fb = await hooks.fallbackText({ stage: intent, message: msgText, settings });
+      await enqueueOrDirect({ to: from, payload: { text: fb } });
       return '';
     } catch (e) {
-      console.error('[LLM][error]', e?.message || e);
-      await enqueueOrDirect({ to: from, payload: { text: salesFallbackText() } });
+      console.error('[LLM]', e?.message || e);
+      const fb = await hooks.fallbackText({ stage: intent, message: msgText, settings });
+      await enqueueOrDirect({ to: from, payload: { text: fb } });
       return '';
     }
   } catch (e) {
-    console.error('[onMessage][error]', e);
-    await enqueueOrDirect({ to: from, payload: { text: salesFallbackText() } });
+    console.error('[onMessage]', e);
+    const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
+    await enqueueOrDirect({ to: from, payload: { text: fb } });
     return '';
   }
 });
 
-// ====== Pós-venda após pagamento =============================================
-async function handlePaymentConfirmed(jid) {
-  try {
-    for (const line of settings.messages?.postsale_pre_coupon ?? []) {
-      await enqueueOrDirect({ to: jid, kind: 'text', payload: { text: line } });
-    }
-    if (settings.product?.coupon_post_payment_only && settings.product?.coupon_code) {
-      const tpl = settings.messages?.postsale_after_payment_with_coupon?.[0] || '';
-      const txt = tpl.replace('{{coupon_code}}', settings.product.coupon_code);
-      if (txt) await enqueueOrDirect({ to: jid, kind: 'text', payload: { text: txt } });
-    }
-  } catch (e) { console.error('[payment][confirm][error]', e); }
-}
-
-// ====== Rotas HTTP ============================================================
-const sendLimiter = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false });
+// Rotas HTTP
+const limiter = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false });
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'Matrix IA 2.0', bot: BOT_ID, adapter: ADAPTER_NAME, ready: wppReady(),
-    env: process.env.NODE_ENV || 'production', ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND } });
+  res.json({
+    ok: true, service: 'Matrix IA 2.0', bot: BOT_ID, adapter: ADAPTER_NAME,
+    ready: wppReady(), env: process.env.NODE_ENV || 'production',
+    ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND },
+  });
 });
 
 app.get('/wpp/health', (_req, res) => {
-  res.json({ ok: true, ready: wppReady(), adapter: ADAPTER_NAME, session: process.env.WPP_SESSION || 'default',
+  res.json({
+    ok: true, ready: wppReady(), adapter: ADAPTER_NAME, session: process.env.WPP_SESSION || 'default',
     backend: outbox.backend(), topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONCURRENCY,
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND },
-    redis: { url: REDIS_MAIN_URL ? 'set' : 'unset', connected: outbox.isConnected() } });
+    redis: { url: REDIS_MAIN_URL ? 'set' : 'unset', connected: outbox.isConnected() },
+  });
 });
 
 app.get('/wpp/qr', async (req, res) => {
@@ -240,7 +210,7 @@ app.get('/ops/mode', (req, res) => {
 
 app.get('/ops/status', (_req, res) => res.json({ ok: true, intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND }));
 
-app.post('/wpp/send', sendLimiter, async (req, res) => {
+app.post('/wpp/send', limiter, async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
     if (!to || (!text && !imageUrl)) return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
@@ -254,7 +224,13 @@ app.post('/webhook/payment', async (req, res) => {
   try {
     const { token, to, status } = req.body || {};
     if (token !== process.env.WEBHOOK_TOKEN) return res.status(401).end();
-    if (String(status).toLowerCase() === 'paid' && to) await handlePaymentConfirmed(String(to));
+    if (String(status).toLowerCase() === 'paid' && to) {
+      await hooks.onPaymentConfirmed({
+        jid: String(to),
+        settings,
+        send: async (jid, text) => enqueueOrDirect({ to: jid, payload: { text } }),
+      });
+    }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
@@ -270,7 +246,7 @@ app.post('/inbound', async (req, res) => {
 });
 
 const server = app.listen(PORT, HOST, () => {
-  console.log(`[HTTP] Cláudia on http://${HOST}:${PORT}`);
+  console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`);
 });
 
 function gracefulClose(signal) {
