@@ -39,11 +39,11 @@ flags:
 marketing:
   sold_count: 40000
 
-# Modelos por etapa (podem ser gpt-5-*, o core traduz p/ 4.x se precisar)
+# Modelos por etapa (gpt-5-* → o core traduz p/ 4.x se necessário)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5-mini"
+  oferta:       "gpt-5"
   objecoes:     "gpt-5"
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
@@ -55,7 +55,7 @@ models_by_stage:
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5-mini"
+  oferta:       "gpt-5"
   objecoes:     "gpt-5"
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"

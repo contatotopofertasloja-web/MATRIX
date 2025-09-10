@@ -42,7 +42,7 @@ function normalizeModelsByStage(map) {
   return out;
 }
 
-// DEFAULTS (ENV)
+// DEFAULTS (ENV) — modelos globais
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -52,11 +52,13 @@ const GLOBAL_MODELS = {
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
+// FLAGS de seleção
 const FLAGS = {
   useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
   fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
 };
 
+// Áudio / TTS
 const AUDIO = {
   asrProvider: env('ASR_PROVIDER', 'openai'),
   asrModel:    env('ASR_MODEL',    'whisper-1'),
@@ -64,6 +66,7 @@ const AUDIO = {
   ttsVoice:    env('TTS_VOICE',    'alloy'),
 };
 
+// LLM defaults
 const LLM_DEFAULTS = {
   provider:    env('LLM_PROVIDER', 'openai'),
   temperature: Number(env('LLM_TEMPERATURE', '0.5')),
@@ -109,6 +112,6 @@ export const settings = {
   llm: LLM_DEFAULTS,
   flags: { ...fileSettings.flags, ...FLAGS },
   audio: AUDIO,
-  global_models: GLOBAL_MODELS,
+  global_models: { ...GLOBAL_MODELS, ...(fileSettings.global_models || {}) },
 };
 export default settings;
