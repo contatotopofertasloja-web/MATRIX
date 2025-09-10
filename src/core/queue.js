@@ -20,25 +20,19 @@ function makeRedisClient(url, label) {
     enableReadyCheck: true,
     connectTimeout: 8000,
     keepAlive: 15000,
-    maxRetriesPerRequest: null,              // não estourar promessas no block pop
+    maxRetriesPerRequest: null,
     autoResubscribe: true,
     autoResendUnfulfilledCommands: true,
-    retryStrategy: (times) => Math.min(30000, 1000 + times * 500), // 1s→30s
+    retryStrategy: (times) => Math.min(30000, 1000 + times * 500),
     reconnectOnError: (err) => {
       const code = err?.code || '';
       const msg  = String(err?.message || '');
-      return (
-        code === 'ECONNRESET' ||
-        code === 'EPIPE'     ||
-        code === 'ETIMEDOUT' ||
-        msg.includes('READONLY')
-      );
+      return (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ETIMEDOUT' || msg.includes('READONLY'));
     },
-    tls: useTLS ? { rejectUnauthorized: false } : undefined, // proxies com cert self-signed
+    tls: useTLS ? { rejectUnauthorized: false } : undefined,
   };
 
   const r = new Redis(url, opts);
-  // Logs + listener de erro para evitar "Unhandled error event"
   r.on('connect', () => console.log(`[redis][${label}] connected`));
   r.on('ready',   () => console.log(`[redis][${label}] ready`));
   r.on('end',     () => console.warn(`[redis][${label}] connection ended`));
@@ -66,6 +60,7 @@ function makeMemoryImpl({ topic, concurrency }) {
     isConnected: () => true,
     async publish(msg) { q.push({ ...msg, _ts: Date.now() }); },
     async start(handler) {
+      console.log(`[outbox] memory backend start (topic=${topic})`);
       const tick = setInterval(() => {
         if (closing) return clearInterval(tick);
         while (running < concurrency && q.length) drain(handler);
@@ -76,18 +71,19 @@ function makeMemoryImpl({ topic, concurrency }) {
 }
 
 async function makeRedisImpl({ topic, concurrency, url }) {
-  const cmd = makeRedisClient(url, 'outbox');  // comandos (LPUSH)
-  const blk = makeRedisClient(url, 'outboxB'); // bloqueante (BRPOP)
+  const cmd = makeRedisClient(url, 'outbox');
+  const blk = makeRedisClient(url, 'outboxB');
 
   let closing = false;
 
   async function publish(msg) {
     try {
       const body = JSON.stringify({ ...msg, _ts: Date.now() });
-      // FIFO: LPUSH + BRPOP (consome do mesmo lado)
-      await cmd.lpush(topic, body);
+      await cmd.lpush(topic, body); // FIFO com LPUSH + BRPOP no mesmo tópico
+      return true;
     } catch (e) {
       console.error('[outbox][publish]', e?.message || e);
+      return false;
     }
   }
 
@@ -96,8 +92,7 @@ async function makeRedisImpl({ topic, concurrency, url }) {
     while (!closing) {
       try {
         if (blk.status !== 'ready') { await sleep(250); continue; }
-        // timeout 5s para poder checar "closing"
-        const res = await blk.brpop(topic, 5);
+        const res = await blk.brpop(topic, 5); // 5s timeout
         if (!res) continue;
         const [, body] = res;
         let job = null;
@@ -120,11 +115,11 @@ async function makeRedisImpl({ topic, concurrency, url }) {
     publish,
     async start(handler) {
       const conc = Math.max(1, Number(concurrency) || 1);
-      for (let i = 0; i < conc; i++) workerLoop(i + 1, handler); // fire & forget
+      for (let i = 0; i < conc; i++) workerLoop(i + 1, handler);
+      console.log(`[outbox] redis backend start (topic=${topic}, concurrency=${conc})`);
     },
     async stop() {
       closing = true;
-      // deixa o BRPOP expirar e os workers encerrarem
       await sleep(220);
       try { cmd.disconnect(); } catch {}
       try { blk.disconnect(); } catch {}
@@ -135,7 +130,6 @@ async function makeRedisImpl({ topic, concurrency, url }) {
 export async function createOutbox({
   topic = env('OUTBOX_TOPIC', `outbox:${env('WPP_SESSION', 'default')}`),
   concurrency = Number(env('QUEUE_OUTBOX_CONCURRENCY', '4')),
-  // prioriza MATRIX_REDIS_URL (nosso “caminho alternativo”), cai para REDIS_URL
   redisUrl = env('MATRIX_REDIS_URL', env('REDIS_URL', '')),
 } = {}) {
   if (redisUrl) {
