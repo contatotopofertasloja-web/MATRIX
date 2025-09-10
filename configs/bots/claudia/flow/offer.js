@@ -1,7 +1,10 @@
 // configs/bots/claudia/flow/offer.js
 import { callLLM } from '../../../../src/core/llm.js';
 import { settings } from '../../../../src/core/settings.js';
+import { getSlot, setStage } from '../../../../src/core/fsm.js';
+import { intentOf } from '../../../../src/core/intent.js';
 
+// --- helpers (mantidos/estendidos) ---
 function clampPrice(p) {
   const min = Number(settings?.guardrails?.price_min ?? 0);
   const max = Number(settings?.guardrails?.price_max ?? 999999);
@@ -21,37 +24,49 @@ function sanitizeLinks(text) {
 }
 
 export async function offer({ userId, text }) {
+  // Se o cliente já pedir direto o link/fechamento, pulamos pro fechamento
+  const wantClose = ['close'].includes(intentOf(text));
+  if (wantClose) {
+    await setStage(userId, 'fechamento');
+    return 'Perfeito, já posso te enviar o link do checkout. Posso mandar agora?';
+  }
+
   const priceTarget = clampPrice(settings?.product?.price_target ?? 170);
   const checkout = String(settings?.product?.checkout_link || '').trim();
   const templates = (settings?.messages?.offer_templates || [
     "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?",
-  ]).filter(t => !/\{\{coupon_code\}\}/i.test(t)); // remove sugestões com cupom
+  ]).filter(t => !/\{\{coupon_code\}\}/i.test(t)); // sem cupom na oferta
+
+  // Personaliza com os slots (não repete perguntas)
+  const tipo = await getSlot(userId, 'tipo_cabelo');
+  const objetivo = await getSlot(userId, 'objetivo');
+  const quimica = await getSlot(userId, 'tem_quimica');
+  const contexto = [
+    tipo ? `Cabelo: ${tipo}` : null,
+    objetivo ? `Objetivo: ${objetivo}` : null,
+    quimica ? `Química: ${quimica}` : null,
+  ].filter(Boolean).join(' | ') || '(sem slots)';
 
   const prompt = `
-Dados do produto:
-- Preço alvo: R$ ${priceTarget}
-- Checkout: ${checkout || '(definir no settings.yaml)'}
-
+Cliente: ${contexto}
+Preço alvo: R$ ${priceTarget}
 Regras:
 - NÃO mencione cupom na oferta.
-- NÃO envie depoimentos/antes-depois nem links para depoimentos; diga que estão no site "no perfil" (sem colar URL).
-- Não invente valores fora do range ${settings?.guardrails?.price_min ?? '?'}–${settings?.guardrails?.price_max ?? '?'}.
-- Só inclua link se estiver em "allowed_links" (senão, peça autorização para enviar).
-- Máx 2 linhas. Tom vendedor.
-
-Sugestões de copy:
+- Máx 2 linhas. Tom vendedor confiante.
+- Peça confirmação pra enviar link do checkout (sem colar o link ainda).
+Sugestões:
 ${templates.map(t => `• ${t}`).join('\n')}
 `;
 
   const { text: llm } = await callLLM({
     stage: 'oferta',
-    system: `Você é ${settings?.persona_name || 'Cláudia'}, vendedora confiante.
-Ofereça o produto com clareza e CTA (pergunte se pode enviar o link). Não fale de cupom.
-Se mencionarem depoimentos, diga que estão no site do perfil, sem colar link.`,
+    system: `Você é ${settings?.persona_name || 'Cláudia'}, vendedora objetiva.
+Ofereça com CTA (pergunte se pode enviar o link). Não fale de cupom.`,
     prompt,
   });
 
   const out = (llm || '').replace(/\{\{price_target\}\}/g, String(priceTarget))
                          .replace(/\{\{checkout_link\}\}/g, checkout || '');
+  await setStage(userId, 'oferta'); // garante stage
   return sanitizeLinks(out).trim() || `Consigo por R$${priceTarget}. Posso te mandar o link do checkout agora?`;
 }

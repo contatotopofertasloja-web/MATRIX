@@ -4,6 +4,12 @@
 
 import { qpushLeft, qpopRightBlocking } from './redis.js';
 import { allowSend } from './rate-limit.js';
+// src/queue/dispatcher.js
+// Alias para manter compatibilidade com código antigo.
+// Reexporta o dispatcher oficial do core.
+
+export * from '../core/queue/dispatcher.js';
+export { default } from '../core/queue/dispatcher.js';
 
 export async function enqueueOutbox({ topic, to, content, meta = {} }) {
   if (!topic) throw new Error('enqueueOutbox: topic obrigatório');

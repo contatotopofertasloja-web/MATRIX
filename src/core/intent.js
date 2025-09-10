@@ -1,6 +1,5 @@
-// src/core/intent.js — versão aprimorada (Matrix IA 2.0)
-// Intenções: greet | qualify | offer | objection | close | post_sale | delivery | payment | features
-// Mantém compat com teu intent anterior, mas com mais sinais, prioridades e robustez. 
+// src/core/intent.js — versão sólida (Matrix IA 2.0)
+// Intenções: greet | qualify | offer | objection | close | postsale | delivery | payment | features
 
 // --- Utils: normalização segura ---
 function stripAccents(s = '') {
@@ -58,7 +57,7 @@ export function intentOf(textRaw) {
   const t = clean(raw);
 
   // 1) Pagamento confirmado → o handler usa isso para liberar cupom depois
-  if (PAYMENT_CONFIRMED.test(t)) return 'post_sale';
+  if (PAYMENT_CONFIRMED.test(t)) return 'postsale';
 
   // 2) Prioridade alta
   if (RX.close.test(t))     return 'close';
@@ -68,7 +67,7 @@ export function intentOf(textRaw) {
   if (RX.payment.test(t))   return 'payment';
   if (RX.features.test(t))  return 'features';
   if (RX.objection.test(t)) return 'objection';
-  if (RX.postsale.test(t))  return 'post_sale';
+  if (RX.postsale.test(t))  return 'postsale';
   if (RX.offer.test(t))     return 'offer';
 
   // 4) Heurísticas suaves de funil

@@ -8,7 +8,7 @@ import { settings } from '../../../../src/core/settings.js';
  * - Reforça acompanhamento por WhatsApp
  * - Sem cupom (cupom só após confirmação do pagamento via webhook/handler)
  */
-export async function postSale({ userId, text }) {
+export async function postsale({ userId, text }) {
   const msgs = [
     ...(settings?.messages?.postsale_pre_coupon || []),
   ];
@@ -17,7 +17,7 @@ export async function postSale({ userId, text }) {
     'Obrigada pela confiança! Você receberá mensagens no WhatsApp para agendamento e acompanhamento. Qualquer dúvida, me chama aqui ✨';
 
   const { text: llm } = await callLLM({
-    stage: 'posvenda',
+    stage: 'postsale',
     system: `Você é ${settings?.persona_name || 'Cláudia'}.
 Agradeça, reforce o acompanhamento por WhatsApp e mantenha 1–2 linhas. Sem cupom.`,
     prompt: `Cliente: ${text || '(sem texto)'}\nResponda no tom de pós-venda (curto).`,

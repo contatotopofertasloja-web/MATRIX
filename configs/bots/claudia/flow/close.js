@@ -1,6 +1,7 @@
 // configs/bots/claudia/flow/close.js
 import { callLLM } from '../../../../src/core/llm.js';
 import { settings } from '../../../../src/core/settings.js';
+import { setStage } from '../../../../src/core/fsm.js';
 
 function onlyAllowedLink(link) {
   const strict = !!settings?.guardrails?.allow_links_only_from_list;
@@ -12,6 +13,8 @@ function onlyAllowedLink(link) {
 }
 
 export async function closeDeal({ userId, text }) {
+  await setStage(userId, 'fechamento');
+
   const price = settings?.product?.price_target ?? 170;
   const rawCheckout = String(settings?.product?.checkout_link || '').trim();
   const checkout = onlyAllowedLink(rawCheckout);
@@ -20,8 +23,8 @@ export async function closeDeal({ userId, text }) {
   ];
 
   const fallback = checkout
-    ? `Aqui está seu link seguro: ${checkout}\nValor: R$${price}. Pagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendamento e acompanhamento; se houver qualquer imprevisto, avise o entregador 💖`
-    : `${closingLines[0]}\nPagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendamento e acompanhamento; se houver qualquer imprevisto, avise o entregador 💖`;
+    ? `Aqui está seu link seguro: ${checkout}\nValor: R$${price}. Pagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendar e acompanhar; se houver qualquer imprevisto, avise o entregador 💖`
+    : `${closingLines[0]}\nPagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendar e acompanhar; se houver qualquer imprevisto, avise o entregador 💖`;
 
   const { text: llm } = await callLLM({
     stage: 'fechamento',
@@ -33,7 +36,7 @@ Reforce COD e o aviso de agendamento/acompanhamento por WhatsApp. Sem cupom.`,
 
   const out = (llm || fallback).trim();
 
-  // Último saneamento de link (se por acaso o LLM inventar outro)
+  // Sanitiza links inventados
   if (!checkout) {
     return out.replace(/https?:\/\/\S+/gi, '');
   }
