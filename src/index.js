@@ -89,7 +89,8 @@ await outbox.start(async (job) => {
 });
 
 // Flows e hooks
-await loadFlows(BOT_ID);
+// IMPORTANTE: guardamos o retorno para roteamento local por flow
+const flows = await loadFlows(BOT_ID);
 const hooks = await getBotHooks();
 const sentOpening = new Set();
 
@@ -162,8 +163,24 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // (4) LLM com hook de prompt
+    // (4) Intent → tentar FLOW do bot primeiro
     const intent = intentOf(msgText) || 'greet';
+
+    // Usa roteador do bot (se existir) ou mapa direto de flows
+    let flowObj = null;
+    try {
+      if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText);
+    } catch {}
+    if (!flowObj) flowObj = flows?.[intent];
+
+    // Se houver flow e ele tratar, NÃO chama LLM (evita respostas duplicadas)
+    if (flowObj && typeof flowObj.run === 'function') {
+      const send = async (to, t) => enqueueOrDirect({ to, payload: { text: String(t || '') } });
+      await flowObj.run({ jid: from, text: msgText, settings, send });
+      return '';
+    }
+
+    // (5) Fallback LLM — só se o flow não tratou
     const { system, user } = await hooks.safeBuildPrompt({ stage: intent, message: msgText, settings });
 
     try {
