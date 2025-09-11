@@ -1,44 +1,34 @@
 // configs/bots/claudia/flow/close.js
-import { callLLM } from '../../../../src/core/llm.js';
-import { settings } from '../../../../src/core/settings.js';
-import { setStage } from '../../../../src/core/fsm.js';
+// CLOSE — oportunidade no funil: manda o link direto.
 
-function onlyAllowedLink(link) {
-  const strict = !!settings?.guardrails?.allow_links_only_from_list;
-  const allowed = (settings?.guardrails?.allowed_links || [])
-    .map(s => s.replace('{{checkout_link}}', settings?.product?.checkout_link || ''))
-    .filter(Boolean);
-  if (!strict) return link;
-  return allowed.some(a => String(link).includes(a)) ? link : '';
+function stripAccents(s = '') {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function clean(text = '') {
+  return stripAccents(String(text || '').toLowerCase()).replace(/\s+/g, ' ').trim();
 }
 
-export async function closeDeal({ userId, text }) {
-  await setStage(userId, 'fechamento');
+const RX = {
+  close: /\b(checkout|finalizar|finaliza(r)?|fechar|fechamento|comprar|carrinho|manda\s*o\s*link)\b/i
+};
 
-  const price = settings?.product?.price_target ?? 170;
-  const rawCheckout = String(settings?.product?.checkout_link || '').trim();
-  const checkout = onlyAllowedLink(rawCheckout);
-  const closingLines = settings?.messages?.closing || [
-    'Perfeito! Te envio o link do checkout e seguimos por aqui 😉'
-  ];
+export default {
+  id: 'close',
+  stage: 'fechamento',
 
-  const fallback = checkout
-    ? `Aqui está seu link seguro: ${checkout}\nValor: R$${price}. Pagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendar e acompanhar; se houver qualquer imprevisto, avise o entregador 💖`
-    : `${closingLines[0]}\nPagamento na entrega (COD). Você receberá mensagens no WhatsApp para agendar e acompanhar; se houver qualquer imprevisto, avise o entregador 💖`;
+  match(text = '') {
+    return RX.close.test(clean(text));
+  },
 
-  const { text: llm } = await callLLM({
-    stage: 'fechamento',
-    system: `Você é ${settings?.persona_name || 'Cláudia'}.
-Fechamento objetivo (1–2 linhas). Se houver link permitido, inclua.
-Reforce COD e o aviso de agendamento/acompanhamento por WhatsApp. Sem cupom.`,
-    prompt: `Cliente: ${text || '(sem texto)'}\nFinalize a compra agora.`,
-  });
+  async run(ctx = {}) {
+    const { jid, settings = {}, send } = ctx;
+    const p = settings?.product || {};
+    const checkout = p?.checkout_link;
 
-  const out = (llm || fallback).trim();
-
-  // Sanitiza links inventados
-  if (!checkout) {
-    return out.replace(/https?:\/\/\S+/gi, '');
+    if (checkout) {
+      await send(jid, `Show! Segue o link seguro do checkout 👇 (pagamento na entrega – COD)\n${checkout}`);
+    } else {
+      await send(jid, `Posso gerar o link do checkout pra você agora.`);
+    }
   }
-  return out;
-}
+};

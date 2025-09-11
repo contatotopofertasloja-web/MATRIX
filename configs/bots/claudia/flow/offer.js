@@ -1,72 +1,46 @@
 // configs/bots/claudia/flow/offer.js
-import { callLLM } from '../../../../src/core/llm.js';
-import { settings } from '../../../../src/core/settings.js';
-import { getSlot, setStage } from '../../../../src/core/fsm.js';
-import { intentOf } from '../../../../src/core/intent.js';
+// OFFER — apresenta preço e pergunta se pode enviar link.
+// Só envia link se o cliente pedir explicitamente (link/checkout/comprar/finalizar).
 
-// --- helpers (mantidos/estendidos) ---
-function clampPrice(p) {
-  const min = Number(settings?.guardrails?.price_min ?? 0);
-  const max = Number(settings?.guardrails?.price_max ?? 999999);
-  const n = Number(p);
-  if (Number.isFinite(n)) return Math.min(Math.max(n, min), max);
-  return Number(settings?.product?.price_target ?? 170);
+function stripAccents(s = '') {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
-function sanitizeLinks(text) {
-  const strict = !!settings?.guardrails?.allow_links_only_from_list;
-  if (!strict) return text;
-  const allowed = (settings?.guardrails?.allowed_links || [])
-    .map(s => String(s).trim())
-    .filter(Boolean)
-    .map(a => a.replace('{{checkout_link}}', settings?.product?.checkout_link || ''));
-  if (!allowed.length) return text.replace(/https?:\/\/\S+/gi, '');
-  return text.replace(/https?:\/\/\S+/gi, (m) => (allowed.some(a => m.includes(a)) ? m : ''));
+function clean(text = '') {
+  return stripAccents(String(text || '').toLowerCase()).replace(/\s+/g, ' ').trim();
 }
 
-export async function offer({ userId, text }) {
-  // Se o cliente já pedir direto o link/fechamento, pulamos pro fechamento
-  const wantClose = ['close'].includes(intentOf(text));
-  if (wantClose) {
-    await setStage(userId, 'fechamento');
-    return 'Perfeito, já posso te enviar o link do checkout. Posso mandar agora?';
+const RX = {
+  askPrice: /\b(preco|preço|quanto\s*custa|valor|promo(cao|ção)|desconto|oferta)\b/i,
+  askLink:  /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i
+};
+
+export default {
+  id: 'offer',
+  stage: 'oferta',
+
+  match(text = '') {
+    const t = clean(text);
+    return RX.askPrice.test(t) || RX.askLink.test(t);
+  },
+
+  async run(ctx = {}) {
+    const { jid, text = '', settings = {}, send } = ctx;
+    const t = clean(text);
+    const p = settings?.product || {};
+    const price = typeof p?.price_target === 'number' ? p.price_target : p?.price_original;
+    const checkout = p?.checkout_link;
+
+    // Se o cliente PEDIU link/checkout/comprar → envia link direto
+    if (RX.askLink.test(t) && checkout) {
+      await send(jid, `Perfeito! Aqui está o link seguro do checkout (pagamento na entrega – COD):\n${checkout}`);
+      return;
+    }
+
+    // Caso apenas tenha perguntado preço/valor → informa e pergunta permissão
+    const linhas = [
+      `Consigo para você por **R$${price}** hoje.`,
+      `Te envio o link seguro do checkout?`
+    ];
+    await send(jid, linhas.join(' '));
   }
-
-  const priceTarget = clampPrice(settings?.product?.price_target ?? 170);
-  const checkout = String(settings?.product?.checkout_link || '').trim();
-  const templates = (settings?.messages?.offer_templates || [
-    "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?",
-  ]).filter(t => !/\{\{coupon_code\}\}/i.test(t)); // sem cupom na oferta
-
-  // Personaliza com os slots (não repete perguntas)
-  const tipo = await getSlot(userId, 'tipo_cabelo');
-  const objetivo = await getSlot(userId, 'objetivo');
-  const quimica = await getSlot(userId, 'tem_quimica');
-  const contexto = [
-    tipo ? `Cabelo: ${tipo}` : null,
-    objetivo ? `Objetivo: ${objetivo}` : null,
-    quimica ? `Química: ${quimica}` : null,
-  ].filter(Boolean).join(' | ') || '(sem slots)';
-
-  const prompt = `
-Cliente: ${contexto}
-Preço alvo: R$ ${priceTarget}
-Regras:
-- NÃO mencione cupom na oferta.
-- Máx 2 linhas. Tom vendedor confiante.
-- Peça confirmação pra enviar link do checkout (sem colar o link ainda).
-Sugestões:
-${templates.map(t => `• ${t}`).join('\n')}
-`;
-
-  const { text: llm } = await callLLM({
-    stage: 'oferta',
-    system: `Você é ${settings?.persona_name || 'Cláudia'}, vendedora objetiva.
-Ofereça com CTA (pergunte se pode enviar o link). Não fale de cupom.`,
-    prompt,
-  });
-
-  const out = (llm || '').replace(/\{\{price_target\}\}/g, String(priceTarget))
-                         .replace(/\{\{checkout_link\}\}/g, checkout || '');
-  await setStage(userId, 'oferta'); // garante stage
-  return sanitizeLinks(out).trim() || `Consigo por R$${priceTarget}. Posso te mandar o link do checkout agora?`;
-}
+};
