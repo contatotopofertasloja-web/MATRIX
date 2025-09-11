@@ -143,7 +143,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // (2) texto base (ou ASR)
+    // (2) texto base (ou a ASR)
     let msgText = (text || '').trim();
     if (hasMedia && !msgText) {
       const buf = await tryGetAudioBuffer(raw);
