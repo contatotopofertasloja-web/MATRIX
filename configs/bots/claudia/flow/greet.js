@@ -3,9 +3,10 @@ import { settings } from '../../../../src/core/settings.js';
 
 /**
  * Flow: greet
- * - Envia FOTO do produto na abertura + 1ª fala curta
+ * - Envia FOTO do produto na abertura + 1 fala curta
  * - Nunca envia link aqui; sem cupom
  * - Se não houver imagem, cai para texto simples
+ * - Sem "assistente virtual" e já pergunta com opções
  */
 export default async function greet() {
   const productImage =
@@ -13,11 +14,18 @@ export default async function greet() {
     settings?.product?.image_url ||
     null;
 
+  // 1) Abertura vinda do settings (se houver) — SEM "assistente virtual"
   const openingMsgs = settings?.messages?.opening;
-  const caption =
+  const opening =
     (Array.isArray(openingMsgs) && openingMsgs[0]) ||
-    'Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?';
+    'Oi! Tudo bem? Como posso te ajudar com seus cabelos hoje? 😊';
 
+  // 2) Pergunta com OPÇÕES para facilitar a resposta
+  const askHairType = 'Seu cabelo é *liso*, *ondulado*, *cacheado* ou *crespo*?';
+
+  const caption = `${opening}\n${askHairType}`;
+
+  // 3) Foto de abertura (se habilitada)
   if (productImage && (settings?.flags?.send_opening_photo ?? true)) {
     return {
       type: 'image',
@@ -26,7 +34,7 @@ export default async function greet() {
     };
   }
 
-  // Fallback sem imagem
+  // 4) Fallback sem imagem
   return {
     type: 'text',
     text: caption,

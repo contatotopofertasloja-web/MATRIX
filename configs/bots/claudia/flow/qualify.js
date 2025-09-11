@@ -1,52 +1,68 @@
 // configs/bots/claudia/flow/qualify.js
-// QUALIFY — capta contexto de cabelo/dor (sem link) + anti-loop por contato
+// Capta tipo de cabelo e objetivo, evita repetição (cooldown) e avança o funil.
 
-const lastAsk = new Map(); // jid -> { askedAt: ms, key: 'liso_vs_alinhado' }
+const state = new Map(); // jid -> { hairType, goal, asked: { hair:ms, goal:ms } }
 
-function stripAccents(s=''){return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-function clean(t=''){return stripAccents(String(t||'').toLowerCase()).replace(/\s+/g,' ').trim();}
+function stripAccents(s=''){ return s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+function clean(t=''){ return stripAccents(String(t||'').toLowerCase()).replace(/\s+/g,' ').trim(); }
 
 const RX = {
-  hairHints: /\b(liso|ondulado|cachead[oa]|crespo|frizz|volume|oleos[oa]|ressecad[oa]|quebradi[çc]o|queda|alinhamento|selagem|liso\s*natural)\b/i,
-  productName: /\b(qual\s*o?\s*nome\s*(do|da)\s*produto|nome\s*(do|da)\s*produto|qual\s*produto|que\s*produto|nome\s*dele|qual\s*a\s*marca|marca\s*(do|da)\s*produto|marca\s*qual)\b/i
+  hairType: /\b(liso|ondulado|cachead[oa]|crespo)\b/i,
+  goal: /\b(bem\s*liso|alinhad[oa]\s*com\s*brilho|controlar\s*o?\s*frizz|reduzi?r?\s*volume)\b/i
 };
 
-function canAsk(jid, key, cooldownMs=90000){
-  const now=Date.now();
-  const rec=lastAsk.get(jid);
-  if(!rec||rec.key!==key||now-(rec.askedAt||0)>cooldownMs){ lastAsk.set(jid,{key,askedAt:now}); return true; }
-  return false;
+function canAsk(askedAt = 0, cooldownMs = 90000) {
+  return Date.now() - askedAt > cooldownMs;
 }
 
 export default {
-  id:'qualify',
-  stage:'qualificacao',
+  id: 'qualify',
+  stage: 'qualificacao',
 
-  match(text=''){
-    const t=clean(text);
-    return RX.hairHints.test(t) || RX.productName.test(t);
+  match(text='') {
+    const t = clean(text);
+    return !!t; // qualquer texto que não foi pego por greet já passa aqui
   },
 
-  async run(ctx={}){
-    const { jid, text='', settings={}, send } = ctx;
-    const t=clean(text);
-    const product=settings?.product||{};
-    const name=product?.name||'nosso produto';
+  async run(ctx = {}) {
+    const { jid, text = '', send } = ctx;
+    const t = clean(text);
+    const s = state.get(jid) || { hairType: null, goal: null, asked: {} };
 
-    // 1) Nome/marca do produto (sem link)
-    if(RX.productName.test(t)){
-      await send(jid, `O nome do produto é *${name}*. Posso te orientar rapidinho pro seu tipo de cabelo?`);
+    // 1) Captura sinais
+    if (RX.hairType.test(t)) s.hairType = (t.match(RX.hairType)||[])[0];
+    if (RX.goal.test(t))     s.goal     = (t.match(RX.goal)||[])[0];
+
+    // 2) Pergunta *apenas* o que falta, com cooldown (evita loop)
+    if (!s.hairType) {
+      if (canAsk(s.asked?.hair)) {
+        s.asked.hair = Date.now();
+        state.set(jid, s);
+        await send(jid, 'Seu cabelo é *liso*, *ondulado*, *cacheado* ou *crespo*?');
+        return;
+      }
+    }
+
+    if (!s.goal) {
+      if (canAsk(s.asked?.goal)) {
+        s.asked.goal = Date.now();
+        state.set(jid, s);
+        await send(jid, 'Você busca deixar *bem liso* ou só *alinhado com brilho*? (Se preferir, posso focar em *controlar o frizz* ou *reduzir volume*)');
+        return;
+      }
+    }
+
+    // 3) Se já temos dados, avança: faz um resumo curto e deixa o OFFER seguir
+    if (s.hairType || s.goal) {
+      state.set(jid, s);
+      const partes = [];
+      if (s.hairType) partes.push(`cabelo *${s.hairType}*`);
+      if (s.goal)     partes.push(`foco em *${s.goal}*`);
+      await send(jid, `Entendi: ${partes.join(' + ')}. Se quiser, já te passo o *preço* e como funciona.`);
       return;
     }
 
-    // 2) Qualificação consultiva com anti-loop
-    const key='liso_vs_alinhado';
-    if(canAsk(jid,key,90000)){
-      await send(jid, 'Seu cabelo é liso, ondulado, cacheado ou crespo?');
-      await send(jid, 'Você busca deixar *bem liso* ou só *alinhado com brilho*?');
-    } else {
-      // já perguntado recentemente → faça avanço leve sem repetir
-      await send(jid, 'Perfeito. Me diga se seu foco é *controlar frizz* ou *reduzir volume*, que eu te indico certinho.');
-    }
+    // fallback educado, sem repetir perguntas
+    await send(jid, 'Perfeito! Se puder, me diga seu *tipo de cabelo* e seu *objetivo* (ex.: bem liso, controlar frizz, reduzir volume).');
   }
 };
