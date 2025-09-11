@@ -141,15 +141,15 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
     throw new Error(`Provider "${ENV_DEFAULTS.provider}" não suportado neste módulo.`);
   }
 
-  // Log da escolha do modelo (ajuda no canário)
   console.debug(`[LLM] stage=${stage} resolved=${resolvedStage} modelRaw="${rawModel}" chosen="${chosenModel}" temp=${temp} maxTokens=${mt}`);
 
   const client = getOpenAI();
   let lastErr;
 
   for (let attempt = 0; attempt <= ENV_DEFAULTS.retries; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ENV_DEFAULTS.timeoutMs);
+    const timer = setTimeout(() => {
+      lastErr = new Error("Timeout atingido em callLLM");
+    }, ENV_DEFAULTS.timeoutMs);
 
     try {
       const res = await client.chat.completions.create({
@@ -160,7 +160,6 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
           ...(system ? [{ role: "system", content: system }] : []),
           { role: "user", content: String(prompt || "") },
         ],
-        signal: controller.signal,
       });
 
       clearTimeout(timer);
