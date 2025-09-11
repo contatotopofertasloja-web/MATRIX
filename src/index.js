@@ -14,10 +14,16 @@ import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 
 let transcribeAudio = null;
-try { const asrMod = await import('./core/asr.js'); transcribeAudio = asrMod?.transcribeAudio || asrMod?.default || null; }
-catch { console.warn('[ASR] módulo ausente — áudio será ignorado.'); }
+try {
+  const asrMod = await import('./core/asr.js');
+  transcribeAudio = asrMod?.transcribeAudio || asrMod?.default || null;
+} catch {
+  console.warn('[ASR] módulo ausente — áudio será ignorado.');
+}
 
-if (process.env.NODE_ENV !== 'production') { try { await import('dotenv/config'); } catch {} }
+if (process.env.NODE_ENV !== 'production') {
+  try { await import('dotenv/config'); } catch {}
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -25,37 +31,44 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 
-const envBool = (v, d=false) => (v==null?d:['1','true','yes','y','on'].includes(String(v).trim().toLowerCase()));
-const envNum  = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
+const envBool = (v, d = false) =>
+  (v == null ? d : ['1', 'true', 'yes', 'y', 'on'].includes(String(v).trim().toLowerCase()));
+const envNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
 // === ENV principais ===
-const PORT          = envNum(process.env.PORT, 8080);
-const HOST          = process.env.HOST || '0.0.0.0';
-const ADAPTER_NAME  = String(process.env.WPP_ADAPTER || 'baileys');
-const ECHO_MODE     = envBool(process.env.ECHO_MODE, false);
-let   intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
-let   sendEnabled   = envBool(process.env.SEND_ENABLED,   true);
-let   DIRECT_SEND   = envBool(process.env.DIRECT_SEND, true);
+const PORT = envNum(process.env.PORT, 8080);
+const HOST = process.env.HOST || '0.0.0.0';
+const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
+const ECHO_MODE = envBool(process.env.ECHO_MODE, false);
+let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
+let sendEnabled = envBool(process.env.SEND_ENABLED, true);
+let DIRECT_SEND = envBool(process.env.DIRECT_SEND, true);
 
 // Redis / Outbox
-const REDIS_MAIN_URL     = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
-const OUTBOX_TOPIC       = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || 'default'}`;
+const REDIS_MAIN_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
+const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || 'default'}`;
 const OUTBOX_CONCURRENCY = envNum(process.env.QUEUE_OUTBOX_CONCURRENCY, 1);
 
-const outbox = await createOutbox({ topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONCURRENCY, redisUrl: REDIS_MAIN_URL });
+const outbox = await createOutbox({
+  topic: OUTBOX_TOPIC,
+  concurrency: OUTBOX_CONCURRENCY,
+  redisUrl: REDIS_MAIN_URL,
+});
 
 // Envio base
 async function sendViaAdapter(to, kind, payload) {
   if (!to || !sendEnabled) return;
   if (kind === 'image') {
-    const { url, caption = '' } = payload || {};
+    const url = payload?.url;
+    const caption = (payload?.caption || '').toString();
     if (url) await adapter.sendImage(to, url, caption);
   } else {
     const text = String(payload?.text || '');
     if (text) await adapter.sendMessage(to, text);
   }
 }
-async function enqueueOrDirect({ to, kind='text', payload={} }) {
+
+async function enqueueOrDirect({ to, kind = 'text', payload = {} }) {
   try {
     if (DIRECT_SEND || !outbox.isConnected()) {
       await sendViaAdapter(to, kind, payload);
@@ -71,7 +84,7 @@ async function enqueueOrDirect({ to, kind='text', payload={} }) {
 
 // Worker outbox
 await outbox.start(async (job) => {
-  const { to, kind='text', payload={} } = job || {};
+  const { to, kind = 'text', payload = {} } = job || {};
   await sendViaAdapter(to, kind, payload);
 });
 
@@ -84,31 +97,42 @@ const sentOpening = new Set();
 async function tryGetAudioBuffer(raw) {
   try {
     if (typeof adapter?.getAudioBuffer === 'function') return await adapter.getAudioBuffer(raw);
-    if (typeof adapter?.downloadMedia  === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
+    if (typeof adapter?.downloadMedia === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
     return null;
-  } catch (e) { console.warn('[ASR] tryGetAudioBuffer:', e?.message || e); return null; }
+  } catch (e) {
+    console.warn('[ASR] tryGetAudioBuffer:', e?.message || e);
+    return null;
+  }
 }
-async function transcribeIfPossible(buf, mime='audio/ogg') {
+async function transcribeIfPossible(buf, mime = 'audio/ogg') {
   if (!buf || typeof transcribeAudio !== 'function') return null;
   try {
     return await transcribeAudio({
-      buffer: buf, mimeType: mime,
+      buffer: buf,
+      mimeType: mime,
       provider: settings?.audio?.asrProvider || 'openai',
-      model:    settings?.audio?.asrModel    || 'whisper-1',
-      language: settings?.audio?.language    || 'pt',
+      model: settings?.audio?.asrModel || 'whisper-1',
+      language: settings?.audio?.language || 'pt',
     });
-  } catch (e) { console.warn('[ASR] transcribeIfPossible:', e?.message || e); return null; }
+  } catch (e) {
+    console.warn('[ASR] transcribeIfPossible:', e?.message || e);
+    return null;
+  }
 }
 
 // Handler principal
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
   try {
-    // (0) mídia de abertura via hook
+    // (0) mídia de abertura via hook (1x por contato)
     if (!sentOpening.has(from)) {
       const media = await hooks.openingMedia({ settings });
       if (media?.url) {
-        await enqueueOrDirect({ to: from, kind: 'image', payload: { url: media.url, caption: media.caption || '' } });
+        await enqueueOrDirect({
+          to: from,
+          kind: 'image',
+          payload: { url: media.url, caption: media.caption || '' },
+        });
       }
       sentOpening.add(from);
     }
@@ -119,7 +143,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // (2) texto base
+    // (2) texto base (ou ASR)
     let msgText = (text || '').trim();
     if (hasMedia && !msgText) {
       const buf = await tryGetAudioBuffer(raw);
@@ -166,20 +190,34 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
 });
 
 // Rotas HTTP
-const limiter = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false });
+const limiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 app.get('/health', (_req, res) => {
   res.json({
-    ok: true, service: 'Matrix IA 2.0', bot: BOT_ID, adapter: ADAPTER_NAME,
-    ready: wppReady(), env: process.env.NODE_ENV || 'production',
+    ok: true,
+    service: 'Matrix IA 2.0',
+    bot: BOT_ID,
+    adapter: ADAPTER_NAME,
+    ready: wppReady(),
+    env: process.env.NODE_ENV || 'production',
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND },
   });
 });
 
 app.get('/wpp/health', (_req, res) => {
   res.json({
-    ok: true, ready: wppReady(), adapter: ADAPTER_NAME, session: process.env.WPP_SESSION || 'default',
-    backend: outbox.backend(), topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONCURRENCY,
+    ok: true,
+    ready: wppReady(),
+    adapter: ADAPTER_NAME,
+    session: process.env.WPP_SESSION || 'default',
+    backend: outbox.backend(),
+    topic: OUTBOX_TOPIC,
+    concurrency: OUTBOX_CONCURRENCY,
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND },
     redis: { url: REDIS_MAIN_URL ? 'set' : 'unset', connected: outbox.isConnected() },
   });
@@ -192,11 +230,20 @@ app.get('/wpp/qr', async (req, res) => {
     const view = (req.query.view || '').toString();
     if (view === 'img') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.send(`<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff"><img src="${dataURL}" width="320" height="320"/></body></html>`);
+      return res.send(
+        `<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff"><img src="${dataURL}" width="320" height="320"/></body></html>`,
+      );
     }
-    if (view === 'png') { const b64 = dataURL.split(',')[1]; const buf = Buffer.from(b64, 'base64'); res.setHeader('Content-Type', 'image/png'); return res.send(buf); }
+    if (view === 'png') {
+      const b64 = dataURL.split(',')[1];
+      const buf = Buffer.from(b64, 'base64');
+      res.setHeader('Content-Type', 'image/png');
+      return res.send(buf);
+    }
     res.json({ ok: true, qr: dataURL, bot: BOT_ID, adapter: ADAPTER_NAME });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 app.get('/qr', (_req, res) => res.redirect(302, '/wpp/qr?view=img'));
@@ -208,16 +255,22 @@ app.get('/ops/mode', (req, res) => {
   res.json({ ok: true, direct_send: DIRECT_SEND, backend: outbox.backend() });
 });
 
-app.get('/ops/status', (_req, res) => res.json({ ok: true, intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND }));
+app.get('/ops/status', (_req, res) =>
+  res.json({ ok: true, intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND }),
+);
 
 app.post('/wpp/send', limiter, async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
-    if (!to || (!text && !imageUrl)) return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
+    if (!to || (!text && !imageUrl)) {
+      return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
+    }
     if (imageUrl) await enqueueOrDirect({ to, kind: 'image', payload: { url: imageUrl, caption: caption || '' } });
-    if (text)     await enqueueOrDirect({ to, payload: { text } });
+    if (text) await enqueueOrDirect({ to, payload: { text } });
     res.json({ ok: true, enqueued: true, path: DIRECT_SEND ? 'direct' : 'outbox' });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 app.post('/webhook/payment', async (req, res) => {
@@ -232,17 +285,22 @@ app.post('/webhook/payment', async (req, res) => {
       });
     }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 app.post('/inbound', async (req, res) => {
   try {
     const { to, text } = req.body || {};
-    const jid = String(to || '').trim(); const msg = String(text || '').trim();
+    const jid = String(to || '').trim();
+    const msg = String(text || '').trim();
     if (!jid || !msg) return res.status(400).json({ ok: false, error: 'Informe { to, text }' });
     await enqueueOrDirect({ to: jid, payload: { text: msg } });
     res.json({ ok: true, enqueued: true, path: DIRECT_SEND ? 'direct' : 'outbox' });
-  } catch (e) { res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 const server = app.listen(PORT, HOST, () => {
@@ -256,5 +314,5 @@ function gracefulClose(signal) {
   try { outbox?.stop?.(); } catch {}
   setTimeout(() => process.exit(0), 1500);
 }
-process.on('SIGINT',  () => gracefulClose('SIGINT'));
+process.on('SIGINT', () => gracefulClose('SIGINT'));
 process.on('SIGTERM', () => gracefulClose('SIGTERM'));

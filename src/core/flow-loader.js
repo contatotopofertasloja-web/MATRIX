@@ -1,7 +1,12 @@
 // src/core/flow-loader.js
+// Merge do seu loader + suporte a router/pickFlow e fallback ordenado.
+// - Mantém procura em: src/bots/<bot>/flows e configs/bots/<bot>/flow
+// - Mantém compat de nomes (closeDeal/postSale)
+// - Expõe getCurrentRouter() e map.__route() para decisões síncronas.
+
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -20,9 +25,34 @@ function resolveFlowDir(botId) {
   return null;
 }
 
-function pathToFileUrl(absPath) {
+function pathToFileUrlCompat(absPath) {
   const normalized = absPath.replace(/\\/g, '/'); // Windows → URL
   return `file://${normalized}`;
+}
+
+let currentRouter = null;
+export function getCurrentRouter() { return currentRouter; }
+
+// Router de fallback caso não exista configs/bots/<bot>/flow/index.js com pickFlow()
+function makeFallbackRouter(flowsMap) {
+  // prioridade: postsale > close > offer > qualify > greet
+  const order = [
+    flowsMap.postsale || flowsMap.post_sale,
+    flowsMap.close,
+    flowsMap.offer,
+    flowsMap.qualify,
+    flowsMap.greet,
+  ].filter(Boolean);
+
+  return (text = '') => {
+    const t = String(text || '');
+    for (const f of order) {
+      try {
+        if (typeof f?.match === 'function' && f.match(t)) return f;
+      } catch {}
+    }
+    return flowsMap.greet || null;
+  };
 }
 
 export async function loadFlows(botId) {
@@ -42,17 +72,53 @@ export async function loadFlows(botId) {
   };
 
   const out = {};
-  for (const [key, fname] of Object.entries(files)) {
-    const full = path.join(base, fname);
-    if (fs.existsSync(full)) {
-      const mod = await import(pathToFileUrl(full));
-      // nomes-padrão exportados por flow:
-      if (key === 'greet')     out.greet     = mod.greet     || mod.default;
-      if (key === 'qualify')   out.qualify   = mod.qualify   || mod.default;
-      if (key === 'offer')     out.offer     = mod.offer     || mod.default;
-      if (key === 'close')     out.close     = mod.closeDeal || mod.close || mod.default;
-      if (key === 'postsale')  out.post_sale = mod.postSale  || mod.posts   || mod.default;
+  // 1) tentar carregar index.js (se existir) para obter pickFlow()
+  let pickFlow = null;
+  const indexJs = path.join(base, 'index.js');
+  if (fs.existsSync(indexJs)) {
+    try {
+      const mod = await import(pathToFileURL(indexJs).href);
+      if (typeof mod?.pickFlow === 'function') pickFlow = mod.pickFlow;
+    } catch (e) {
+      console.warn('[flow-loader] Falha ao importar index.js:', e?.message || e);
     }
   }
+
+  // 2) carregar flows unitários com compat de nomes
+  for (const [key, fname] of Object.entries(files)) {
+    const full = path.join(base, fname);
+    if (!fs.existsSync(full)) continue;
+
+    try {
+      // usa pathToFileURL nativo (mais estável que string manual)
+      const mod = await import(pathToFileURL(full).href);
+      const def = mod?.default;
+
+      if (key === 'greet')     out.greet     = mod.greet     || def;
+      if (key === 'qualify')   out.qualify   = mod.qualify   || def;
+      if (key === 'offer')     out.offer     = mod.offer     || def;
+      if (key === 'close')     out.close     = mod.closeDeal || mod.close || def;
+      if (key === 'postsale')  out.postsale  = mod.postSale  || mod.posts || mod.postsale || def;
+
+      // compat com código legado que usa 'post_sale'
+      if (key === 'postsale' && !out.post_sale) out.post_sale = out.postsale;
+    } catch (e) {
+      console.warn(`[flow-loader] Falha ao importar ${key}.js:`, e?.message || e);
+    }
+  }
+
+  // 3) definir router atual
+  if (typeof pickFlow === 'function') {
+    currentRouter = (text) => {
+      try { return pickFlow(text) || null; } catch { return null; }
+    };
+  } else {
+    currentRouter = makeFallbackRouter(out);
+  }
+
+  // 4) atalho opcional para resolver direto do objeto retornado
+  out.__route = (text) => (currentRouter ? currentRouter(text) : null);
+
+  console.log(`[flow-loader] Flows carregados para bot="${botId}":`, Object.keys(out).join(', '));
   return out;
 }

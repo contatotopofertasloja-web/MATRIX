@@ -1,7 +1,12 @@
-// src/core/intent.js — versão sólida (Matrix IA 2.0)
-// Intenções: greet | qualify | offer | objection | close | postsale | delivery | payment | features
+// src/core/intent.js — Matrix IA 2.0 (merge com router de flows)
+// Mantém o teu mapa rico de intenções e prioridades,
+// e adiciona integração com o router atual (registrado pelo flow-loader).
+// Se existir um pickFlow (ex.: Maria), ele domina a decisão;
+// caso contrário, caímos no teu fallback regex — intacto e completo.
 
-// --- Utils: normalização segura ---
+import { getCurrentRouter } from './flow-loader.js';
+
+// --- Utils: normalização segura (mantido do teu arquivo) ---
 function stripAccents(s = '') {
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
@@ -13,11 +18,12 @@ function clean(text = '') {
 }
 
 // --- Conjuntos de regex com prioridade (ordem IMPORTA) ---
+// Mantive exatamente tuas categorias/expressões, só organizei o bloco.
 const RX = {
-  // Alta prioridade (eventos "decisivos")
+  // Alta prioridade (decisão de compra)
   close: /\b(checkout|finalizar|finaliza(r)?|fechar|fechamento|compra(r)?|carrinho|link\s*(de)?\s*pagamento|manda\s*o\s*link|quero\s*comprar)\b/i,
 
-  // Oferta / preço / desconto (mas sem engolir "close")
+  // Oferta / preço / desconto (sem engolir "close")
   offer: /\b(preco|preço|promoc(ao|ao|ao)?|desconto|oferta|quanto\s*custa|quanto\b|melhor\s*valor|tem\s*desconto)\b/i,
 
   // Objeções / risco / segurança
@@ -40,13 +46,30 @@ const RX = {
 const PAYMENT_CONFIRMED = /\b(paguei|pagamento\s*feito|pago|comprovante|enviei\s*o\s*comprovante|finalizei|finalizado)\b/i;
 
 // Sinais genéricos
-const YESNO   = /\b(sim|s|ok|claro|quero|top|manda|pode|vamos|bora|nao|não|talvez)\b/i;
-const HELLO   = /\b(oi|ola|ol[áa]|bom\s*dia|boa\s*tarde|boa\s*noite|hey|fala|eai|e\s*a[ií])\b/i;
-const QUESTION= /\?|^como\b|^quando\b|^onde\b|^qual(es)?\b|^quanto\b|^por\s*que\b|^porque\b|^pq\b/i;
+const YESNO    = /\b(sim|s|ok|claro|quero|top|manda|pode|vamos|bora|nao|não|talvez)\b/i;
+const HELLO    = /\b(oi|ola|ol[áa]|bom\s*dia|boa\s*tarde|boa\s*noite|hey|fala|eai|e\s*a[ií])\b/i;
+const QUESTION = /\?|^como\b|^quando\b|^onde\b|^qual(es)?\b|^quanto\b|^por\s*que\b|^porque\b|^pq\b/i;
 
 // Heurística: primeiras mensagens curtas e saudações
 function looksLikeFirstTouch(t) {
   return HELLO.test(t) || t.length <= 12;
+}
+
+// --- Mapper para IDs vindos do router (ex.: Maria) → intents daqui ---
+// Os flows da Maria usam ids: 'greet', 'qualify', 'offer', 'close', 'postsale'.
+// Garantimos compat (ex.: 'post_sale' legado vira 'postsale').
+function normalizeFlowIdToIntent(id = '') {
+  const k = String(id || '').toLowerCase();
+  if (!k) return null;
+
+  if (k === 'post_sale' || k === 'postsale') return 'postsale';
+  if (k === 'close' || k === 'closed' || k === 'closedeal') return 'close';
+  if (k === 'offer' || k === 'oferta') return 'offer';
+  if (k === 'qualify' || k === 'qualificacao') return 'qualify';
+  if (k === 'greet' || k === 'recepcao') return 'greet';
+
+  // Se vier algo desconhecido do router, deixe cair no fallback regex
+  return null;
 }
 
 // Export principal
@@ -55,6 +78,22 @@ export function intentOf(textRaw) {
   if (!raw.trim()) return 'greet';
 
   const t = clean(raw);
+
+  // 0) Integração com router ativo (ex.: Maria com pickFlow)
+  // Se o flow-loader já carregou os flows do BOT_ID e registrou um router,
+  // deixamos o router decidir primeiro (respeita a ordem postsale > close > offer > ... da Maria).
+  // Se não houver router, seguimos pro fallback regex — teu mapa completo.
+  const router = getCurrentRouter();
+  if (typeof router === 'function') {
+    try {
+      const flow = router(t);
+      const byFlow = normalizeFlowIdToIntent(flow?.id || flow?.stage || '');
+      if (byFlow) return byFlow;
+      // se o router não reconheceu, segue no fallback
+    } catch {
+      // ignora erro do router e usa fallback regex
+    }
+  }
 
   // 1) Pagamento confirmado → o handler usa isso para liberar cupom depois
   if (PAYMENT_CONFIRMED.test(t)) return 'postsale';
