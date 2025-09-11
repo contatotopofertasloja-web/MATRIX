@@ -1,4 +1,6 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml  — COMPLETÃO
+
+bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -16,6 +18,16 @@ product:
   how_to_use: >
     Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
     Opcional para maior durabilidade: finalize com chapinha.
+  # NOVO — ajuda a “construir valor” na oferta
+  value_props:
+    - "reduz *frizz* sem pesar"
+    - "deixa *alinhado com brilho* já na primeira aplicação"
+    - "aplicação simples em casa, com passo a passo"
+  # NOVO — reforços de segurança
+  safety:
+    claims:
+      - "sem formol adicionado"
+      - "sugerimos teste de mecha para couro cabeludo sensível"
 
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
@@ -30,7 +42,7 @@ flags:
   useModelsByStage: true
   fallbackToGlobal: true
 
-# Modelos por etapa (mínimo necessário)
+# Modelos por etapa (gpt-5-* → o core mapeia p/ 4o/4o-mini enquanto 5.x não está disponível)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -39,7 +51,7 @@ models_by_stage:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-# Opcional: fallback global (igual aos principais)
+# Opcional: fallback global (mantive igual)
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -54,16 +66,19 @@ typing:
   max_ms: 5000
 
 messages:
+  # AJUSTE — sem “Eu sou a Cláudia / assistente virtual”
   opening:
-    - "Oi! Eu sou a Cláudia 😊 Como é seu cabelo: liso, ondulado, cacheado ou crespo?"
+    - "Oi! Tudo bem? Como posso te ajudar com seus cabelos hoje? 😊"
   qualify_followups:
-    - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
-    - "Prefere resultado bem liso ou só alinhado com brilho?"
+    - "Você já fez progressiva antes? Te incomoda mais o *frizz* ou o *volume*?"
+    - "Prefere resultado *bem liso* ou só *alinhado com brilho*?"
+  # NOVO — usado no flow/offer para reforçar o pagamento
+  cod_short: "Pagamento na entrega (COD)."
   offer_templates:
-    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
-    - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
+    - "Consigo por *R${{price_target}}* hoje — {{product.value_props[0]}}. {{messages.cod_short}} Posso te enviar o link seguro do checkout?"
+    - "Fechando hoje, mantenho *R${{price_target}}*. {{messages.cod_short}} Te mando o link do checkout?"
   objection_handles:
-    - "Entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ No site você confere depoimentos e modo de uso. Quer um resumo aqui?"
+    - "Entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer um resumo do modo de uso?"
     - "Fica tranquila: temos garantia e acompanhamento. Prefere que eu explique rapidinho o passo a passo?"
   closing:
     - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para acompanhar. Qualquer imprevisto, avise o entregador 💚"
@@ -75,18 +90,18 @@ messages:
   features_intro:
     - "Claro! Te passo o modo de uso resumido:"
   delivery_info:
-    - "Prazo: até {{delivery_sla.capitals_hours}}h capitais e até {{delivery_sla.others_hours}}h demais regiões."
+    - "Prazo: até {{product.delivery_sla.capitals_hours}}h capitais e até {{product.delivery_sla.others_hours}}h demais regiões."
   payment_info:
     - "Pagamento na entrega (COD). O link que envio é para confirmar o pedido e acompanhar pelo WhatsApp 🙂"
 
-# Guardrails essenciais para 1 produto + links permitidos
+# Guardrails — mantive seus limites e whitelists
 guardrails:
   price_min: 149
   price_max: 249
   allow_links_only_from_list: true
   allowed_links:
-    - "{{checkout_link}}"
-    - "{{site_url}}"
+    - "{{product.checkout_link}}"
+    - "{{product.site_url}}"
   freeze_fields:
     - "price_target"
     - "checkout_link"
@@ -96,3 +111,49 @@ guardrails:
 # (Opcional) Contador de prova social
 marketing:
   sold_count: 40000
+
+# NOVO — FAQ/Objeções determinístico (sem alucinar). Reaproveita dados acima.
+faq:
+  categories:
+    delivery:
+      triggers:
+        - "\\b(prazo|entrega|quando\\s*(chega|recebo)|quanto\\s*tempo|frete)\\b"
+      answers:
+        - "Prazo típico: até {{product.delivery_sla.capitals_hours}}h em capitais e até {{product.delivery_sla.others_hours}}h demais regiões."
+        - "Entrego rápido: capitais até {{product.delivery_sla.capitals_hours}}h, demais regiões até {{product.delivery_sla.others_hours}}h."
+    payment:
+      triggers:
+        - "\\b(pagamento|pagar|forma(s)?\\s*de\\s*pagamento|pix|cartao|cartão|boleto|cod)\\b"
+      answers:
+        - "Pagamento na entrega (COD). Você confirma o pedido e paga quando receber — simples e seguro."
+        - "Trabalhamos com pagamento na entrega (COD). Sem risco: só paga ao receber."
+    product_name:
+      triggers:
+        - "\\b(nome\\s*(do|da)\\s*produto|qual\\s*produto|como\\s*se\\s*chama|marca)\\b"
+      answers:
+        - "É o *{{product.name}}*."
+        - "O nome do nosso produto é *{{product.name}}*."
+    usage:
+      triggers:
+        - "\\b(como\\s*usar|modo\\s*de\\s*uso|aplic(a|ação)|passo\\s*a\\s*passo|tempo\\s*de\\s*pausa)\\b"
+      answers:
+        - "{{product.how_to_use}}"
+        - "Resumo rápido: {{product.how_to_use}}"
+    safety_formol:
+      triggers:
+        - "\\b(formol|formaldeido|formaldeído|seguran(ca|ça)|anvisa|alergia|sensibilidade)\\b"
+      answers:
+        - "Sem formol adicionado. Seguimos boas práticas e indicamos teste de mecha para sensíveis."
+        - "Produto sem formol adicionado. Use conforme instruções e faça teste de mecha se tiver couro sensível."
+    guarantee:
+      triggers:
+        - "\\b(garantia|devolu(c|ç)ao|troca|suporte)\\b"
+      answers:
+        - "Se algo sair diferente do combinado, você tem suporte e podemos alinhar a troca — você não fica na mão."
+        - "Conta comigo no pós-venda: suporte real e política justa de troca."
+    results:
+      triggers:
+        - "\\b(quanto\\s*dura|durabilidade|resultado|antes\\s*e\\s*depois|quantas\\s*aplicac(oes|ões))\\b"
+      answers:
+        - "Resultados variam por cabelo, mas muita gente relata 6–8 semanas com uso correto."
+        - "Com uso certinho, os relatos mais comuns são de 6–8 semanas de efeito."

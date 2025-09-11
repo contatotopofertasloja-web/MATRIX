@@ -1,46 +1,39 @@
 // configs/bots/claudia/flow/offer.js
-// OFFER — apresenta preço e pergunta se pode enviar link.
-// Só envia link se o cliente pedir explicitamente (link/checkout/comprar/finalizar).
+// OFFER — informa preço do settings + benefício curto + COD; link só se pedir
 
-function stripAccents(s = '') {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-function clean(text = '') {
-  return stripAccents(String(text || '').toLowerCase()).replace(/\s+/g, ' ').trim();
-}
-
+function stripAccents(s=''){return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function clean(t=''){return stripAccents(String(t||'').toLowerCase()).replace(/\s+/g,' ').trim();}
 const RX = {
-  askPrice: /\b(preco|preço|quanto\s*custa|valor|promo(cao|ção)|desconto|oferta)\b/i,
-  askLink:  /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i
+  askPrice:/\b(preco|preço|quanto\s*custa|valor|desconto|promo(cao|ção)|oferta)\b/i,
+  askLink:/\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i
 };
+const pick = arr => Array.isArray(arr)&&arr.length? arr[Math.floor(Math.random()*arr.length)] : '';
 
 export default {
-  id: 'offer',
-  stage: 'oferta',
+  id:'offer',
+  stage:'oferta',
 
-  match(text = '') {
-    const t = clean(text);
+  match(text=''){
+    const t=clean(text);
     return RX.askPrice.test(t) || RX.askLink.test(t);
   },
 
-  async run(ctx = {}) {
-    const { jid, text = '', settings = {}, send } = ctx;
-    const t = clean(text);
-    const p = settings?.product || {};
-    const price = typeof p?.price_target === 'number' ? p.price_target : p?.price_original;
+  async run(ctx={}){
+    const { jid, text='', settings={}, send } = ctx;
+    const t=clean(text);
+    const p=settings?.product||{};
+    const price = typeof p?.price_target==='number' ? p.price_target : p?.price_original;
     const checkout = p?.checkout_link;
+    const hook = pick(p?.value_props)||'alinha os fios e controla o frizz de forma prática';
+    const cod = settings?.messages?.cod_short || 'Pagamento na entrega (COD), sem risco.';
 
-    // Se o cliente PEDIU link/checkout/comprar → envia link direto
-    if (RX.askLink.test(t) && checkout) {
-      await send(jid, `Perfeito! Aqui está o link seguro do checkout (pagamento na entrega – COD):\n${checkout}`);
+    // Pedido explícito de link
+    if(RX.askLink.test(t) && checkout){
+      await send(jid, `Perfeito! Aqui está o link seguro do checkout:\n${checkout}`);
       return;
     }
 
-    // Caso apenas tenha perguntado preço/valor → informa e pergunta permissão
-    const linhas = [
-      `Consigo para você por **R$${price}** hoje.`,
-      `Te envio o link seguro do checkout?`
-    ];
-    await send(jid, linhas.join(' '));
+    // Só preço + construção de valor (1 frase) e depois pergunta
+    await send(jid, `Consigo por *R$${price}* hoje — *${hook}*. ${cod} Posso te enviar o link seguro do checkout?`);
   }
 };
