@@ -16,5 +16,6 @@ export const hooks = {
 
   // Se quiser personalizar fallbackText/openingMedia/onPaymentConfirmed para a Cláudia,
   // exporta aqui; caso contrário, defaults genéricos serão usados.
+  
 };
 export default { hooks };
