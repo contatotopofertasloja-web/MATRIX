@@ -1,0 +1,62 @@
+version: 1.0
+kind: conexus_flow_schema
+description: >-
+  Esquema padrão para comparar funis entre vendedoras (Matrix).
+  Um único “flow” por bot/campanha, com estágios, metas e regras operacionais.
+
+flow:
+  required:
+    - bot_id
+    - flow_id
+    - stages
+  properties:
+    bot_id:        { type: string, pattern: "^[a-z0-9_-]{2,40}$" }
+    flow_id:       { type: string, pattern: "^[a-z0-9_-]{2,40}$" }
+    title:         { type: string }
+    description:   { type: string }
+    currency:      { type: string, enum: ["BRL"] }
+    price_target:  { type: number }
+    checkout_link: { type: string }
+    site_url:      { type: string }
+    stages:
+      type: array
+      items:
+        required: [stage_id, intents_in, goals, kpis, exit_conditions]
+        properties:
+          stage_id:
+            type: string
+            enum: [recepcao, qualificacao, oferta, objecoes, fechamento, posvenda]
+          intents_in:   { type: array, items: { type: string } }
+          goals:        { type: array, items: { type: string } }
+          required_actions:
+            type: array
+            items: { type: string, enum: [send_price, send_link, ask_hair_type, confirm_cod, handle_objection, confirm_payment] }
+          guardrails:
+            type: object
+            properties:
+              price_min: { type: number }
+              price_max: { type: number }
+              allowed_links: { type: array, items: { type: string } }
+          kpis:
+            type: array
+            items:
+              required: [id, metric, target]
+              properties:
+                id:     { type: string }
+                metric: { type: string, enum: [time_to_first_reply, messages_to_offer, price_disclosed_rate, link_sent_rate, objection_resolution_rate, stage_completion_rate] }
+                target: { type: number } # % ou segundos dependendo do metric
+          exit_conditions:
+            type: array
+            items: { type: string }
+          sla_sec: { type: number }
+
+events_map:
+  # Nomes de eventos que o Conexus espera encontrar nos logs/telemetria
+  message_in:           { source: "adapter",   match: "messages.upsert" }
+  message_out:          { source: "outbox",    match: "sendMessage|sendImage" }
+  intent_detected:      { source: "core",      match: "intent=" }
+  stage_transition:     { source: "core",      match: "stage=" }
+  price_disclosed:      { source: "core",      match: "send_price" }
+  link_sent:            { source: "core",      match: "send_link" }
+  objection_resolved:   { source: "core",      match: "handle_objection:ok" }
+  payment_confirmed:    { source: "webhook",   match: "/webhook/payment paid" }
