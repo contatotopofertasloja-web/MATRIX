@@ -1,0 +1,95 @@
+bot_id: maria
+persona_name: "Maria"
+language: "pt-BR"
+
+product:
+  name: "Progressiva X"
+  price_original: 197
+  price_target: 170
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170" # ajuste se precisar
+  site_url: "https://tpofertas.com/collections/cod-todos"
+  coupon_code: "TOP-MARIA-2025"         # opcional
+  coupon_post_payment_only: true
+  delivery_sla:
+    capitals_hours: 24
+    others_hours: 72
+  how_to_use: >
+    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
+    Para maior durabilidade, finalize com chapinha (opcional).
+
+media:
+  opening_photo_url: ""  # se quiser foto de abertura específica da Maria, coloque a URL aqui
+
+flags:
+  has_cod: true
+  send_opening_photo: false     # deixe true se quiser foto de abertura
+  guardrails_strict: true
+  use_telemetry: true
+  use_thompson: false
+  allow_audio_in: true
+  allow_audio_out: false
+  small_talk_soften: true
+  useModelsByStage: true
+  fallbackToGlobal: true
+
+marketing:
+  sold_count: 40000
+
+# Modelos por etapa (o core já traduz fallback via ENV se precisar)
+models_by_stage:
+  recepcao:     "gpt-4o-mini"
+  qualificacao: "gpt-4o-mini"
+  oferta:       "gpt-4o-mini"
+  objecoes:     "gpt-4o"
+  fechamento:   "gpt-4o-mini"
+  posvenda:     "gpt-4o-mini"
+
+global_models:
+  recepcao:     "gpt-4o-mini"
+  qualificacao: "gpt-4o-mini"
+  oferta:       "gpt-4o-mini"
+  objecoes:     "gpt-4o"
+  fechamento:   "gpt-4o-mini"
+  posvenda:     "gpt-4o-mini"
+
+typing:
+  ms_per_char: 35
+  min_ms: 800
+  max_ms: 5000
+
+messages:
+  opening:
+    - "Oi! Eu sou a Maria 😊 Como é seu cabelo: liso, ondulado, cacheado ou crespo?"
+  qualify_followups:
+    - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
+    - "Prefere resultado bem liso ou só alinhado com brilho?"
+  offer_templates:
+    - "Com base no que você me contou, consigo por R${{price_target}} 🛒 Te mando o link do checkout?"
+  objection_handles:
+    - "Entendo! Já são mais de {{sold_count}} unidades vendidas. Quer ver depoimentos e modo de uso?"
+  closing:
+    - "Perfeito! Te envio o link do checkout seguro agora. Pagamento na entrega (COD)."
+  postsale_pre_coupon:
+    - "Pagamento confirmado! 🎉 Você receberá mensagens para acompanhar a entrega."
+  postsale_after_payment_with_coupon:
+    - "Como agradecimento, aqui vai um cupom para a PRÓXIMA compra: {{coupon_code}} 🎁"
+  postsale_followup_days: 7
+
+guardrails:
+  price_min: 149
+  price_max: 249
+  allow_links_only_from_list: true
+  allowed_links:
+    - "{{checkout_link}}"
+    - "{{site_url}}"
+  freeze_fields:
+    - "price_target"
+    - "checkout_link"
+    - "coupon_code"
+    - "sold_count"
+
+audio:
+  asr_provider: "openai"
+  asr_model: "whisper-1"
+  tts_provider: "none"
+  tts_voice: "alloy"
