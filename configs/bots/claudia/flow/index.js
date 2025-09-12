@@ -1,4 +1,4 @@
-// flow/index.js — roteador simples
+// Roteador da Cláudia (prioriza pós-venda → close → offer → objections → faq → qualify → greet)
 
 import greet from './greet.js';
 import qualify from './qualify.js';
@@ -22,15 +22,17 @@ export const ordered = [greet, qualify, objections, offer, close, postsale, faq]
 
 export function pickFlow(text = '', settings = {}, jid = '') {
   const t = clean(text);
-
   if (RX.postsale.test(t)) return postsale;
   if (isAwaitingConsent(jid) || RX.close.test(t)) return close;
-  if (RX.offer.test(t))    return offer;
+  if (RX.offer.test(t)) return offer;
   if (typeof objections.match === 'function' && objections.match(text, settings)) return objections;
   if (typeof faq.match === 'function' && faq.match(text, settings)) return faq;
   if (typeof qualify.match === 'function' && qualify.match(text))   return qualify;
-
   return greet;
+}
+
+export function __route(text = '', settings = {}, jid = '') {
+  return pickFlow(text, settings, jid);
 }
 
 export default ordered;

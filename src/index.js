@@ -1,4 +1,4 @@
-﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox/Direct + ASR + TTS + LLM)
+﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox/Direct + ASR + TTS + LLM + Promo Admin)
 // Core neutro. Filtra JSON do LLM, aplica guardrails de link e suporta áudio end-to-end.
 
 import express from 'express';
@@ -33,6 +33,15 @@ try {
   console.warn('[TTS] módulo ausente — respostas por áudio desabilitadas.');
 }
 
+// ===== Promoções (sorteio): dynamic import p/ não quebrar caso ausente
+let promotions = null;
+try {
+  const pmod = await import('./core/promotions.js');
+  promotions = pmod?.default || pmod;
+} catch {
+  console.warn('[promotions] módulo ausente — endpoints e enroll seguirão sem erro.');
+}
+
 // ===== App/ENV
 if (process.env.NODE_ENV !== 'production') {
   try { await import('dotenv/config'); } catch {}
@@ -51,6 +60,8 @@ const envNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const PORT = envNum(process.env.PORT, 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
+const OPS_TOKEN = process.env.OPS_TOKEN || process.env.ADMIN_TOKEN || '';
+
 const ECHO_MODE = envBool(process.env.ECHO_MODE, false);
 let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
 let sendEnabled = envBool(process.env.SEND_ENABLED, true);
@@ -67,6 +78,14 @@ const outbox = await createOutbox({
   redisUrl: REDIS_MAIN_URL,
 });
 
+// ==== Auth de operações admin (promo/export/draw/logs)
+function requireOpsAuth(req, res, next) {
+  const token = req.get('X-Ops-Token') || (req.query?.token ?? '');
+  if (!OPS_TOKEN) return res.status(403).json({ ok: false, error: 'OPS_TOKEN unset' });
+  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  next();
+}
+
 // =================== Helpers de envio ===================
 async function sendViaAdapter(to, kind, payload) {
   if (!to || !sendEnabled) return;
@@ -79,7 +98,6 @@ async function sendViaAdapter(to, kind, payload) {
   if (kind === 'audio') {
     const buf = payload?.buffer;
     const mime = payload?.mime || 'audio/ogg';
-    // tenta as variantes mais comuns de áudio no adapter
     if (buf && typeof adapter?.sendAudio === 'function') {
       await adapter.sendAudio(to, buf, { mime, ptt: true });
       return;
@@ -88,12 +106,10 @@ async function sendViaAdapter(to, kind, payload) {
       await adapter.sendVoice(to, buf, { mime });
       return;
     }
-    // fallback: manda o texto se não houver suporte a áudio
     const fallbackText = (payload?.fallbackText || '').toString();
     if (fallbackText) await adapter.sendMessage(to, { text: fallbackText });
     return;
   }
-  // texto
   const text = String(payload?.text || '');
   if (text) await adapter.sendMessage(to, { text });
 }
@@ -158,7 +174,6 @@ async function ttsIfPossible(text) {
   try {
     const voice = settings?.audio?.ttsVoice || 'alloy';
     const lang  = settings?.audio?.language || 'pt';
-    // expect: { buffer, mime }  (core/tts deve retornar assim)
     const out = await ttsSpeak({ text, voice, language: lang, format: 'ogg' });
     if (out?.buffer?.byteLength) return { buffer: out.buffer, mime: out.mime || 'audio/ogg' };
   } catch (e) {
@@ -181,7 +196,7 @@ function expandTemplates(str, ctx) {
 }
 function allowedLinksFromSettings() {
   const raw = settings?.guardrails?.allowed_links || [];
-  const ctx = { ...settings, product: settings?.product || {} };
+  const ctx = { ...settings, product: settings?.product || {}, sweepstakes: settings?.sweepstakes || {} };
   return (Array.isArray(raw) ? raw : [])
     .map((u) => expandTemplates(u, ctx))
     .filter((u) => typeof u === 'string' && u.trim().startsWith('http'));
@@ -224,7 +239,6 @@ function prepareOutboundText(llmOut) {
 // =================== Entrega unificada (texto + opcional áudio) ===================
 async function deliverReply({ to, text, wantAudio = false }) {
   const cleanText = prepareOutboundText(text);
-  // 1) tenta áudio (se pedido e possível)
   if (wantAudio && settings?.flags?.allow_audio_out !== false) {
     const audio = await ttsIfPossible(cleanText);
     if (audio?.buffer) {
@@ -235,7 +249,6 @@ async function deliverReply({ to, text, wantAudio = false }) {
       });
     }
   }
-  // 2) envia o texto (sempre)
   await enqueueOrDirect({ to, payload: { text: cleanText } });
 }
 
@@ -272,7 +285,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) return '';
 
-    // webhook de pós-venda por palavra-chave
+    // webhook-like por texto (pós-venda)
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await hooks.onPaymentConfirmed({
         jid: from,
@@ -298,7 +311,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
 
     // Fallback — flows determinísticos
     let flowObj = null;
-    try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText); } catch {}
+    try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText, settings, from); } catch {}
     if (!flowObj) flowObj = flows?.[intentOf(msgText) || 'greet'];
 
     if (flowObj?.run) {
@@ -388,9 +401,9 @@ app.get('/ops/mode', (req, res) => {
   res.json({ ok: true, direct_send: DIRECT_SEND, backend: outbox.backend() });
 });
 
-app.get('/ops/status', (_req, res) =>
-  res.json({ ok: true, intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND }),
-);
+app.get('/ops/status', (_req, res) => {
+  res.json({ ok: true, intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND });
+});
 
 app.post('/wpp/send', limiter, async (req, res) => {
   try {
@@ -406,18 +419,93 @@ app.post('/wpp/send', limiter, async (req, res) => {
   }
 });
 
+// ===== Webhook de pagamento + inscrição em promoções =====
 app.post('/webhook/payment', async (req, res) => {
   try {
-    const { token, to, status } = req.body || {};
-    if (token !== process.env.WEBHOOK_TOKEN) return res.status(401).end();
-    if (String(status).toLowerCase() === 'paid' && to) {
+    const headerToken = req.get('X-Webhook-Token');
+    const bodyToken = (req.body && req.body.token) || '';
+    const tokenOk = (headerToken && headerToken === process.env.WEBHOOK_TOKEN) || (bodyToken === process.env.WEBHOOK_TOKEN);
+    if (!tokenOk) return res.status(401).json({ ok: false, error: 'invalid token' });
+
+    const { to, status, order_id, delivered_at, buyer } = req.body || {};
+    const normalizedStatus = String(status || '').toLowerCase();
+    const eligible = normalizedStatus === 'paid' || normalizedStatus === 'delivered';
+
+    if (eligible && to && order_id) {
+      if (promotions && typeof promotions.enroll === 'function') {
+        promotions.enroll({
+          jid: String(to),
+          order_id: String(order_id),
+          status: normalizedStatus,
+          delivered_at: delivered_at || null,
+          extra: { buyer: buyer || null }
+        });
+      }
+
       await hooks.onPaymentConfirmed({
         jid: String(to),
         settings,
         send: async (jid, text) => enqueueOrDirect({ to: jid, payload: { text: prepareOutboundText(text) } }),
       });
     }
+
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// ===== Endpoints Admin de Promoções =====
+app.get('/ops/promo/export', requireOpsAuth, (req, res) => {
+  try {
+    const month = (req.query?.month || '').toString() || undefined; // YYYY-MM ou mês corrente
+    if (!promotions || typeof promotions.exportMonth !== 'function') {
+      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
+    }
+    const r = promotions.exportMonth(month);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post('/ops/promo/draw', requireOpsAuth, (req, res) => {
+  try {
+    const month = (req.body?.month || req.query?.month || '').toString() || undefined;
+    const n = Number(req.body?.n || req.query?.n || 3);
+    if (!promotions || typeof promotions.drawWinners !== 'function') {
+      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
+    }
+    const r = promotions.drawWinners(month, n);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get('/ops/promo/months', requireOpsAuth, (req, res) => {
+  try {
+    if (!promotions || typeof promotions.monthsAvailable !== 'function') {
+      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
+    }
+    const months = promotions.monthsAvailable();
+    const stats = months.map(m => promotions.monthStats(m));
+    res.json({ ok: true, months, stats });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get('/ops/promo/logs', requireOpsAuth, (req, res) => {
+  try {
+    const n = Number(req.query?.n || 200);
+    const grep = (req.query?.grep || '').toString();
+    const month = (req.query?.month || '').toString();
+    if (!promotions || typeof promotions.tailLog !== 'function') {
+      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
+    }
+    const r = promotions.tailLog({ n, grep, month });
+    res.json({ ok: true, ...r });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

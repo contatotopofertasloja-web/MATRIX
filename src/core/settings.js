@@ -1,4 +1,3 @@
-// src/core/settings.js
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,37 +14,24 @@ function env(name, def) {
 const asBool = (v, d = false) =>
   v == null ? d : ['1', 'true', 'yes', 'y', 'on'].includes(String(v).trim().toLowerCase());
 
-// BOT / PATHS
 export const BOT_ID = env('BOT_ID', 'claudia');
 const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
-// ===== Aliases de estágio → canônico
 const STAGE_KEY_ALIASES = new Map([
   ['recepção', 'recepcao'], ['recepcao', 'recepcao'],
   ['qualificação', 'qualificacao'], ['qualificacao', 'qualificacao'],
   ['oferta', 'oferta'],
-  ['objeções', 'objecoes'], ['objecoes', 'objecoes'], ['obstrucoes', 'objecoes'],
+  ['objeções', 'objecoes'], ['objecoes', 'objecoes'],
   ['fechamento', 'fechamento'],
   ['pós-venda', 'posvenda'], ['posvenda', 'posvenda'], ['postsale', 'posvenda'],
 ]);
-
-function normalizeStageKey(k) {
-  if (!k) return k;
-  const base = String(k).trim().toLowerCase();
-  return STAGE_KEY_ALIASES.get(base) || base;
-}
-
+function normalizeStageKey(k) { if (!k) return k; const base = String(k).trim().toLowerCase(); return STAGE_KEY_ALIASES.get(base) || base; }
 function normalizeModelsByStage(map) {
   const out = {};
-  if (map && typeof map === 'object') {
-    for (const [k, v] of Object.entries(map)) {
-      out[normalizeStageKey(k)] = String(v || '').trim();
-    }
-  }
+  if (map && typeof map === 'object') for (const [k, v] of Object.entries(map)) out[normalizeStageKey(k)] = String(v || '').trim();
   return out;
 }
 
-// ===== Modelos globais (ENV)
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -55,22 +41,19 @@ const GLOBAL_MODELS = {
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
-// ===== FLAGS globais (ENV → core)
 const FLAGS = {
   useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
   fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
 };
 
-// ===== Áudio / TTS
 const AUDIO = {
   asrProvider: env('ASR_PROVIDER', 'openai'),
   asrModel:    env('ASR_MODEL',    'whisper-1'),
-  ttsProvider: env('TTS_PROVIDER', 'none'),
+  ttsProvider: env('TTS_PROVIDER', 'openai'),
   ttsVoice:    env('TTS_VOICE',    'alloy'),
   language:    env('ASR_LANG',     'pt'),
 };
 
-// ===== LLM defaults
 const LLM_DEFAULTS = {
   provider:    env('LLM_PROVIDER', 'openai'),
   temperature: Number(env('LLM_TEMPERATURE', '0.5')),
@@ -83,7 +66,6 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
-// ===== Defaults de arquivo (fallback se YAML ausente)
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -95,14 +77,11 @@ let fileSettings = {
   messages: {},
 };
 
-// ===== Carrega YAML e normaliza
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
     const parsed = YAML.parse(text) || {};
-    if (parsed.models_by_stage) {
-      parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
-    }
+    if (parsed.models_by_stage) parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
     fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
@@ -112,13 +91,11 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
-// ===== Overrides por ENV (proposta: trocar link/preço/cupom sem editar YAML)
 fileSettings.product = fileSettings.product || {};
 {
   const envCheckout = env('CHECKOUT_LINK', '').trim();
   const envCoupon   = env('COUPON_CODE', '').trim();
   const envPriceT   = env('PRICE_TARGET', '').trim();
-
   if (envCheckout) fileSettings.product.checkout_link = envCheckout;
   if (envCoupon)   fileSettings.product.coupon_code   = envCoupon;
   if (envPriceT !== '') {
@@ -127,17 +104,14 @@ fileSettings.product = fileSettings.product || {};
   }
 }
 
-// ===== Toggles de áudio por ENV (ex.: noturnas sem TTS)
 {
   const audioOutEnv = env('ALLOW_AUDIO_OUT', '');
   const audioInEnv  = env('ALLOW_AUDIO_IN',  '');
-
   fileSettings.flags = fileSettings.flags || {};
   if (audioOutEnv !== '') fileSettings.flags.allow_audio_out = asBool(audioOutEnv, true);
   if (audioInEnv  !== '') fileSettings.flags.allow_audio_in  = asBool(audioInEnv,  true);
 }
 
-// ===== Guardrails: se "allow_links_only_from_list" estiver ativo, garanta o checkout na allowlist
 {
   const g = fileSettings.guardrails || {};
   if (g.allow_links_only_from_list) {
@@ -147,7 +121,6 @@ fileSettings.product = fileSettings.product || {};
   }
 }
 
-// ===== Export unificado
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,

@@ -1,6 +1,4 @@
 # configs/bots/claudia/faq.yaml
-# Este arquivo é lido pelo loader e disponibilizado em settings.faq.categories
-# O orquestrador consulta via tools.getFAQ → NUNCA inventa preço/prazo/link.
 
 categories:
 
@@ -9,7 +7,6 @@ categories:
       - "\\b(prazo|entrega|quando\\s*(chega|recebo)|quanto\\s*tempo|frete|entregam)\\b"
     answers:
       - "Prazo típico: até {{product.delivery_sla.capitals_hours}}h em capitais e até {{product.delivery_sla.others_hours}}h nas demais regiões."
-      - "Entregamos rápido: capitais em até {{product.delivery_sla.capitals_hours}}h; demais regiões em até {{product.delivery_sla.others_hours}}h."
 
   payment:
     triggers:
@@ -17,79 +14,82 @@ categories:
       - "\\b(paga\\s*na\\s*entrega|pagamento\\s*na\\s*entrega)\\b"
     answers:
       - "{{messages.cod_short}}"
-      - "Você confirma o pedido agora e paga *na entrega* (COD). Simples e sem risco."
+
+  installments:
+    triggers:
+      - "\\b(parcel(a|amento|ar)|divide(m|r|n)|dividem|12x|cart[aã]o\\s*em\\s*vezes|parcelas)\\b"
+    answers:
+      - "Podemos parcelar em *até 12x* no cartão."
+    sub_triggers:
+      interest:
+        triggers:
+          - "\\b(juros?|com\\s*juros|tem\\s*juros)\\b"
+        answers:
+          - "Se aparecer algum *juros*, ele vem do *seu cartão* (administradora), não da loja."
 
   price_info:
-    # Informação de preço sem empurrar link (offer/close cuidam do link)
     triggers:
-      - "\\b(pre(ç|c)o|preco|quanto\\s*custa|valor|tabela\\s*de\\s*pre(ç|c)os|desconto|promo(c|ç)ao|promo(ç|c)(a|ã)o)\\b"
+      - "\\b(pre(ç|c)o|preco|quanto\\s*custa|valor|desconto|promo(c|ç)ao)\\b"
     answers:
       - "Consigo por *R${{product.price_target}}* hoje. {{messages.cod_short}}"
-      - "Hoje está *R${{product.price_target}}*. Posso te explicar como funciona e o passo a passo?"
 
   product_name:
     triggers:
       - "\\b(nome\\s*(do|da)\\s*produto|qual\\s*produto|como\\s*se\\s*chama|marca)\\b"
     answers:
       - "É o *{{product.name}}*."
-      - "O nome é *{{product.name}}*."
 
   usage:
     triggers:
       - "\\b(como\\s*usar|modo\\s*de\\s*uso|aplic(a|ação)|passo\\s*a\\s*passo|tempo\\s*de\\s*pausa|frequ(ê|e)ncia\\s*de\\s*uso)\\b"
     answers:
       - "{{product.how_to_use}}"
-      - "Resumo rápido: {{product.how_to_use}}"
 
   safety_formol:
     triggers:
       - "\\b(formol|formalde(i|í)do|seguran(c|ç)a|anvisa|alergia|sensibilidade|ard(ê|e)nci|coceira)\\b"
     answers:
       - "Sem formol adicionado. Siga o modo de uso; se for sensível, recomendamos teste de mecha."
-      - "Produto sem formol adicionado. Para couro sensível, faça teste de mecha antes."
 
   guarantee:
     triggers:
       - "\\b(garantia|devolu(c|ç)ao|troca|suporte|pos\\s*-?venda|p(ó|o)s-?venda)\\b"
     answers:
-      - "Você conta com pós-venda real. Se algo sair diferente do combinado, a gente resolve com você."
-      - "Temos suporte e política justa de troca. Não deixo você na mão 🙂"
+      - "{{messages.guarantee_short}}"
 
   results_duration:
     triggers:
       - "\\b(quanto\\s*dura|durabilidade|resultado(s)?|antes\\s*e\\s*depois|quantas\\s*aplicac(oes|ões))\\b"
     answers:
       - "Resultados variam por cabelo; muitos relatos são de 6–8 semanas com uso correto."
-      - "Com uso certinho, os relatos mais comuns são *6–8 semanas* de efeito."
 
   benefits_value:
-    # Construção de valor (pode responder quando a cliente pergunta “o que ele faz?”)
     triggers:
       - "\\b(benef(í|i)cios?|o\\s*que\\s*faz|funciona\\s*para|vantagens?|diferen(c|ç)ial|por\\s*que\\s*vale)\\b"
     answers:
       - "{{product.value_props[0] | default('reduz *frizz* sem pesar')}}"
-      - "{{product.value_props[1] | default('deixa *alinhado com brilho* já na primeira aplicação')}}"
 
   trust_cod:
-    # Objeção de confiança no pagamento/entrega
     triggers:
       - "\\b(n(ã|a)o\\s*(confio|seguro)|medo|golpe|entregador|vai\\s*chegar|confian(c|ç)a)\\b"
     answers:
-      - "{{messages.cod_short}} Você só paga ao receber. Acompanhamento por WhatsApp desde a confirmação."
-      - "Sem risco: COD. Confirmamos o pedido e você acompanha; o pagamento é só na entrega."
+      - "{{messages.cod_short}} Você só paga ao receber."
 
-  too_expensive:
-    # Objeção de preço
+  # ===== Sorteio / Prêmios do mês =====
+  sweepstakes_info:
     triggers:
-      - "\\b(caro|muito\\s*alto|consigo\\s*mais\\s*barato|n(ã|a)o\\s*cabe\\s*no\\s*meu\\s*bolso)\\b"
+      - "\\b(sorteio|pr(ê|e)mio(s)?|promo(c|ç)(a|ã)o|concorrer|prêmios\\s*do\\s*m(ê|e)s)\\b"
     answers:
-      - "Entendo. A proposta é *resultado com segurança* e praticidade em casa. Posso te orientar pro melhor custo-benefício?"
-      - "Combinamos *resultado + segurança (sem formol adicionado)*. Se quiser, te mostro como otimizar o uso pra render mais."
+      - "Neste mês, quem compra participa automaticamente de um sorteio com 3 prêmios. Posso te explicar ou você prefere ver o regulamento?"
 
-  smalltalk:
-    # Fala leve, sem “assistente virtual”
+  sweepstakes_rules:
     triggers:
-      - "\\b(ol[aá]|oi|bom\\s*dia|boa\\s*tarde|boa\\s*noite|tudo\\s*bem|como\\s*vai|e\\s*a(i|í))\\b"
+      - "\\b(regulamento|ver\\s*no\\s*site|ver\\s*regras|link\\s*do\\s*regulamento)\\b"
     answers:
-      - "Oi! Tudo bem? Como posso te ajudar com seus cabelos hoje? 😊"
-      - "Olá! Me conta como você quer ver seu cabelo: *bem liso* ou *alinhado com brilho*?"
+      - "Regulamento e detalhes: {{sweepstakes.page_url}}"
+
+  sweepstakes_track:
+    triggers:
+      - "\\b(acompanhar|resultado\\s*do\\s*sorteio|quando\\s*divulgam|ganhadoras?)\\b"
+    answers:
+      - "Acompanhe as informações pelo site; e avisamos as ganhadoras no WhatsApp."

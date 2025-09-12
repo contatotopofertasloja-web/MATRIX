@@ -19,7 +19,6 @@ export default {
     const checkout = p?.checkout_link;
     const t = clean(text);
 
-    // só envia se pediu link OU deu consentimento após oferta
     if (!checkout) return;
 
     if (YES.test(t) || isAwaitingConsent(jid)) {

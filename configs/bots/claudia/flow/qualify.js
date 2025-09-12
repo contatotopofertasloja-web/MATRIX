@@ -1,5 +1,4 @@
-// configs/bots/claudia/flow/qualify.js
-// Capta tipo de cabelo e objetivo, evita repetição (cooldown) e avança o funil.
+// Capta tipo de cabelo e objetivo, evita repetição e avança o funil.
 
 const state = new Map(); // jid -> { hairType, goal, asked: { hair:ms, goal:ms } }
 
@@ -21,7 +20,7 @@ export default {
 
   match(text='') {
     const t = clean(text);
-    return !!t; // qualquer texto que não foi pego por greet já passa aqui
+    return !!t;
   },
 
   async run(ctx = {}) {
@@ -29,11 +28,9 @@ export default {
     const t = clean(text);
     const s = state.get(jid) || { hairType: null, goal: null, asked: {} };
 
-    // 1) Captura sinais
     if (RX.hairType.test(t)) s.hairType = (t.match(RX.hairType)||[])[0];
     if (RX.goal.test(t))     s.goal     = (t.match(RX.goal)||[])[0];
 
-    // 2) Pergunta *apenas* o que falta, com cooldown (evita loop)
     if (!s.hairType) {
       if (canAsk(s.asked?.hair)) {
         s.asked.hair = Date.now();
@@ -47,22 +44,20 @@ export default {
       if (canAsk(s.asked?.goal)) {
         s.asked.goal = Date.now();
         state.set(jid, s);
-        await send(jid, 'Você busca deixar *bem liso* ou só *alinhado com brilho*? (Se preferir, posso focar em *controlar o frizz* ou *reduzir volume*)');
+        await send(jid, 'Você busca deixar *bem liso* ou *alinhado com brilho*? (Posso focar em *controlar frizz* ou *reduzir volume*)');
         return;
       }
     }
 
-    // 3) Se já temos dados, avança: faz um resumo curto e deixa o OFFER seguir
     if (s.hairType || s.goal) {
       state.set(jid, s);
       const partes = [];
       if (s.hairType) partes.push(`cabelo *${s.hairType}*`);
       if (s.goal)     partes.push(`foco em *${s.goal}*`);
-      await send(jid, `Entendi: ${partes.join(' + ')}. Se quiser, já te passo o *preço* e como funciona.`);
+      await send(jid, `Entendi: ${partes.join(' + ')}. Posso te passar o *preço* e como funciona?`);
       return;
     }
 
-    // fallback educado, sem repetir perguntas
     await send(jid, 'Perfeito! Se puder, me diga seu *tipo de cabelo* e seu *objetivo* (ex.: bem liso, controlar frizz, reduzir volume).');
   }
 };

@@ -1,4 +1,4 @@
-// OFFER — informa preço só quando pedem; evita repetir e marca consentimento.
+// OFFER — oferta persuasiva + teaser do sorteio (sem link do regulamento aqui)
 
 import { setAwaitingConsent, canOfferNow } from './_state.js';
 
@@ -25,22 +25,23 @@ export default {
     const hook = pick(p?.value_props)||'alinha os fios e controla o frizz de forma prática';
     const cod  = settings?.messages?.cod_short || 'Pagamento na entrega (COD), sem risco.';
     const grt  = settings?.messages?.guarantee_short || 'Garantia de 7 dias após a entrega.';
+    const teaser = settings?.sweepstakes?.enabled
+      ? (settings?.messages?.sweepstakes_teaser || 'Comprando este mês você concorre a 3 prêmios.')
+      : '';
 
-    // Pedido explícito de link
     if(RX.askLink.test(t) && checkout){
       setAwaitingConsent(jid, false);
       await send(jid, `Perfeito! Aqui está o link do checkout (preencher endereço). Depois o entregador chama no WhatsApp. ${cod}\n${checkout}`);
       return;
     }
 
-    // Evita flood de oferta se repetir pergunta de preço
     if(!canOfferNow(jid)) {
-      await send(jid, `Consigo manter *R$${price}* hoje. ${cod} ${grt} Quer que eu te envie o link do checkout?`);
+      await send(jid, `Consigo manter *R$${price}* hoje. ${cod} ${grt} ${teaser} Quer que eu te envie o link do checkout?`);
       setAwaitingConsent(jid, true);
       return;
     }
 
-    await send(jid, `Hoje sai de R$${p.price_original} por *R$${price}*. ${cod} ${grt} Quer que eu te envie o link do checkout?`);
+    await send(jid, `Hoje sai de R$${p.price_original} por *R$${price}*. ${hook}. ${cod} ${grt} ${teaser} Quer que eu te envie o link do checkout?`);
     setAwaitingConsent(jid, true);
   }
 };
