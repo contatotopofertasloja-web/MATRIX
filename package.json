@@ -2,10 +2,7 @@
   "name": "matrix-wpp",
   "version": "2.0.0",
   "description": "Projeto Matrix IA 2.0 — Cláudia (assistente de vendas no WhatsApp, Baileys + GPT)",
-  "main": "src/index.js",git add -A
-git commit -m "fix(bots): mover pastas para configs/bots e normalizar case (maria)"
-git push
-
+  "main": "src/index.js",
   "type": "module",
   "scripts": {
     "dev": "cross-env NODE_ENV=development nodemon src/index.js",

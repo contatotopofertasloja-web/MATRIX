@@ -96,7 +96,9 @@ try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
     const parsed = YAML.parse(text) || {};
-    if (parsed.models_by_stage) parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
+    if (parsed.models_by_stage) {
+      parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
+    }
     fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
@@ -105,12 +107,6 @@ try {
 } catch (e) {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
-
-// ===== Overrides por ENV (mantém teu CHECKOUT_LINK/PRICE_TARGET/COUPON_CODE)
-if (!fileSettings.product) fileSettings.product = {};
-fileSettings.product.checkout_link = env('CHECKOUT_LINK', fileSettings.product.checkout_link);
-fileSettings.product.price_target  = Number(env('PRICE_TARGET', fileSettings.product.price_target ?? 170));
-fileSettings.product.coupon_code   = env('COUPON_CODE', fileSettings.product.coupon_code);
 
 // ===== Export unificado
 export const settings = {
