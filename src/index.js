@@ -1,4 +1,5 @@
-﻿// src/index.js — Matrix IA 2.0 (enxuto): HTTP + WPP + Outbox/Direct + ASR + LLM via hooks de bot
+﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox/Direct + ASR + TTS + LLM)
+// Core neutro. Filtra JSON do LLM, aplica guardrails de link e suporta áudio end-to-end.
 
 import express from 'express';
 import cors from 'cors';
@@ -12,30 +13,38 @@ import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
-
-// ➕ (novo) orquestrador
 import { orchestrate } from './core/orchestrator.js';
 
+// ===== ASR (whisper/…)
 let transcribeAudio = null;
 try {
   const asrMod = await import('./core/asr.js');
   transcribeAudio = asrMod?.transcribeAudio || asrMod?.default || null;
 } catch {
-  console.warn('[ASR] módulo ausente — áudio será ignorado.');
+  console.warn('[ASR] módulo ausente — áudio será ignorado na entrada.');
 }
 
+// ===== TTS (voz/áudio de saída)
+let ttsSpeak = null;
+try {
+  const ttsMod = await import('./core/tts.js');
+  ttsSpeak = ttsMod?.synthesizeTTS || ttsMod?.speak || ttsMod?.default || null;
+} catch {
+  console.warn('[TTS] módulo ausente — respostas por áudio desabilitadas.');
+}
+
+// ===== App/ENV
 if (process.env.NODE_ENV !== 'production') {
   try { await import('dotenv/config'); } catch {}
 }
-
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 
-const envBool = (v, d = false) =>
-  (v == null ? d : ['1', 'true', 'yes', 'y', 'on'].includes(String(v).trim().toLowerCase()));
+const envBool = (v, d=false) =>
+  (v==null ? d : ['1','true','yes','y','on'].includes(String(v).trim().toLowerCase()));
 const envNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
 // === ENV principais ===
@@ -58,17 +67,35 @@ const outbox = await createOutbox({
   redisUrl: REDIS_MAIN_URL,
 });
 
-// Envio base
+// =================== Helpers de envio ===================
 async function sendViaAdapter(to, kind, payload) {
   if (!to || !sendEnabled) return;
   if (kind === 'image') {
     const url = payload?.url;
     const caption = (payload?.caption || '').toString();
     if (url) await adapter.sendImage(to, url, caption);
-  } else {
-    const text = String(payload?.text || '');
-    if (text) await adapter.sendMessage(to, text);
+    return;
   }
+  if (kind === 'audio') {
+    const buf = payload?.buffer;
+    const mime = payload?.mime || 'audio/ogg';
+    // tenta as variantes mais comuns de áudio no adapter
+    if (buf && typeof adapter?.sendAudio === 'function') {
+      await adapter.sendAudio(to, buf, { mime, ptt: true });
+      return;
+    }
+    if (buf && typeof adapter?.sendVoice === 'function') {
+      await adapter.sendVoice(to, buf, { mime });
+      return;
+    }
+    // fallback: manda o texto se não houver suporte a áudio
+    const fallbackText = (payload?.fallbackText || '').toString();
+    if (fallbackText) await adapter.sendMessage(to, { text: fallbackText });
+    return;
+  }
+  // texto
+  const text = String(payload?.text || '');
+  if (text) await adapter.sendMessage(to, { text });
 }
 
 async function enqueueOrDirect({ to, kind = 'text', payload = {} }) {
@@ -85,19 +112,17 @@ async function enqueueOrDirect({ to, kind = 'text', payload = {} }) {
   }
 }
 
-// Worker outbox
 await outbox.start(async (job) => {
   const { to, kind = 'text', payload = {} } = job || {};
   await sendViaAdapter(to, kind, payload);
 });
 
-// Flows e hooks
-// IMPORTANTE: guardamos o retorno para roteamento local por flow
+// =================== Flows/Hooks ===================
 const flows = await loadFlows(BOT_ID);
 const hooks = await getBotHooks();
 const sentOpening = new Set();
 
-// Helpers ASR
+// =================== ASR helpers ===================
 async function tryGetAudioBuffer(raw) {
   try {
     if (typeof adapter?.getAudioBuffer === 'function') return await adapter.getAudioBuffer(raw);
@@ -123,14 +148,102 @@ async function transcribeIfPossible(buf, mime = 'audio/ogg') {
     return null;
   }
 }
+function isAudioMessage(raw) {
+  try { return !!raw?.message?.audioMessage; } catch { return false; }
+}
 
-// ====================
-// Handler principal (PATCH: orquestrador primeiro, 1 resposta)
-// ====================
+// =================== TTS helpers ===================
+async function ttsIfPossible(text) {
+  if (!text || typeof ttsSpeak !== 'function') return null;
+  try {
+    const voice = settings?.audio?.ttsVoice || 'alloy';
+    const lang  = settings?.audio?.language || 'pt';
+    // expect: { buffer, mime }  (core/tts deve retornar assim)
+    const out = await ttsSpeak({ text, voice, language: lang, format: 'ogg' });
+    if (out?.buffer?.byteLength) return { buffer: out.buffer, mime: out.mime || 'audio/ogg' };
+  } catch (e) {
+    console.warn('[TTS] synth fail:', e?.message || e);
+  }
+  return null;
+}
+
+// =================== Guardrails / JSON filter ===================
+function get(obj, path) {
+  return String(path || '')
+    .split('.')
+    .reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
+}
+function expandTemplates(str, ctx) {
+  return String(str || '').replace(/{{\s*([^}]+)\s*}}/g, (_, p) => {
+    const v = get(ctx, p.trim());
+    return v == null ? '' : String(v);
+  });
+}
+function allowedLinksFromSettings() {
+  const raw = settings?.guardrails?.allowed_links || [];
+  const ctx = { ...settings, product: settings?.product || {} };
+  return (Array.isArray(raw) ? raw : [])
+    .map((u) => expandTemplates(u, ctx))
+    .filter((u) => typeof u === 'string' && u.trim().startsWith('http'));
+}
+function sanitizeLinks(text) {
+  const allow = new Set(allowedLinksFromSettings());
+  return String(text || '').replace(/https?:\/\/\S+/gi, (url) => {
+    return allow.has(url) ? url : '[link removido]';
+  });
+}
+function stripCodeFences(s='') {
+  const t = String(s).trim();
+  if (t.startsWith('```')) {
+    const inner = t.replace(/^```[a-zA-Z0-9]*\s*/,'').replace(/```$/,'').trim();
+    return inner;
+  }
+  return t;
+}
+function parseJSONSafe(s) {
+  try { return JSON.parse(stripCodeFences(s)); } catch { return null; }
+}
+function extractReplyAndMeta(outText) {
+  const parsed = parseJSONSafe(outText);
+  if (parsed && typeof parsed === 'object' && parsed.reply) {
+    return {
+      reply: String(parsed.reply || '').trim(),
+      stage: parsed.stage || '',
+      slots: parsed.slots || {},
+      tool_calls: parsed.tool_calls || [],
+      raw: parsed,
+    };
+  }
+  return { reply: String(outText || '').trim(), stage: '', slots: {}, tool_calls: [], raw: null };
+}
+function prepareOutboundText(llmOut) {
+  const { reply } = extractReplyAndMeta(llmOut);
+  return sanitizeLinks(reply);
+}
+
+// =================== Entrega unificada (texto + opcional áudio) ===================
+async function deliverReply({ to, text, wantAudio = false }) {
+  const cleanText = prepareOutboundText(text);
+  // 1) tenta áudio (se pedido e possível)
+  if (wantAudio && settings?.flags?.allow_audio_out !== false) {
+    const audio = await ttsIfPossible(cleanText);
+    if (audio?.buffer) {
+      await enqueueOrDirect({
+        to,
+        kind: 'audio',
+        payload: { buffer: audio.buffer, mime: audio.mime, fallbackText: cleanText },
+      });
+    }
+  }
+  // 2) envia o texto (sempre)
+  await enqueueOrDirect({ to, payload: { text: cleanText } });
+}
+
+// =================== Handler principal ===================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
   try {
-    // (0) mídia de abertura via hook (1x por contato)
+    // mídia de abertura (1x por contato)
     if (!sentOpening.has(from)) {
       const media = await hooks.openingMedia({ settings });
       if (media?.url) {
@@ -143,22 +256,23 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       sentOpening.add(from);
     }
 
-    // (1) echo
+    // echo
     if (ECHO_MODE && text) {
       await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } });
       return '';
     }
 
-    // (2) texto base (ou ASR p/ áudio)
+    // texto base (ou ASR p/ áudio)
     let msgText = (text || '').trim();
-    if (hasMedia && !msgText) {
+    const incomingIsAudio = isAudioMessage(raw);
+    if (hasMedia && !msgText && incomingIsAudio) {
       const buf = await tryGetAudioBuffer(raw);
       const asr = buf ? await transcribeIfPossible(buf) : null;
       if (asr && asr.trim()) msgText = asr.trim();
     }
     if (!msgText) return '';
 
-    // (3) webhook de pós-venda por palavra-chave
+    // webhook de pós-venda por palavra-chave
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await hooks.onPaymentConfirmed({
         jid: from,
@@ -168,7 +282,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // (4) Orquestrador LLM (primeiro)
+    // Orquestrador LLM (primeiro)
     let reply = '';
     try {
       const intent = intentOf(msgText) || 'qualify';
@@ -178,35 +292,39 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
 
     if (reply && reply.trim()) {
-      await enqueueOrDirect({ to: from, payload: { text: reply } });
+      await deliverReply({ to: from, text: reply, wantAudio: incomingIsAudio });
       return '';
     }
 
-    // (5) Fallback — seus flows determinísticos
+    // Fallback — flows determinísticos
     let flowObj = null;
     try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText); } catch {}
     if (!flowObj) flowObj = flows?.[intentOf(msgText) || 'greet'];
 
     if (flowObj?.run) {
-      const send = async (to, t) => enqueueOrDirect({ to, payload: { text: String(t || '') } });
+      const send = async (to, t) => deliverReply({ to, text: String(t || ''), wantAudio: incomingIsAudio });
       await flowObj.run({ jid: from, text: msgText, settings, send });
       return '';
     }
 
-    // (6) Fallback final LLM "texto solto"
+    // Fallback final LLM "texto solto"
     const { system, user } = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
     const { text: fb } = await callLLM({ stage: 'qualify', system, prompt: user });
-    await enqueueOrDirect({ to: from, payload: { text: fb || 'Posso te explicar rapidamente como funciona e o valor?' } });
+    await deliverReply({
+      to: from,
+      text: fb || 'Posso te explicar rapidamente como funciona e o valor?',
+      wantAudio: incomingIsAudio,
+    });
     return '';
   } catch (e) {
     console.error('[onMessage]', e);
     const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
-    await enqueueOrDirect({ to: from, payload: { text: fb } });
+    await enqueueOrDirect({ to: from, payload: { text: prepareOutboundText(fb) } });
     return '';
   }
 });
 
-// Rotas HTTP
+// =================== Rotas HTTP ===================
 const limiter = rateLimit({
   windowMs: 60_000,
   max: 60,
@@ -247,9 +365,7 @@ app.get('/wpp/qr', async (req, res) => {
     const view = (req.query.view || '').toString();
     if (view === 'img') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.send(
-        `<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff"><img src="${dataURL}" width="320" height="320"/></body></html>`,
-      );
+      return res.send(`<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff"><img src="${dataURL}" width="320" height="320"/></body></html>`);
     }
     if (view === 'png') {
       const b64 = dataURL.split(',')[1];
@@ -283,7 +399,7 @@ app.post('/wpp/send', limiter, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
     }
     if (imageUrl) await enqueueOrDirect({ to, kind: 'image', payload: { url: imageUrl, caption: caption || '' } });
-    if (text) await enqueueOrDirect({ to, payload: { text } });
+    if (text) await enqueueOrDirect({ to, payload: { text: prepareOutboundText(text) } });
     res.json({ ok: true, enqueued: true, path: DIRECT_SEND ? 'direct' : 'outbox' });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -298,7 +414,7 @@ app.post('/webhook/payment', async (req, res) => {
       await hooks.onPaymentConfirmed({
         jid: String(to),
         settings,
-        send: async (jid, text) => enqueueOrDirect({ to: jid, payload: { text } }),
+        send: async (jid, text) => enqueueOrDirect({ to: jid, payload: { text: prepareOutboundText(text) } }),
       });
     }
     res.json({ ok: true });
@@ -313,7 +429,7 @@ app.post('/inbound', async (req, res) => {
     const jid = String(to || '').trim();
     const msg = String(text || '').trim();
     if (!jid || !msg) return res.status(400).json({ ok: false, error: 'Informe { to, text }' });
-    await enqueueOrDirect({ to: jid, payload: { text: msg } });
+    await enqueueOrDirect({ to: jid, payload: { text: prepareOutboundText(msg) } });
     res.json({ ok: true, enqueued: true, path: DIRECT_SEND ? 'direct' : 'outbox' });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
