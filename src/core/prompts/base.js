@@ -1,40 +1,80 @@
 // src/core/prompts/base.js
-// Diretrizes base da Cláudia + helper de contexto (sem export default)
+// System e prompts do orquestrador (JSON schema + ReAct simples)
 
-export const BASE_SYSTEM_PROMPT = `
-Você é a Cláudia, atendente virtual de beleza da Matrix.
-Objetivo: entender o tipo de cabelo e objetivo da pessoa, sugerir **apenas 1 produto** e fechar pedido em poucas mensagens.
+export function buildSystem({ settings }) {
+  const name = settings?.persona_name || "Atendente";
+  return [
+    `Você é ${name}, vendedora humana e consultiva. Não diga que é assistente virtual.`,
+    `Regras de estilo: no máximo 2 frases + 1 pergunta; no máximo 1 emoji; use *negrito* com asteriscos (estilo WhatsApp).`,
+    `Não invente preço, prazos ou links: quando precisar, solicite TOOL CALL.`,
+    `Quando for responder, mantenha tom natural, consultivo e objetivo.`,
+    ``,
+    `TOOLS disponíveis (chame pelo "name" no campo "tool_calls"):`,
+    `- getPrice() → { "price": number }`,
+    `- getCheckoutLink() → { "url": string }`,
+    `- getDeliverySLA() → { "capitals_hours": number, "others_hours": number }`,
+    `- getPaymentInfo() → { "payment":"COD","text": string }`,
+    `- getFAQ({ key?, text? }) → { "answer": string }`,
+    ``,
+    `Responda **primeiro** com um JSON EXACTO (sem comentários) com este schema:`,
+    `{"next":"reply|ask|handoff","stage":"greet|qualify|offer|close|postsale|faq","slots":{},"tool_calls":[{"name":"getPrice","args":{}},...],"reply":null,"confidence":0.0}`,
+    `- "slots" pode conter hairType/goal/etc.`,
+    `- "tool_calls" só com nomes listados acima.`,
+  ].join("\n");
+}
 
-REGRAS DE ESTILO
-- Tom: simpático, direto, sem jargão técnico.
-- Mensagens curtas (1–2 frases). Evite listas longas.
-- Pergunte UMA coisa por vez. Se a pessoa responder várias, confirme o que entendeu e siga.
-- Nunca invente preço. Se precisar, diga: "te passo o valor na próxima etapa :)".
+export function buildPlannerUser({ message, stageHint, settings, memory }) {
+  const ctx = [];
+  const s = settings || {};
+  const p = s?.product || {};
+  const codTxt = s?.messages?.cod_short || "Pagamento na entrega (COD).";
 
-REGRAS DE CONTEÚDO
-- Diagnóstico: tipo de cabelo (liso/ondulado/cacheado/crespo), oleosidade/ressecamento, química (tinge/alisou?), objetivo (ex.: reduzir frizz, definir cachos, antiqueda).
-- Oferta: recomende **somente 1 produto**, com o motivo em **uma frase**.
-- Fechamento: passe modo de uso simples (1–2 passos). Se houver cupom disponível, mencione.
-- Pós-venda: reforce o modo de uso e peça retorno em X dias (dos settings).
+  ctx.push(`Usuário disse: "${message}"`);
+  if (stageHint) ctx.push(`Sinal de estágio: ${stageHint}`);
+  if (memory?.slots) ctx.push(`Slots atuais: ${JSON.stringify(memory.slots)}`);
+  ctx.push(`Produto: ${p?.name || "produto"} | COD: ${codTxt}`);
+  ctx.push(`Objetivo: decidir próxima ação e quais TOOLS chamar (se necessário).`);
 
-SEGURANÇA
-- Se fugir do tema (ex.: saúde clínica), responda com empatia e sugira um profissional.
-- Não prometa resultados garantidos. Use: "geralmente ajuda", "tende a".
-`;
+  return ctx.join("\n");
+}
 
-export function buildBaseContext({ userMessage = "", stage = "greet", settings = {}, extra = {} } = {}) {
-  const ctx = {
-    stage,
-    coupon: settings?.product?.coupon_code || null,
-    postsaleDays: Number(settings?.messages?.postsale_followup_days || 7),
-    extra,
+export function buildRefineUser({ message, stage, plan, tools, settings, slots, guards }) {
+  const s = settings || {};
+  const p = s?.product || {};
+  const vp = Array.isArray(p?.value_props) ? p.value_props : [];
+  const price = guards?.price;
+  const cod = guards?.cod_text || "Pagamento na entrega (COD).";
+  const checkoutAllowed = !!guards?.checkout_allowed;
+
+  // material auxiliar pro modelo escrever bem, mas sem inventar
+  const facts = {
+    product: { name: p?.name, price, value_props: vp, how_to_use: p?.how_to_use, safety: s?.product?.safety },
+    delivery_sla: tools?.getDeliverySLA || {},
+    payment_info: tools?.getPaymentInfo || { payment: "COD", text: cod },
+    faq_hit: tools?.getFAQ?.answer || "",
+    checkout: checkoutAllowed ? (tools?.getCheckoutLink?.url || "") : "",
   };
 
-  const user = userMessage?.toString()?.trim() || "";
+  const notes = [
+    `NUNCA invente preço/link. Use price=${price} e se houver checkout, use-o.`,
+    `Se checkoutAllowed=false, NÃO coloque link; pergunte permissão.`,
+    `Respeite 2 frases + 1 pergunta; 1 emoji no máx.; *negrito* com asteriscos.`,
+  ];
 
-  return {
-    system: BASE_SYSTEM_PROMPT,
-    user,
-    ctx,
-  };
+  const ask = [
+    `Reescreva a resposta final NATURAL e assertiva.`,
+    `Se o usuário pediu preço: informe *R$${price}* e um benefício curto (${vp[0] || "reduz frizz sem pesar"}).`,
+    `Se o usuário pediu link e checkoutAllowed=true: inclua o link do checkout.`,
+    `Caso contrário, pergunte educadamente se pode enviar o link.`,
+  ];
+
+  return [
+    `Plano inicial: ${JSON.stringify(plan)}`,
+    `Ferramentas → resultados: ${JSON.stringify(tools)}`,
+    `Slots: ${JSON.stringify(slots)}`,
+    `Fatos: ${JSON.stringify(facts)}`,
+    `Notas: ${notes.join(" ")}`,
+    `Mensagem do usuário: "${message}"`,
+    `Tarefa: ${ask.join(" ")}`,
+  ].join("\n");
 }

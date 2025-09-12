@@ -2,7 +2,7 @@
 // LLM-orquestrador: decide ação, chama tools, usa memória, aplica guardrails e retorna UMA resposta.
 
 import { callLLM } from "./llm.js";
-import { settings } from "./settings.js";
+import { settings } from "../../configs/src/core/settings.js";
 import * as tools from "./tools.js";
 import * as memory from "./memory.js";
 import { buildSystem, buildPlannerUser, buildRefineUser } from "./prompts/base.js";

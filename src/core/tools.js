@@ -1,7 +1,7 @@
 // src/core/tools.js
 // Fontes de verdade para o orquestrador (NÃO inventam)
 
-import { settings } from "./settings.js";
+import { settings } from "../../configs/src/core/settings.js";
 
 const getS = (s) => s || settings;
 
