@@ -110,7 +110,7 @@ guardrails:
     - "checkout_link"
     - "coupon_code"
     - "sold_count"
-
+ 
 faq:
   categories:
     delivery:
