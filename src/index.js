@@ -13,6 +13,9 @@ import { intentOf } from './core/intent.js';
 import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 
+// ➕ (novo) orquestrador
+import { orchestrate } from './core/orchestrator.js';
+
 let transcribeAudio = null;
 try {
   const asrMod = await import('./core/asr.js');
@@ -121,7 +124,9 @@ async function transcribeIfPossible(buf, mime = 'audio/ogg') {
   }
 }
 
-// Handler principal
+// ====================
+// Handler principal (PATCH: orquestrador primeiro, 1 resposta)
+// ====================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
   try {
@@ -144,7 +149,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // (2) texto base (ou a ASR)
+    // (2) texto base (ou ASR p/ áudio)
     let msgText = (text || '').trim();
     if (hasMedia && !msgText) {
       const buf = await tryGetAudioBuffer(raw);
@@ -153,51 +158,46 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) return '';
 
-    // (3) pós-venda manual
+    // (3) webhook de pós-venda por palavra-chave
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await hooks.onPaymentConfirmed({
         jid: from,
         settings,
-        send: async (to, text) => enqueueOrDirect({ to, payload: { text } }),
+        send: async (to, t) => enqueueOrDirect({ to, payload: { text: t } }),
       });
       return '';
     }
 
-    // (4) Intent → tentar FLOW do bot primeiro
-    const intent = intentOf(msgText) || 'greet';
-
-    // Usa roteador do bot (se existir) ou mapa direto de flows
-    let flowObj = null;
+    // (4) Orquestrador LLM (primeiro)
+    let reply = '';
     try {
-      if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText);
-    } catch {}
-    if (!flowObj) flowObj = flows?.[intent];
+      const intent = intentOf(msgText) || 'qualify';
+      reply = await orchestrate({ jid: from, text: msgText, stageHint: intent, botSettings: settings });
+    } catch (e) {
+      console.warn('[orchestrator] erro:', e?.message || e);
+    }
 
-    // Se houver flow e ele tratar, NÃO chama LLM (evita respostas duplicadas)
-    if (flowObj && typeof flowObj.run === 'function') {
+    if (reply && reply.trim()) {
+      await enqueueOrDirect({ to: from, payload: { text: reply } });
+      return '';
+    }
+
+    // (5) Fallback — seus flows determinísticos
+    let flowObj = null;
+    try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText); } catch {}
+    if (!flowObj) flowObj = flows?.[intentOf(msgText) || 'greet'];
+
+    if (flowObj?.run) {
       const send = async (to, t) => enqueueOrDirect({ to, payload: { text: String(t || '') } });
       await flowObj.run({ jid: from, text: msgText, settings, send });
       return '';
     }
 
-    // (5) Fallback LLM — só se o flow não tratou
-    const { system, user } = await hooks.safeBuildPrompt({ stage: intent, message: msgText, settings });
-
-    try {
-      const { text: reply } = await callLLM({ stage: intent, system, prompt: user });
-      if (reply && reply.trim()) {
-        await enqueueOrDirect({ to: from, payload: { text: reply } });
-        return '';
-      }
-      const fb = await hooks.fallbackText({ stage: intent, message: msgText, settings });
-      await enqueueOrDirect({ to: from, payload: { text: fb } });
-      return '';
-    } catch (e) {
-      console.error('[LLM]', e?.message || e);
-      const fb = await hooks.fallbackText({ stage: intent, message: msgText, settings });
-      await enqueueOrDirect({ to: from, payload: { text: fb } });
-      return '';
-    }
+    // (6) Fallback final LLM "texto solto"
+    const { system, user } = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
+    const { text: fb } = await callLLM({ stage: 'qualify', system, prompt: user });
+    await enqueueOrDirect({ to: from, payload: { text: fb || 'Posso te explicar rapidamente como funciona e o valor?' } });
+    return '';
   } catch (e) {
     console.error('[onMessage]', e);
     const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
