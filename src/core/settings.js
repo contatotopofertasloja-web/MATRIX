@@ -12,6 +12,8 @@ function env(name, def) {
   const v = process.env[name];
   return v === undefined || v === null || v === '' ? def : v;
 }
+const asBool = (v, d = false) =>
+  v == null ? d : ['1', 'true', 'yes', 'y', 'on'].includes(String(v).trim().toLowerCase());
 
 // BOT / PATHS
 export const BOT_ID = env('BOT_ID', 'claudia');
@@ -53,7 +55,7 @@ const GLOBAL_MODELS = {
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
-// ===== FLAGS
+// ===== FLAGS globais (ENV → core)
 const FLAGS = {
   useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
   fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
@@ -89,6 +91,8 @@ let fileSettings = {
   product: { price_original: 197, price_target: 170, checkout_link: '', coupon_code: '' },
   models_by_stage: {},
   flags: { has_cod: true, send_opening_photo: true },
+  guardrails: {},
+  messages: {},
 };
 
 // ===== Carrega YAML e normaliza
@@ -106,6 +110,41 @@ try {
   }
 } catch (e) {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
+}
+
+// ===== Overrides por ENV (proposta: trocar link/preço/cupom sem editar YAML)
+fileSettings.product = fileSettings.product || {};
+{
+  const envCheckout = env('CHECKOUT_LINK', '').trim();
+  const envCoupon   = env('COUPON_CODE', '').trim();
+  const envPriceT   = env('PRICE_TARGET', '').trim();
+
+  if (envCheckout) fileSettings.product.checkout_link = envCheckout;
+  if (envCoupon)   fileSettings.product.coupon_code   = envCoupon;
+  if (envPriceT !== '') {
+    const n = Number(envPriceT);
+    if (!Number.isNaN(n)) fileSettings.product.price_target = n;
+  }
+}
+
+// ===== Toggles de áudio por ENV (ex.: noturnas sem TTS)
+{
+  const audioOutEnv = env('ALLOW_AUDIO_OUT', '');
+  const audioInEnv  = env('ALLOW_AUDIO_IN',  '');
+
+  fileSettings.flags = fileSettings.flags || {};
+  if (audioOutEnv !== '') fileSettings.flags.allow_audio_out = asBool(audioOutEnv, true);
+  if (audioInEnv  !== '') fileSettings.flags.allow_audio_in  = asBool(audioInEnv,  true);
+}
+
+// ===== Guardrails: se "allow_links_only_from_list" estiver ativo, garanta o checkout na allowlist
+{
+  const g = fileSettings.guardrails || {};
+  if (g.allow_links_only_from_list) {
+    const allow = new Set(Array.isArray(g.allowed_links) ? g.allowed_links : []);
+    if (fileSettings.product.checkout_link) allow.add(fileSettings.product.checkout_link);
+    fileSettings.guardrails = { ...g, allowed_links: Array.from(allow) };
+  }
 }
 
 // ===== Export unificado

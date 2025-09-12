@@ -1,34 +1,36 @@
-// configs/bots/claudia/flow/close.js
-// CLOSE — oportunidade no funil: manda o link direto.
+// CLOSE — envia o link quando pedem ou quando há consentimento
 
-function stripAccents(s = '') {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-function clean(text = '') {
-  return stripAccents(String(text || '').toLowerCase()).replace(/\s+/g, ' ').trim();
-}
+import { isAwaitingConsent, clearConsent } from './_state.js';
 
-const RX = {
-  close: /\b(checkout|finalizar|finaliza(r)?|fechar|fechamento|comprar|carrinho|manda\s*o\s*link)\b/i
-};
+function stripAccents(s=''){return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function clean(t=''){return stripAccents(String(t||'').toLowerCase()).replace(/\s+/g,' ').trim();}
+
+const YES = /\b(sim|pode|pode\s*sim|quero|manda|envia|ok|fechar|fechamento|finaliza(r)?|fechar|link|checkout|comprar)\b/i;
 
 export default {
   id: 'close',
   stage: 'fechamento',
 
-  match(text = '') {
-    return RX.close.test(clean(text));
-  },
+  match(text=''){ return YES.test(clean(text)); },
 
   async run(ctx = {}) {
-    const { jid, settings = {}, send } = ctx;
+    const { jid, text='', settings = {}, send } = ctx;
     const p = settings?.product || {};
     const checkout = p?.checkout_link;
+    const t = clean(text);
 
-    if (checkout) {
-      await send(jid, `Show! Segue o link seguro do checkout 👇 (pagamento na entrega – COD)\n${checkout}`);
-    } else {
-      await send(jid, `Posso gerar o link do checkout pra você agora.`);
+    // só envia se pediu link OU deu consentimento após oferta
+    if (!checkout) return;
+
+    if (YES.test(t) || isAwaitingConsent(jid)) {
+      clearConsent(jid);
+      const lines = [
+        `Link de checkout: ${checkout}`,
+        `Use para confirmar o endereço. Depois, o entregador chama no WhatsApp para combinar a entrega.`,
+        `Pagamento na entrega (COD) e garantia de 7 dias após receber.`,
+        `Quando finalizar, me avise aqui com o comprovante de agendamento/entrega que libero seu cupom de fidelidade.`
+      ];
+      await send(jid, lines.join('\n'));
     }
   }
 };
