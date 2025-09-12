@@ -1,10 +1,8 @@
-// src/core/llm.js
+// src/core/llm.js — COMPLETÃO
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
-/** ------------------------------------------------------------------------
- * Stage aliases → canonical
- * ---------------------------------------------------------------------- */
+/** Stage aliases → canonical */
 const STAGE_KEYS = {
   recepcao:     ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
   qualificacao: ["qualificacao","qualificação","qualify"],
@@ -21,9 +19,7 @@ function resolveStageKey(stage) {
   return "recepcao";
 }
 
-/** ------------------------------------------------------------------------
- * ENV defaults (provider, temp, retries, tokens)
- * ---------------------------------------------------------------------- */
+/** ENV defaults (provider, temp, retries, tokens) */
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
@@ -55,9 +51,7 @@ const ENV_STAGE_VARS = {
   posvenda:     "LLM_MODEL_POSVENDA",
 };
 
-/** ------------------------------------------------------------------------
- * GPT-5 → GPT-4o compat
- * ---------------------------------------------------------------------- */
+/** GPT-5 → GPT-4o compat */
 function translateModel(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return n;
@@ -67,13 +61,12 @@ function translateModel(name) {
   return name;
 }
 
-/** ------------------------------------------------------------------------
- * Seleção de modelo por etapa — prioridade:
+/** Seleção de modelo por etapa — prioridade:
  * 1) YAML models_by_stage (se useModelsByStage)
  * 2) ENV por etapa (se fallbackToGlobal)
  * 3) YAML global_models (se fallbackToGlobal)
  * 4) default "gpt-5-nano"
- * ---------------------------------------------------------------------- */
+ */
 export function pickModelForStage(stageRaw) {
   const stage = resolveStageKey(stageRaw);
 
@@ -111,24 +104,18 @@ function defaultMaxTokensForModel(modelName = "") {
   return ENV_DEFAULTS.maxTokens.full;
 }
 
-/** ------------------------------------------------------------------------
- * OpenAI client (lazy)
- * ---------------------------------------------------------------------- */
+/** OpenAI client (lazy) */
 let openai = null;
 function getOpenAI() {
   if (!openai) {
     const key = process.env.OPENAI_API_KEY || "";
-    if (!key) {
-      throw new Error("OPENAI_API_KEY ausente — configure a variável para usar o LLM.");
-    }
+    if (!key) throw new Error("OPENAI_API_KEY ausente — configure a variável para usar o LLM.");
     openai = new OpenAI({ apiKey: key });
   }
   return openai;
 }
 
-/** ------------------------------------------------------------------------
- * callLLM — retries, backoff, timeout e log do modelo escolhido
- * ---------------------------------------------------------------------- */
+/** callLLM — retries, backoff, timeout e log do modelo escolhido */
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
   const resolvedStage = resolveStageKey(stage);
   const rawModel      = model || pickModelForStage(resolvedStage);
@@ -145,7 +132,6 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
 
   const client = getOpenAI();
   let lastErr;
-
   for (let attempt = 0; attempt <= ENV_DEFAULTS.retries; attempt++) {
     const timer = setTimeout(() => {
       lastErr = new Error("Timeout atingido em callLLM");
@@ -161,7 +147,6 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
           { role: "user", content: String(prompt || "") },
         ],
       });
-
       clearTimeout(timer);
       const text = res?.choices?.[0]?.message?.content?.trim() || "";
       return { model: chosenModel, text };
@@ -172,6 +157,5 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
       await new Promise(r => setTimeout(r, backoff));
     }
   }
-
   throw lastErr;
 }

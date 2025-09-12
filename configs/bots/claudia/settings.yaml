@@ -1,15 +1,18 @@
-﻿# configs/bots/claudia/settings.yaml
-
-bot_id: claudia
+﻿bot_id: claudia
 persona_name: "Cláudia"
 company_name: "TopOfertas"
 language: "pt-BR"
+
+business:
+  tz_offset_hours: -3         # BRT
+  hours_start: "06:00"
+  hours_end:   "21:00"
 
 product:
   name: "Progressiva Vegetal"
   price_original: 197
   price_target: 170
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"   # oficial
   site_url: "https://tpofertas.com"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
   coupon_post_payment_only: true
@@ -65,9 +68,9 @@ models_by_stage:
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5"
+  oferta:       "gpt-5-mini"
   objecoes:     "gpt-5"
-  fechamento:   "gpt-5"
+  fechamento:   "gpt-5-mini"
   posvenda:     "gpt-5-nano"
 
 typing:

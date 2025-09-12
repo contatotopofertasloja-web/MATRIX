@@ -1,11 +1,17 @@
+// Saudação + foto opcional + pergunta aberta + usa nome se houver
 import settings from '../../settings.yaml' assert { type: 'yaml' };
 
-export default async function greet() {
+export default async function greet(ctx = {}) {
+  const { jid, send, userName } = ctx;
   const img = settings?.media?.opening_photo_url || null;
-  const caption = 'Oi! Eu sou a Cláudia 💛 Seu cabelo é liso, ondulado, cacheado ou crespo?';
+  const name = userName ? ` ${userName}` : '';
+  const caption =
+    `Oi${name}! 💛 Eu sou a Cláudia da TopOfertas.\n` +
+    `Pra gente começar: seu cabelo é liso, ondulado, cacheado ou crespo?`;
 
   if (img && (settings?.flags?.send_opening_photo ?? true)) {
-    return { type: 'image', url: img, caption };
+    await send(jid, { type: 'image', url: img, caption });
+    return;
   }
-  return { type: 'text', text: caption };
+  await send(jid, { type: 'text', text: caption });
 }
