@@ -1,4 +1,111 @@
-# --- dentro do settings.yaml da Maria ---
+# configs/bots/claudia/settings.yaml — COMPLETÃO
+
+bot_id: maria
+persona_name: "Maria"
+language: "pt-BR"
+
+product:
+  name: "Progressiva X"
+  price_original: 197
+  price_target: 170
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  site_url: "https://tpofertas.com/collections/cod-todos"
+  coupon_code: "TOP-AGO2025-PROGRVG-150"
+  coupon_post_payment_only: true
+  delivery_sla:
+    capitals_hours: 24
+    others_hours: 72
+  how_to_use: >
+    Lave os cabelos, aplique o produto e deixe agir por ~40 minutos.
+    Para maior durabilidade, finalize com escova/chapinha.
+  value_props:
+    - "reduz *frizz* sem pesar"
+    - "deixa *alinhado com brilho* já na primeira aplicação"
+    - "aplicação simples em casa, com passo a passo"
+  safety:
+    claims:
+      - "sem formol adicionado"
+      - "sugerimos teste de mecha para couro cabeludo sensível"
+
+media:
+  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
+
+flags:
+  has_cod: true
+  send_opening_photo: true         # envia 1x a foto de abertura
+  guardrails_strict: true          # trava preço/link/cupom
+  allow_audio_in: true             # ASR habilitado no core
+  allow_audio_out: false
+  small_talk_soften: true
+  useModelsByStage: true
+  fallbackToGlobal: true
+
+# modelos por etapa (o core faz alias gpt-5* → 4o/4o-mini quando necessário)
+models_by_stage:
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
+
+global_models:
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
+
+typing:
+  ms_per_char: 35
+  min_ms: 800
+  max_ms: 5000
+
+messages:
+  opening:
+    - "Oi! Tudo bem? Como posso te ajudar com seus cabelos hoje? 😊"
+  qualify_followups:
+    - "Seu cabelo é liso, ondulado, cacheado ou crespo?"
+    - "Você já fez progressiva antes? Te incomoda mais o *frizz* ou o *volume*?"
+    - "Prefere resultado *bem liso* ou só *alinhado com brilho*?"
+  cod_short: "Pagamento na entrega (COD)."
+  offer_templates:
+    - "Consigo por *R${{price_target}}* hoje — {{product.value_props[0]}}. {{messages.cod_short}} Posso te enviar o link seguro do checkout?"
+    - "Fechando hoje, mantenho *R${{price_target}}*. {{messages.cod_short}} Te mando o link do checkout?"
+  objection_handles:
+    - "Entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer um resumo do modo de uso?"
+    - "Fica tranquila: temos garantia e acompanhamento. Prefere que eu explique rapidinho o passo a passo?"
+  closing:
+    - "Perfeito! Te envio o link do checkout agora. {{messages.cod_short}} Você receberá mensagens pelo WhatsApp para acompanhar. Qualquer imprevisto, avise o entregador 💚"
+  postsale_pre_coupon:
+    - "Pagamento confirmado! 🎉 Você receberá mensagens para acompanhar a entrega. Dúvidas no uso? Posso te mandar a rotina ✨"
+  postsale_after_payment_with_coupon:
+    - "Como agradecimento, aqui vai um cupom para a PRÓXIMA compra: {{coupon_code}} 🎁"
+  postsale_followup_days: 7
+  features_intro:
+    - "Claro! Te passo o modo de uso resumido:"
+  delivery_info:
+    - "Prazo: até {{product.delivery_sla.capitals_hours}}h capitais e até {{product.delivery_sla.others_hours}}h demais regiões."
+  payment_info:
+    - "{{messages.cod_short}} Você confirma o pedido e paga quando receber — simples e seguro."
+
+guardrails:
+  price_min: 149
+  price_max: 249
+  allow_links_only_from_list: true
+  allowed_links:
+    - "{{product.checkout_link}}"
+    - "{{product.site_url}}"
+  freeze_fields:
+    - "price_target"
+    - "checkout_link"
+    - "coupon_code"
+    - "sold_count"
+
+marketing:
+  sold_count: 40000
+
 faq:
   categories:
     delivery:
@@ -6,19 +113,19 @@ faq:
         - "\\b(prazo|entrega|quando\\s*(chega|recebo)|quanto\\s*tempo|frete)\\b"
       answers:
         - "Prazo típico: até {{product.delivery_sla.capitals_hours}}h em capitais e até {{product.delivery_sla.others_hours}}h nas demais regiões."
-        - "Entregamos rápido: capitais até {{product.delivery_sla.capitals_hours}}h, demais regiões até {{product.delivery_sla.others_hours}}h."
+        - "Entrego rápido: capitais até {{product.delivery_sla.capitals_hours}}h, demais regiões até {{product.delivery_sla.others_hours}}h."
     payment:
       triggers:
         - "\\b(pagamento|pagar|forma(s)?\\s*de\\s*pagamento|pix|cartao|cartão|boleto|cod)\\b"
       answers:
-        - "Pagamento na entrega (COD). Você confirma o pedido e paga quando receber."
-        - "Trabalhamos com COD: sem risco — paga na entrega."
+        - "{{messages.cod_short}} Você confirma o pedido e paga quando receber — simples e seguro."
+        - "Trabalhamos com pagamento na entrega (COD). Sem risco: só paga ao receber."
     product_name:
       triggers:
         - "\\b(nome\\s*(do|da)\\s*produto|qual\\s*produto|como\\s*se\\s*chama|marca)\\b"
       answers:
-        - "É o **{{product.name}}**."
-        - "O nome é **{{product.name}}**."
+        - "É o *{{product.name}}*."
+        - "O nome do nosso produto é *{{product.name}}*."
     usage:
       triggers:
         - "\\b(como\\s*usar|modo\\s*de\\s*uso|aplic(a|ação)|passo\\s*a\\s*passo|tempo\\s*de\\s*pausa)\\b"
@@ -29,17 +136,17 @@ faq:
       triggers:
         - "\\b(formol|formaldeido|formaldeído|seguran(ca|ça)|anvisa|alergia|sensibilidade)\\b"
       answers:
-        - "Sem formol adicionado. Sugerimos teste de mecha para sensíveis."
-        - "Produto sem formol adicionado. Siga as instruções e faça teste de mecha se tiver couro sensível."
+        - "Sem formol adicionado. Seguimos boas práticas e indicamos teste de mecha para sensíveis."
+        - "Produto sem formol adicionado. Use conforme instruções e faça teste de mecha se tiver couro sensível."
     guarantee:
       triggers:
         - "\\b(garantia|devolu(c|ç)ao|troca|suporte)\\b"
       answers:
-        - "Se algo sair diferente, você conta com nosso suporte e política justa de troca."
-        - "Pós-venda presente: suporte real e troca quando necessário."
+        - "Se algo sair diferente do combinado, você tem suporte e podemos alinhar a troca — você não fica na mão."
+        - "Conta comigo no pós-venda: suporte real e política justa de troca."
     results:
       triggers:
         - "\\b(quanto\\s*dura|durabilidade|resultado|antes\\s*e\\s*depois|quantas\\s*aplicac(oes|ões))\\b"
       answers:
-        - "Resultados variam por cabelo; muitos relatam 6–8 semanas com uso correto."
-        - "Com uso certinho, os relatos comuns são 6–8 semanas de efeito."
+        - "Resultados variam por cabelo, mas muita gente relata 6–8 semanas com uso correto."
+        - "Com uso certinho, os relatos mais comuns são de 6–8 semanas de efeito."

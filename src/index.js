@@ -1,5 +1,4 @@
-﻿// src/index.js — Matrix IA 2.0 (enxuto): HTTP + WPP + Outbox/Direct + ASR + LLM via hooks de bot
-
+﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox + ASR + Orquestrador + Flows)
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -12,9 +11,7 @@ import { loadFlows } from './core/flow-loader.js';
 import { intentOf } from './core/intent.js';
 import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
-
-// ➕ (novo) orquestrador
-import { orchestrate } from './core/orchestrator.js';
+import { orchestrate } from './core/orchestrator.js'; // 👈 orquestrador
 
 let transcribeAudio = null;
 try {
@@ -92,7 +89,6 @@ await outbox.start(async (job) => {
 });
 
 // Flows e hooks
-// IMPORTANTE: guardamos o retorno para roteamento local por flow
 const flows = await loadFlows(BOT_ID);
 const hooks = await getBotHooks();
 const sentOpening = new Set();
@@ -124,9 +120,7 @@ async function transcribeIfPossible(buf, mime = 'audio/ogg') {
   }
 }
 
-// ====================
-// Handler principal (PATCH: orquestrador primeiro, 1 resposta)
-// ====================
+// ==================== Handler principal ====================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
   try {
@@ -158,7 +152,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) return '';
 
-    // (3) webhook de pós-venda por palavra-chave
+    // (3) palavra-chave de confirmação de pagamento → pós-venda
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await hooks.onPaymentConfirmed({
         jid: from,
@@ -182,7 +176,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // (5) Fallback — seus flows determinísticos
+    // (5) Fallback — flows determinísticos
     let flowObj = null;
     try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText); } catch {}
     if (!flowObj) flowObj = flows?.[intentOf(msgText) || 'greet'];
@@ -206,7 +200,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   }
 });
 
-// Rotas HTTP
+// ==================== Rotas HTTP ====================
 const limiter = rateLimit({
   windowMs: 60_000,
   max: 60,

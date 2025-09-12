@@ -17,7 +17,7 @@ function env(name, def) {
 export const BOT_ID = env('BOT_ID', 'claudia');
 const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
-// ALIASES DE STAGE → CANÔNICO
+// ===== Aliases de estágio → canônico
 const STAGE_KEY_ALIASES = new Map([
   ['recepção', 'recepcao'], ['recepcao', 'recepcao'],
   ['qualificação', 'qualificacao'], ['qualificacao', 'qualificacao'],
@@ -32,6 +32,7 @@ function normalizeStageKey(k) {
   const base = String(k).trim().toLowerCase();
   return STAGE_KEY_ALIASES.get(base) || base;
 }
+
 function normalizeModelsByStage(map) {
   const out = {};
   if (map && typeof map === 'object') {
@@ -42,7 +43,7 @@ function normalizeModelsByStage(map) {
   return out;
 }
 
-// DEFAULTS (ENV) — modelos globais
+// ===== Modelos globais (ENV)
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -52,21 +53,22 @@ const GLOBAL_MODELS = {
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
-// FLAGS de seleção
+// ===== FLAGS
 const FLAGS = {
   useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
   fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
 };
 
-// Áudio / TTS
+// ===== Áudio / TTS
 const AUDIO = {
   asrProvider: env('ASR_PROVIDER', 'openai'),
   asrModel:    env('ASR_MODEL',    'whisper-1'),
   ttsProvider: env('TTS_PROVIDER', 'none'),
   ttsVoice:    env('TTS_VOICE',    'alloy'),
+  language:    env('ASR_LANG',     'pt'),
 };
 
-// LLM defaults
+// ===== LLM defaults
 const LLM_DEFAULTS = {
   provider:    env('LLM_PROVIDER', 'openai'),
   temperature: Number(env('LLM_TEMPERATURE', '0.5')),
@@ -79,23 +81,22 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
-// DEFAULT DO ARQUIVO (caso YAML ausente)
+// ===== Defaults de arquivo (fallback se YAML ausente)
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
+  language: 'pt-BR',
   product: { price_original: 197, price_target: 170, checkout_link: '', coupon_code: '' },
   models_by_stage: {},
   flags: { has_cod: true, send_opening_photo: true },
 };
 
-// CARREGA YAML
+// ===== Carrega YAML e normaliza
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
     const parsed = YAML.parse(text) || {};
-    if (parsed.models_by_stage) {
-      parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
-    }
+    if (parsed.models_by_stage) parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
     fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
@@ -105,13 +106,20 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
-// EXPORTA UNIFICADO
+// ===== Overrides por ENV (mantém teu CHECKOUT_LINK/PRICE_TARGET/COUPON_CODE)
+if (!fileSettings.product) fileSettings.product = {};
+fileSettings.product.checkout_link = env('CHECKOUT_LINK', fileSettings.product.checkout_link);
+fileSettings.product.price_target  = Number(env('PRICE_TARGET', fileSettings.product.price_target ?? 170));
+fileSettings.product.coupon_code   = env('COUPON_CODE', fileSettings.product.coupon_code);
+
+// ===== Export unificado
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,
   llm: LLM_DEFAULTS,
-  flags: { ...fileSettings.flags, ...FLAGS },
+  flags: { ...(fileSettings.flags || {}), ...FLAGS },
   audio: AUDIO,
   global_models: { ...GLOBAL_MODELS, ...(fileSettings.global_models || {}) },
 };
+
 export default settings;

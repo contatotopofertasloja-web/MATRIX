@@ -1,29 +1,26 @@
-﻿# configs/bots/claudia/settings.yaml  — COMPLETÃO
-
+﻿# configs/bots/claudia/settings.yaml — COMPLETÃO (polido)
 bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
 product:
-  name: "Progressiva X"
+  name: "Progressiva Vegetal"         # ✅ nome correto
   price_original: 197
-  price_target: 170
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  price_target: 170                   # pode ser sobrescrito por PRICE_TARGET (ENV)
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"  # pode ser sobrescrito por CHECKOUT_LINK
   site_url: "https://tpofertas.com/collections/cod-todos"
-  coupon_code: "TOP-AGO2025-PROGRVG-150"
+  coupon_code: "TOP-AGO2025-PROGRVG-150"   # pode ser sobrescrito por COUPON_CODE
   coupon_post_payment_only: true
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
   how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
-    Opcional para maior durabilidade: finalize com chapinha.
-  # NOVO — ajuda a “construir valor” na oferta
+    Lave os cabelos, aplique o produto e deixe agir por ~40 minutos.
+    Para maior durabilidade, finalize com escova/chapinha.
   value_props:
     - "reduz *frizz* sem pesar"
     - "deixa *alinhado com brilho* já na primeira aplicação"
     - "aplicação simples em casa, com passo a passo"
-  # NOVO — reforços de segurança
   safety:
     claims:
       - "sem formol adicionado"
@@ -34,15 +31,14 @@ media:
 
 flags:
   has_cod: true
-  send_opening_photo: true        # envia 1x a foto de abertura (se configurado no index)
-  guardrails_strict: true         # trava preço/link/cupom
-  allow_audio_in: true            # aceita áudio (se ASR habilitado)
+  send_opening_photo: true
+  guardrails_strict: true
+  allow_audio_in: true
   allow_audio_out: false
   small_talk_soften: true
   useModelsByStage: true
   fallbackToGlobal: true
 
-# Modelos por etapa (gpt-5-* → o core mapeia p/ 4o/4o-mini enquanto 5.x não está disponível)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -51,7 +47,6 @@ models_by_stage:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-# Opcional: fallback global (mantive igual)
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -65,36 +60,44 @@ typing:
   min_ms: 800
   max_ms: 5000
 
-messages:
-  # AJUSTE — sem “Eu sou a Cláudia / assistente virtual”
-  opening:
-    - "Oi! Tudo bem? Como posso te ajudar com seus cabelos hoje? 😊"
-  qualify_followups:
-    - "Você já fez progressiva antes? Te incomoda mais o *frizz* ou o *volume*?"
-    - "Prefere resultado *bem liso* ou só *alinhado com brilho*?"
-  # NOVO — usado no flow/offer para reforçar o pagamento
-  cod_short: "Pagamento na entrega (COD)."
-  offer_templates:
-    - "Consigo por *R${{price_target}}* hoje — {{product.value_props[0]}}. {{messages.cod_short}} Posso te enviar o link seguro do checkout?"
-    - "Fechando hoje, mantenho *R${{price_target}}*. {{messages.cod_short}} Te mando o link do checkout?"
-  objection_handles:
-    - "Entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer um resumo do modo de uso?"
-    - "Fica tranquila: temos garantia e acompanhamento. Prefere que eu explique rapidinho o passo a passo?"
-  closing:
-    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD). Você receberá mensagens pelo WhatsApp para acompanhar. Qualquer imprevisto, avise o entregador 💚"
-  postsale_pre_coupon:
-    - "Pagamento confirmado! 🎉 Você receberá mensagens para acompanhar a entrega. Dúvidas no uso? Posso te mandar a rotina ✨"
-  postsale_after_payment_with_coupon:
-    - "Como agradecimento, aqui vai um cupom para a PRÓXIMA compra: {{coupon_code}} 🎁"
-  postsale_followup_days: 7
-  features_intro:
-    - "Claro! Te passo o modo de uso resumido:"
-  delivery_info:
-    - "Prazo: até {{product.delivery_sla.capitals_hours}}h capitais e até {{product.delivery_sla.others_hours}}h demais regiões."
-  payment_info:
-    - "Pagamento na entrega (COD). O link que envio é para confirmar o pedido e acompanhar pelo WhatsApp 🙂"
+marketing:
+  sold_count: 40000
 
-# Guardrails — mantive seus limites e whitelists
+messages:
+  # Tom: amiga, breve (1–2 frases) e SEM link de depoimento no WhatsApp.
+  # Sempre terminar com PERGUNTA que avança o funil.
+  opening:
+    - "Oi! Eu sou a Cláudia 💛 Seu cabelo é liso, ondulado, cacheado ou crespo?"
+  qualify_followups:
+    - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
+    - "Você busca bem liso ou só alinhado com brilho?"
+  cod_short: "Pagamento na entrega (COD) — você só paga quando receber."
+  guarantee_short: "Temos garantia de 7 dias após a entrega."
+  checkout_explain: >
+    O link serve para você confirmar o endereço de entrega. Depois de preencher,
+    o entregador entra em contato para combinar a entrega com você.
+  cep_fallback: >
+    Se o seu CEP aparecer como não atendido, tente um CEP de trabalho ou de um(a) amigo(a).
+    Estamos ampliando a nossa rede de entrega e em breve cobriremos mais regiões. Posso te ajudar com isso?
+
+  offer_templates:
+    - "Hoje sai de R${{price_original}} por *R${{price_target}}*. {{messages.cod_short}} {{messages.guarantee_short}} Prefere tirar alguma dúvida agora ou já quer o link do checkout?"
+    - "Consigo manter *R${{price_target}}* hoje. {{messages.cod_short}} {{messages.guarantee_short}} Quer que eu te envie o link para confirmar o endereço?"
+
+  objection_handles:
+    - "Fica tranquila: são mais de {{sold_count}} clientes no Brasil. Posso te resumir o modo de uso agora ou prefere já ir para o checkout?"
+    - "Sem formol adicionado e aplicação simples. Prefere que eu explique rapidinho o passo a passo ou já quer o link?"
+
+  closing:
+    - "Perfeito! Vou te enviar o link seguro para confirmar o endereço. {{messages.checkout_explain}} Tudo certo assim?"
+  closing_link_after:
+    - "Link de checkout: {{product.checkout_link}}\nSe não abrir, copie e cole no navegador.\nQuando finalizar, me confirma aqui? 😊"
+
+  postsale_pre_coupon:
+    - "Pedido confirmado 🎉 Você receberá as atualizações da entrega. Se pintar alguma dúvida no uso, me chama!"
+  postsale_after_payment_with_coupon:
+    - "Como cliente especial, aqui vai um cupom de fidelidade para a PRÓXIMA compra: {{coupon_code}} 🎁"
+
 guardrails:
   price_min: 149
   price_max: 249
@@ -108,52 +111,30 @@ guardrails:
     - "coupon_code"
     - "sold_count"
 
-# (Opcional) Contador de prova social
-marketing:
-  sold_count: 40000
-
-# NOVO — FAQ/Objeções determinístico (sem alucinar). Reaproveita dados acima.
 faq:
   categories:
     delivery:
       triggers:
         - "\\b(prazo|entrega|quando\\s*(chega|recebo)|quanto\\s*tempo|frete)\\b"
       answers:
-        - "Prazo típico: até {{product.delivery_sla.capitals_hours}}h em capitais e até {{product.delivery_sla.others_hours}}h demais regiões."
-        - "Entrego rápido: capitais até {{product.delivery_sla.capitals_hours}}h, demais regiões até {{product.delivery_sla.others_hours}}h."
+        - "Prazo típico: até {{product.delivery_sla.capitals_hours}}h em capitais e até {{product.delivery_sla.others_hours}}h nas demais regiões."
     payment:
       triggers:
         - "\\b(pagamento|pagar|forma(s)?\\s*de\\s*pagamento|pix|cartao|cartão|boleto|cod)\\b"
       answers:
-        - "Pagamento na entrega (COD). Você confirma o pedido e paga quando receber — simples e seguro."
-        - "Trabalhamos com pagamento na entrega (COD). Sem risco: só paga ao receber."
-    product_name:
+        - "{{messages.cod_short}}"
+    guarantee:
       triggers:
-        - "\\b(nome\\s*(do|da)\\s*produto|qual\\s*produto|como\\s*se\\s*chama|marca)\\b"
+        - "\\b(garantia|devolu(c|ç)ao|troca|suporte)\\b"
       answers:
-        - "É o *{{product.name}}*."
-        - "O nome do nosso produto é *{{product.name}}*."
+        - "{{messages.guarantee_short}}"
     usage:
       triggers:
         - "\\b(como\\s*usar|modo\\s*de\\s*uso|aplic(a|ação)|passo\\s*a\\s*passo|tempo\\s*de\\s*pausa)\\b"
       answers:
         - "{{product.how_to_use}}"
-        - "Resumo rápido: {{product.how_to_use}}"
-    safety_formol:
+    cep_error:
       triggers:
-        - "\\b(formol|formaldeido|formaldeído|seguran(ca|ça)|anvisa|alergia|sensibilidade)\\b"
+        - "\\b(cep\\s*(invalido|inválido)|nao\\s*entrega|não\\s*entrega|cep\\s*nao\\s*atendido|cep\\s*não\\s*atendido)\\b"
       answers:
-        - "Sem formol adicionado. Seguimos boas práticas e indicamos teste de mecha para sensíveis."
-        - "Produto sem formol adicionado. Use conforme instruções e faça teste de mecha se tiver couro sensível."
-    guarantee:
-      triggers:
-        - "\\b(garantia|devolu(c|ç)ao|troca|suporte)\\b"
-      answers:
-        - "Se algo sair diferente do combinado, você tem suporte e podemos alinhar a troca — você não fica na mão."
-        - "Conta comigo no pós-venda: suporte real e política justa de troca."
-    results:
-      triggers:
-        - "\\b(quanto\\s*dura|durabilidade|resultado|antes\\s*e\\s*depois|quantas\\s*aplicac(oes|ões))\\b"
-      answers:
-        - "Resultados variam por cabelo, mas muita gente relata 6–8 semanas com uso correto."
-        - "Com uso certinho, os relatos mais comuns são de 6–8 semanas de efeito."
+        - "{{messages.cep_fallback}}"

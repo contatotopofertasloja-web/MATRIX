@@ -1,55 +1,92 @@
 // src/core/asr.js
-// Transcrição de áudio (ASR). Default: OpenAI Whisper.
-// Aceita buffer em memória; devolve string (ou null em erro).
+// Transcrição de áudio (ASR) com provedores plugáveis.
+// Suporte pronto: OpenAI Whisper. Fácil extender para outros.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// Carrega .env em dev
-if (process.env.NODE_ENV !== 'production') {
-  try { await import('dotenv/config'); } catch {}
+// --------- Utils
+const env = (k, d = '') => (process.env[k] ?? d);
+const asBool = (v, d=false) => (v == null ? d : ['1','true','yes','y','on'].includes(String(v).toLowerCase()));
+
+// --------- Config (com defaults sensatos)
+const PROVIDER = (env('ASR_PROVIDER', 'openai') || '').toLowerCase();    // 'openai' | 'none'
+const MODEL    = env('ASR_MODEL', 'whisper-1');                          // whisper-1 (OpenAI)
+const OPENAI_KEY = env('OPENAI_API_KEY', '');                            // requerido p/ openai
+const DEBUG_SAVE_AUDIO = asBool(env('ASR_DEBUG_SAVE_AUDIO'), false);     // opcional
+
+// Salva buffer em arquivo tmp (debug ou upload por caminho)
+async function saveTemp(buffer, ext = 'ogg') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matrix-asr-'));
+  const f = path.join(dir, `in.${ext || 'bin'}`);
+  await fs.promises.writeFile(f, buffer);
+  return f;
 }
 
-const TMP_DIR = path.join(os.tmpdir(), 'matrix-asr');
-if (!fs.existsSync(TMP_DIR)) { try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch {} }
+// --------- Provedor: OpenAI Whisper
+async function transcribeWithOpenAI({ buffer, mimeType = 'audio/ogg', model = MODEL, language = 'pt' }) {
+  if (!OPENAI_KEY) throw new Error('OPENAI_API_KEY não definido');
 
-export async function transcribeAudio({ buffer, mimeType = 'audio/ogg', provider = 'openai', model = 'whisper-1', language = 'pt' }) {
-  if (!buffer || !buffer.length) return null;
+  // OpenAI Audio API aceita upload de arquivo; alguns tipos via blob/stream.
+  // Para máxima compatibilidade, salvamos temporário e fazemos multipart.
+  const ext = (mimeType.split('/')[1] || 'ogg').replace('+', '_');
+  const filePath = await saveTemp(buffer, ext);
 
-  if (String(provider).toLowerCase() === 'openai') {
-    const key = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY;
-    if (!key) throw new Error('OPENAI_API_KEY ausente para ASR');
+  // Lazy import para evitar custo quando ASR não é usado
+  const { default: fetch } = await import('node-fetch');
 
-    // Escreve um arquivo temporário (SDK de áudio via file)
-    const ext = mimeType.includes('wav') ? 'wav' :
-                mimeType.includes('mp3') ? 'mp3' :
-                mimeType.includes('m4a') ? 'm4a' :
-                mimeType.includes('webm') ? 'webm' : 'ogg';
-    const tmpFile = path.join(TMP_DIR, `clip-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
-    fs.writeFileSync(tmpFile, buffer);
+  const form = new (await import('form-data')).default();
+  form.append('model', model);
+  if (language) form.append('language', language);
+  form.append('file', fs.createReadStream(filePath), { filename: `audio.${ext}`, contentType: mimeType });
 
-    // Evita import pesado se não for usar ASR
-    const OpenAI = (await import('openai')).default;
-    const client = new OpenAI({ apiKey: key });
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_KEY}` },
+    body: form,
+  });
 
-    try {
-      const resp = await client.audio.transcriptions.create({
-        file: fs.createReadStream(tmpFile),
-        model,
-        language, // ajuda em PT-BR
-        temperature: 0,
-      });
-      const txt = resp?.text || '';
-      return txt.trim() || null;
-    } finally {
-      // limpeza best-effort
-      try { fs.unlinkSync(tmpFile); } catch {}
-    }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`OpenAI ASR falhou: ${res.status} ${body}`);
+  }
+  const json = await res.json();
+  // json.text contém a transcrição
+  const out = (json?.text || '').toString().trim();
+
+  try { if (!DEBUG_SAVE_AUDIO) fs.rmSync(path.dirname(filePath), { recursive: true, force: true }); } catch {}
+  return out || null;
+}
+
+// --------- API pública
+/**
+ * Transcreve um áudio em texto.
+ * @param {{buffer: Buffer, mimeType?: string, provider?: string, model?: string, language?: string}} params
+ * @returns {Promise<string|null>}
+ */
+export async function transcribeAudio(params = {}) {
+  const {
+    buffer,
+    mimeType = 'audio/ogg',
+    provider = PROVIDER,
+    model = MODEL,
+    language = 'pt',
+  } = params;
+
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) return null;
+
+  const prov = (provider || '').toLowerCase();
+
+  if (prov === 'openai') {
+    return await transcribeWithOpenAI({ buffer, mimeType, model, language });
   }
 
-  // Provedores futuros (Deepgram, etc.)
-  throw new Error(`ASR provider não suportado: ${provider}`);
+  // Outros provedores podem entrar aqui no futuro:
+  // if (prov === 'assemblyai') return await transcribeWithAssembly({ ... });
+
+  // Provedor desativado/indefinido
+  return null;
 }
 
 export default transcribeAudio;

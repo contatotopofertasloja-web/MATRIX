@@ -2,9 +2,7 @@
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
-/** ------------------------------------------------------------------------
- * Stage aliases → canonical
- * ---------------------------------------------------------------------- */
+/** aliases → canônico, resolveStageKey, defaults, translate GPT-5 ⇄ 4o, etc.  */
 const STAGE_KEYS = {
   recepcao:     ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
   qualificacao: ["qualificacao","qualificação","qualify"],
@@ -21,9 +19,6 @@ function resolveStageKey(stage) {
   return "recepcao";
 }
 
-/** ------------------------------------------------------------------------
- * ENV defaults (provider, temp, retries, tokens)
- * ---------------------------------------------------------------------- */
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
@@ -55,9 +50,6 @@ const ENV_STAGE_VARS = {
   posvenda:     "LLM_MODEL_POSVENDA",
 };
 
-/** ------------------------------------------------------------------------
- * GPT-5 → GPT-4o compat
- * ---------------------------------------------------------------------- */
 function translateModel(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return n;
@@ -67,40 +59,22 @@ function translateModel(name) {
   return name;
 }
 
-/** ------------------------------------------------------------------------
- * Seleção de modelo por etapa — prioridade:
- * 1) YAML models_by_stage (se useModelsByStage)
- * 2) ENV por etapa (se fallbackToGlobal)
- * 3) YAML global_models (se fallbackToGlobal)
- * 4) default "gpt-5-nano"
- * ---------------------------------------------------------------------- */
 export function pickModelForStage(stageRaw) {
   const stage = resolveStageKey(stageRaw);
-
-  // 1) YAML por etapa
   const fromYaml =
     settings?.models_by_stage?.[stage] ??
     (stage === "objecoes" ? settings?.models_by_stage?.["objeções"] : undefined);
-  if (settings?.flags?.useModelsByStage && fromYaml) {
-    return fromYaml;
-  }
+  if (settings?.flags?.useModelsByStage && fromYaml) return fromYaml;
 
-  // 2) ENV por etapa
   const envKey  = ENV_STAGE_VARS[stage];
   const fromEnv = envKey ? process.env[envKey] : undefined;
-  if (settings?.flags?.fallbackToGlobal && fromEnv) {
-    return fromEnv;
-  }
+  if (settings?.flags?.fallbackToGlobal && fromEnv) return fromEnv;
 
-  // 3) YAML global_models
   const fromGlobalYaml =
     settings?.global_models?.[stage] ??
     (stage === "objecoes" ? settings?.global_models?.["objeções"] : undefined);
-  if (settings?.flags?.fallbackToGlobal && fromGlobalYaml) {
-    return fromGlobalYaml;
-  }
+  if (settings?.flags?.fallbackToGlobal && fromGlobalYaml) return fromGlobalYaml;
 
-  // 4) Default
   return "gpt-5-nano";
 }
 
@@ -111,24 +85,17 @@ function defaultMaxTokensForModel(modelName = "") {
   return ENV_DEFAULTS.maxTokens.full;
 }
 
-/** ------------------------------------------------------------------------
- * OpenAI client (lazy)
- * ---------------------------------------------------------------------- */
+// OpenAI client
 let openai = null;
 function getOpenAI() {
   if (!openai) {
     const key = process.env.OPENAI_API_KEY || "";
-    if (!key) {
-      throw new Error("OPENAI_API_KEY ausente — configure a variável para usar o LLM.");
-    }
+    if (!key) throw new Error("OPENAI_API_KEY ausente — configure a variável para usar o LLM.");
     openai = new OpenAI({ apiKey: key });
   }
   return openai;
 }
 
-/** ------------------------------------------------------------------------
- * callLLM — retries, backoff, timeout e log do modelo escolhido
- * ---------------------------------------------------------------------- */
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
   const resolvedStage = resolveStageKey(stage);
   const rawModel      = model || pickModelForStage(resolvedStage);
@@ -147,9 +114,7 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
   let lastErr;
 
   for (let attempt = 0; attempt <= ENV_DEFAULTS.retries; attempt++) {
-    const timer = setTimeout(() => {
-      lastErr = new Error("Timeout atingido em callLLM");
-    }, ENV_DEFAULTS.timeoutMs);
+    const timer = setTimeout(() => { lastErr = new Error("Timeout atingido em callLLM"); }, ENV_DEFAULTS.timeoutMs);
 
     try {
       const res = await client.chat.completions.create({

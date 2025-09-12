@@ -1,6 +1,7 @@
 ﻿// src/adapters/whatsapp/baileys/index.js
 // ---------------------------------------------------------------------------
 // Adapter Baileys robusto (ESM) com compatibilidade para código legado.
+// + getAudioBuffer(raw) para ASR (áudio) ✅
 // ---------------------------------------------------------------------------
 
 import * as qrcode from 'qrcode';
@@ -11,7 +12,7 @@ try {
   B = await import('@whiskeysockets/baileys');
 } catch {
   try {
-    B = await import('@adiwajshing/baileys');
+    B = await import('@adiwajashing/baileys');
   } catch {
     B = null;
   }
@@ -32,6 +33,7 @@ const makeWASocket = pickMakeWASocket();
 const useMultiFileAuthState = pick('useMultiFileAuthState');
 const fetchLatestBaileysVersion = pick('fetchLatestBaileysVersion');
 const DisconnectReason = pick('DisconnectReason');
+const downloadContentFromMessage = pick('downloadContentFromMessage'); // 👈 necessário p/ áudio
 
 if (typeof makeWASocket !== 'function') {
   throw new TypeError('[baileys] Pacote não encontrado ou incompatível');
@@ -57,6 +59,7 @@ const {
 } = process.env;
 
 const PRINT_QR = bool(WPP_PRINT_QR, true);
+the
 const SEND_TYPING_B = bool(SEND_TYPING, true);
 const TYPING_PER = num(TYPING_MS_PER_CHAR, 35);
 const TYPING_MIN = num(TYPING_MIN_MS, 800);
@@ -117,6 +120,20 @@ export const adapter = {
     if (!sock) throw new Error('WhatsApp não inicializado');
     const jid = normalizeJid(to);
     return sock.sendMessage(jid, { image: { url: String(url) }, caption });
+  },
+  // 🔊 disponibiliza buffer de áudio para ASR
+  async getAudioBuffer(raw) {
+    try {
+      const a = raw?.message?.audioMessage;
+      if (!a || typeof downloadContentFromMessage !== 'function') return null;
+      const stream = await downloadContentFromMessage(a, 'audio');
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    } catch (e) {
+      console.warn('[baileys.getAudioBuffer]', e?.message || e);
+      return null;
+    }
   },
 };
 
