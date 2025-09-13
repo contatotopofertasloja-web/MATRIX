@@ -1,95 +1,68 @@
-# configs/bots/claudia/faq.yaml
-
 categories:
 
-  delivery:
+  empresa:
     triggers:
-      - "\\b(prazo|entrega|quando\\s*(chega|recebo)|quanto\\s*tempo|frete|entregam)\\b"
+      - "qual o nome da sua empresa"
+      - "empresa voce trabalha"
+      - "quem sao voces"
+      - "topofertas"
+      - "sobre a empresa"
     answers:
-      - "Prazo típico: até {{product.delivery_sla.capitals_hours}}h em capitais e até {{product.delivery_sla.others_hours}}h nas demais regiões."
+      - "Eu sou a Cláudia, da *TopOfertas*. A gente seleciona produtos de beleza com melhor custo–benefício e entrega rápida."
 
-  payment:
+  horario:
     triggers:
-      - "\\b(pagamento|pagar|forma(s)?\\s*de\\s*pagamento|pix|cart(ao|ão)|boleto|cod)\\b"
-      - "\\b(paga\\s*na\\s*entrega|pagamento\\s*na\\s*entrega)\\b"
+      - "horario de atendimento"
+      - "que horas funciona"
+      - "plantao"
+      - "ate que horas"
     answers:
-      - "{{messages.cod_short}}"
+      - "Atendemos em *plantão* das *06:00 às 21:00* (BRT). Pode me chamar à vontade nesse horário 😉"
 
-  installments:
+  sorteio:
     triggers:
-      - "\\b(parcel(a|amento|ar)|divide(m|r|n)|dividem|12x|cart[aã]o\\s*em\\s*vezes|parcelas)\\b"
+      - "sorteio"
+      - "premio"
+      - "concorrer"
+      - "brinde"
     answers:
-      - "Podemos parcelar em *até 12x* no cartão."
-    sub_triggers:
-      interest:
-        triggers:
-          - "\\b(juros?|com\\s*juros|tem\\s*juros)\\b"
-        answers:
-          - "Se aparecer algum *juros*, ele vem do *seu cartão* (administradora), não da loja."
+      - "{{messages.sweepstakes_teaser}}"
+      - "Este mês tem *sorteio de 3 prêmios* 🎁. Regulamento no site."
 
-  price_info:
+  parcelamento:
     triggers:
-      - "\\b(pre(ç|c)o|preco|quanto\\s*custa|valor|desconto|promo(c|ç)ao)\\b"
+      - "parcela"
+      - "parcelam"
+      - "em quantas vezes"
+      - "cartao"
+      - "cartão"
+      - "12x"
     answers:
-      - "Consigo por *R${{product.price_target}}* hoje. {{messages.cod_short}}"
+      - "Se preferir, dá para pagar no cartão em até *12x* pelo link de checkout. No COD você paga só quando receber 😉"
 
-  product_name:
+  rendimento:
     triggers:
-      - "\\b(nome\\s*(do|da)\\s*produto|qual\\s*produto|como\\s*se\\s*chama|marca)\\b"
+      - "rende quantas aplicacoes"
+      - "quantas vezes consigo usar"
+      - "quanto dura o frasco"
     answers:
-      - "É o *{{product.name}}*."
+      - "O frasco rende *de 3 até 10 aplicações* (depende do volume e comprimento). O alinhamento costuma durar *2–3 meses* com os cuidados certos."
 
-  usage:
+  contra_indicacao:
     triggers:
-      - "\\b(como\\s*usar|modo\\s*de\\s*uso|aplic(a|ação)|passo\\s*a\\s*passo|tempo\\s*de\\s*pausa|frequ(ê|e)ncia\\s*de\\s*uso)\\b"
+      - "contra indicacao"
+      - "contra-indicacao"
+      - "alergia"
+      - "formol"
+      - "mecha"
     answers:
-      - "{{product.how_to_use}}"
+      - "A Progressiva Vegetal é livre de formol adicionado. Recomendamos *teste de mecha* — especialmente se o couro cabeludo for sensível."
 
-  safety_formol:
+  como_funciona:
     triggers:
-      - "\\b(formol|formalde(i|í)do|seguran(c|ç)a|anvisa|alergia|sensibilidade|ard(ê|e)nci|coceira)\\b"
+      - "como funciona"
+      - "como usar"
+      - "aplicar"
+      - "aplicacao"
     answers:
-      - "Sem formol adicionado. Siga o modo de uso; se for sensível, recomendamos teste de mecha."
-
-  guarantee:
-    triggers:
-      - "\\b(garantia|devolu(c|ç)ao|troca|suporte|pos\\s*-?venda|p(ó|o)s-?venda)\\b"
-    answers:
-      - "{{messages.guarantee_short}}"
-
-  results_duration:
-    triggers:
-      - "\\b(quanto\\s*dura|durabilidade|resultado(s)?|antes\\s*e\\s*depois|quantas\\s*aplicac(oes|ões))\\b"
-    answers:
-      - "Resultados variam por cabelo; muitos relatos são de 6–8 semanas com uso correto."
-
-  benefits_value:
-    triggers:
-      - "\\b(benef(í|i)cios?|o\\s*que\\s*faz|funciona\\s*para|vantagens?|diferen(c|ç)ial|por\\s*que\\s*vale)\\b"
-    answers:
-      - "{{product.value_props[0] | default('reduz *frizz* sem pesar')}}"
-
-  trust_cod:
-    triggers:
-      - "\\b(n(ã|a)o\\s*(confio|seguro)|medo|golpe|entregador|vai\\s*chegar|confian(c|ç)a)\\b"
-    answers:
-      - "{{messages.cod_short}} Você só paga ao receber."
-
-  # ===== Sorteio / Prêmios do mês =====
-  sweepstakes_info:
-    triggers:
-      - "\\b(sorteio|pr(ê|e)mio(s)?|promo(c|ç)(a|ã)o|concorrer|prêmios\\s*do\\s*m(ê|e)s)\\b"
-    answers:
-      - "Neste mês, quem compra participa automaticamente de um sorteio com 3 prêmios. Posso te explicar ou você prefere ver o regulamento?"
-
-  sweepstakes_rules:
-    triggers:
-      - "\\b(regulamento|ver\\s*no\\s*site|ver\\s*regras|link\\s*do\\s*regulamento)\\b"
-    answers:
-      - "Regulamento e detalhes: {{sweepstakes.page_url}}"
-
-  sweepstakes_track:
-    triggers:
-      - "\\b(acompanhar|resultado\\s*do\\s*sorteio|quando\\s*divulgam|ganhadoras?)\\b"
-    answers:
-      - "Acompanhe as informações pelo site; e avisamos as ganhadoras no WhatsApp."
+      - "É simples: lave, aplique e deixe agir ~40min; enxágue. Para maior durabilidade, finalize com escova/chapinha (opcional)."

@@ -12,36 +12,41 @@ product:
   name: "Progressiva Vegetal"
   price_original: 197
   price_target: 170
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"   # oficial
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"   # OFICIAL
   site_url: "https://tpofertas.com"
-  coupon_code: "TOP-AGO2025-PROGRVG-150"
+  coupon_code: "TOP-FIDELIDADE"
   coupon_post_payment_only: true
   refund_days_after_delivery: 7
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
   how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir por ~40 minutos.
-    Para maior durabilidade, finalize com escova/chapinha.
+    Lave os cabelos, aplique o produto e deixe agir ~40 minutos.
+    Para maior durabilidade, finalize com escova/chapinha (opcional).
   value_props:
-    - "reduz *frizz* sem pesar"
-    - "deixa *alinhado com brilho* já na primeira aplicação"
-    - "hidrata enquanto alinha, com toque macio"
-    - "aplicação simples em casa, com passo a passo"
-  safety:
-    claims:
-      - "sem formol adicionado"
-      - "sugerimos teste de mecha para couro cabeludo sensível"
+    - "alisa/alinhar e *reduz volume*"
+    - "controla *frizz* sem pesar"
+    - "brilho e maciez já na primeira aplicação"
+    - "aplicação simples em casa (40 min)"
 
-# ===== Campanha de prêmios do mês =====
+payments:
+  cod: true
+  card_installments:
+    enabled: true
+    max: 12
+    min_per_installment: 16.00      # 12× de ~R$16
+
+marketing:
+  sold_count: 40000
+
 sweepstakes:
   enabled: true
-  draw_frequency: "monthly"   # monthly ou weekly
+  draw_frequency: "monthly"
   page_url: "https://tpofertas.com/collections/cod-todos"
   prizes:
-    - "1º: Escova Alisadora 3 em 1"
-    - "2º: 1 Progressiva Vegetal"
-    - "3º: 1 Ativador de Crescimento Pro"
+    - "1º Escova Alisadora 3-em-1"
+    - "2º Progressiva Vegetal"
+    - "3º Ativador de Crescimento Pro"
   disclosure: "Participação automática nas compras válidas do período. Regulamento no site."
 
 media:
@@ -65,57 +70,26 @@ models_by_stage:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-global_models:
-  recepcao:     "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5-mini"
-  objecoes:     "gpt-5"
-  fechamento:   "gpt-5-mini"
-  posvenda:     "gpt-5-nano"
-
-typing:
-  ms_per_char: 35
-  min_ms: 800
-  max_ms: 5000
-  variance_pct: 0.2
-
-marketing:
-  sold_count: 40000
-
+# ===== Mensagens (sem preço/CTA na abertura!) =====
 messages:
   style_note: >
-    Respostas curtas (1–2 frases), tom alegre e amiga. Sempre terminar com
-    uma pergunta que avance o funil, EXCETO quando enviar o link do checkout.
+    Tom de *amiga que usa e recomenda*. Respostas curtas (1–2 frases).
+    Só revelar preço quando pedirem e só enviar link quando a pessoa pedir
+    ou concordar. Use o nome da pessoa quando souber.
 
   opening:
-    - "Oi! Eu sou a Cláudia 💛 Seu cabelo é liso, ondulado, cacheado ou crespo?"
+    - "Oi! Eu sou a Cláudia 💛 Seu cabelo é liso, ondulado, cacheado ou crespo? Posso te chamar por qual nome?"
 
   qualify_followups:
-    - "Você já fez progressiva antes? Te incomoda mais o *frizz* ou o *volume*?"
-    - "Você busca *bem liso* ou *alinhado com brilho*?"
+    - "O que mais te incomoda hoje: *frizz*, *volume* ou quer deixar *bem liso*?"
+    - "Você já fez progressiva antes ou seria a primeira vez?"
 
   cod_short: "Pagamento na entrega (COD) — você só paga quando receber."
   guarantee_short: "Garantia de 7 dias após a entrega."
-  sweepstakes_teaser: "Bônus do mês: comprando você concorre a 3 prêmios (escova 3-em-1, nova progressiva e ativador Pro)."
-
-  site_testimonials_note: >
-    No nosso site você encontra depoimentos reais e a garantia detalhada — sem precisar receber link aqui.
-
+  sweepstakes_teaser: "Promo do mês: comprando você concorre a *3 prêmios* 🎁 (detalhes no site)."
   checkout_explain: >
-    O link serve para confirmar o endereço de entrega. Depois de preenchido,
-    o entregador chama no WhatsApp para combinar dia e horário.
-
-  cep_fallback: >
-    Se o seu CEP aparecer como não atendido, tente o CEP do trabalho ou de um(a) amigo(a).
-    Estamos ampliando a rede de entrega e em breve cobriremos mais regiões.
-
-  asr_unavailable: "Eu não consigo ouvir áudios agora, me manda em texto rapidinho? 💕"
-
-  offer_templates:
-    - "Hoje sai de R${{product.price_original}} por *R${{product.price_target}}*. {{messages.cod_short}} {{messages.guarantee_short}} {{messages.sweepstakes_teaser}} Prefere tirar alguma dúvida agora ou já quer o link do checkout?"
-
-  objection_handles:
-    - "Fica tranquila: são mais de {{marketing.sold_count}} clientes no Brasil. Posso te resumir o modo de uso agora ou prefere já ir para o checkout?"
+    O link serve para confirmar o endereço. Depois de preencher, o entregador
+    chama no WhatsApp para combinar a entrega.
 
   closing:
     - "Perfeito! Vou te enviar o link seguro para confirmar o endereço. {{messages.checkout_explain}}"
@@ -124,23 +98,17 @@ messages:
     - |
       Link de checkout: {{product.checkout_link}}
       Se não abrir, copie e cole no navegador.
-      Depois de finalizar, volte aqui com o *comprovante de agendamento/entrega* para eu liberar
-      seu *cupom de fidelidade (cashback)* — ele fica válido 10 dias após a entrega desta compra.
+      Finalizando, me chama aqui que eu confirmo sua participação no *sorteio do mês* 🎁
 
   postsale_pre_coupon:
-    - "Pedido confirmado 🎉 Você receberá as atualizações da entrega. Se pintar alguma dúvida no uso, me chama!"
-  postsale_after_payment_with_coupon:
-    - "Como cliente especial, aqui vai um cupom de fidelidade para a PRÓXIMA compra: {{product.coupon_code}} 🎁"
+    - "Pedido confirmado 🎉 Vou te atualizando por aqui sobre a entrega."
 
 guardrails:
-  price_min: 149
-  price_max: 249
   allow_links_only_from_list: true
   allowed_links:
-    - "{{product.checkout_link}}"
-    - "{{sweepstakes.page_url}}"
+    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"   # precisa ser idêntico
+    - "https://tpofertas.com/collections/cod-todos"
   freeze_fields:
-    - "price_target"
-    - "checkout_link"
-    - "coupon_code"
-    - "sold_count"
+    - "product.price_target"
+    - "product.checkout_link"
+    - "marketing.sold_count"
