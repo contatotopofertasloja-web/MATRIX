@@ -10,6 +10,9 @@ const profile = new Map();        // jid -> { name, hairType, goal }
 // Throttle de perguntas (evita perguntar a mesma coisa toda hora)
 const asked = new Map();          // jid -> Map<key, timestamp>
 
+// Sinalizadores de sessão (ex.: teaser de sorteio já mostrado)
+const sessionFlags = new Map();   // jid -> { teaserShown?: boolean }
+
 export function setAwaitingConsent(jid, val = true) { if (jid) consent.set(jid, !!val); }
 export function isAwaitingConsent(jid) { return !!consent.get(jid); }
 export function clearConsent(jid) { consent.delete(jid); }
@@ -44,6 +47,16 @@ export function shouldAsk(jid, key, cooldownMs = 90_000) {
   return ok;
 }
 
+// ---- Sorteio (mostrar teaser só 1x por sessão)
+export function shouldShowTeaser(jid) {
+  const flags = _slot(sessionFlags, jid);
+  return !flags.teaserShown;
+}
+export function markTeaserShown(jid) {
+  const flags = _slot(sessionFlags, jid);
+  flags.teaserShown = true;
+}
+
 // ---- Negócio / horário
 export function isWithinBusinessHours(settings, date = new Date()) {
   const tz = Number(settings?.business?.tz_offset_hours ?? -3);
@@ -63,7 +76,7 @@ export function getCheckoutLink(settings) {
   if (settings?.product?.checkout_link) return settings.product.checkout_link;
   // 2) ENV (Railway)
   if (process.env.CHECKOUT_LINK) return process.env.CHECKOUT_LINK;
-  // 3) Fallback seguro (o link que você passou)
+  // 3) Fallback seguro (o link oficial informado)
   return 'https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170';
 }
 

@@ -7,7 +7,8 @@ export default async function greet(ctx = {}) {
   const name = userName ? ` ${userName}` : '';
   const caption =
     `Oi${name}! 💛 Eu sou a Cláudia da TopOfertas.\n` +
-    `Pra gente começar: seu cabelo é liso, ondulado, cacheado ou crespo?`;
+    `Pra gente começar: seu cabelo é liso, ondulado, cacheado ou crespo?\n` +
+    `Se preferir, me diz como posso te chamar 😊`;
 
   if (img && (settings?.flags?.send_opening_photo ?? true)) {
     await send(jid, { type: 'image', url: img, caption });

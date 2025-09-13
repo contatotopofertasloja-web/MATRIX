@@ -1,6 +1,5 @@
-// configs/bots/claudia/flow/objections.js
 // Responde objeções de preço, dano/química, tempo de uso e resultado esperado.
-// Fala em valor (custo por aplicação/dia), COD, garantia e sorteio do mês.
+// Valor (custo por aplicação/dia), COD, garantia e sorteio do mês.
 
 import { setAwaitingConsent } from './_state.js';
 
@@ -12,11 +11,13 @@ const RX = {
 };
 
 function bucketize(price = 170) {
-  const usos = 3.5;              // média 3–4 aplicações
-  const porAplic = price / usos;  // ~ R$48
-  const dias = 60;                // durabilidade conservadora
-  const porDia = price / dias;    // ~ R$2,83
-  return { usos, porAplic, porDia };
+  const usosMin = 3;  // conservador
+  const usosMax = 10; // cabelo curto/volume baixo pode render até 10
+  const porAplicMin = price / usosMax; // melhor caso ~ R$17
+  const porAplicMax = price / usosMin; // pior caso ~ R$57
+  const dias = 60;    // durabilidade média
+  const porDia = price / dias; // ~ R$2–3/dia
+  return { usosMin, usosMax, porAplicMin, porAplicMax, porDia };
 }
 
 export default {
@@ -36,7 +37,7 @@ export default {
       ? (settings?.messages?.sweepstakes_teaser || 'Fechando hoje você ainda entra no sorteio do mês 🎁')
       : '';
 
-    const { porAplic, porDia } = bucketize(price);
+    const { porAplicMin, porAplicMax, porDia } = bucketize(price);
     const cod  = settings?.messages?.cod_short || 'Pagamento na entrega (COD).';
     const grt  = settings?.messages?.guarantee_short || 'Garantia de 7 dias após a entrega.';
 
@@ -45,7 +46,7 @@ export default {
     // 1) Preço/valor
     if (RX.preco.test(t)) {
       const pitch =
-`Entendo! No salão sai *R$250–R$450* por sessão. No frasco, sai ~*R$${porAplic.toFixed(0)} por aplicação* (3–4 usos) e ~*R$${porDia.toFixed(2)} por dia*. 
+`Entendo! No salão sai *R$250–R$450* por sessão. No frasco, fica ~*R$${porAplicMin.toFixed(0)} a R$${porAplicMax.toFixed(0)} por aplicação* (rende *até 10*, variando pelo volume) e ~*R$${porDia.toFixed(2)} por dia* de cabelo alinhado.
 Você faz em casa, no seu horário. ${cod} ${grt} ${teaserSorteio}
 Quer que eu segure *R$${price}* e já te envie o link?`;
       setAwaitingConsent(jid, true);
@@ -56,7 +57,7 @@ Quer que eu segure *R$${price}* e já te envie o link?`;
     // 2) Medo de dano/química
     if (RX.dano.test(t)) {
       const pitch =
-`Entendo a sua preocupação 💛 A proposta aqui é *alisar/alinha* e *reduzir volume* cuidando dos fios, com modo de uso simples (40 min e pronto).
+`Entendo a sua preocupação 💛 A proposta aqui é *alisar/alinhar* e *reduzir volume* cuidando dos fios, com modo de uso simples (~40 min).
 Resultados reais vêm do *passo a passo correto* e do *tempo de ação* indicado. ${cod} ${grt} ${teaserSorteio}
 Se quiser, eu te guio no primeiro uso. Posso te enviar o link mantendo *R$${price}*?`;
       setAwaitingConsent(jid, true);

@@ -1,4 +1,5 @@
-// FAQ via YAML + fallbacks: parcelamento 12x, empresa, promo/sorteio, horário 6–21h, áudio IN/OUT
+// FAQ via YAML + fallbacks: parcelamento 12x, empresa, promo/sorteio,
+// horário 6–21h, áudio IN/OUT, e rendimento até 10 aplicações.
 import faq from '../faq.yaml' assert { type: 'yaml' };
 
 function get(obj, path) {
@@ -80,6 +81,11 @@ const fallbackRules = [
       if (canIn)          return 'Pode mandar *áudio* sim 😊 Eu escuto e te respondo por aqui.';
       return 'No momento respondo por texto, mas posso te ajudar com qualquer dúvida rapidinho 😉';
     },
+  },
+  {
+    key: 'rendimento',
+    triggers: /(rende|quantas\s*aplica(c|ç)[oõ]es|quanto\s*dura\s*o\s*frasco)/i,
+    answer: () => 'O frasco rende *de 3 até 10 aplicações*, variando pelo volume e comprimento do cabelo. A duração média do alinhamento fica em torno de *2–3 meses* com os cuidados certos.',
   },
 ];
 
