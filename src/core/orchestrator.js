@@ -7,8 +7,6 @@ import * as tools from "./tools.js";
 import * as memory from "./memory.js";
 import { buildSystem, buildPlannerUser, buildRefineUser } from "./prompts/base.js";
 
-// Helpers
-const asBool = (v, d=false) => (v==null? d : ['1','true','yes','y','on'].includes(String(v).toLowerCase()));
 const nowMs = () => Date.now();
 
 function clampPrice(price, s=settings) {
@@ -36,9 +34,8 @@ function enforceLinks(text, s=settings) {
   });
 }
 
-// --- NOVO: enforcer de preço (só aparece quando permitido)
 const RX_PRICE_ANY = /(R\$\s?\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/g;
-function enforcePrice(text, allowed, s=settings) {
+function enforcePrice(text, allowed) {
   if (allowed) return text;
   return String(text || "").replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
 }
@@ -65,28 +62,16 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
   const sys = buildSystem({ settings: botSettings });
 
   // PASSO 1: Planner → JSON
-  const user1 = buildPlannerUser({
-    message: text,
-    stageHint,
-    settings: botSettings,
-    memory: mem
-  });
-
+  const user1 = buildPlannerUser({ message: text, stageHint, settings: botSettings, memory: mem });
   let plan;
   try {
-    const { text: planStr } = await callLLM({
-      stage: "planner",
-      system: sys,
-      prompt: user1,
-      maxTokens: 512,
-    });
+    const { text: planStr } = await callLLM({ stage: "planner", system: sys, prompt: user1, maxTokens: 512 });
     plan = JSON.parse(planStr || "{}");
-  } catch (e) {
-    console.warn("[orchestrator] planner JSON inválido, cai para fallback:", e?.message || e);
+  } catch {
     plan = { next: "reply", stage: stageHint || "qualify", tool_calls: [], slots: {}, reply: null, confidence: 0.2 };
   }
 
-  // Merge slots com memória e guarda
+  // Merge slots e persistência
   const slots = { ...(mem?.slots || {}), ...plan?.slots };
   await memory.merge(jid, { slots });
 
@@ -106,18 +91,17 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
     }
   }
 
-  // Atualiza guardrails de preço/link
+  // Guardrails de preço/link (usando settings/ENV)
   const targetPrice = botSettings?.product?.price_target ?? botSettings?.product?.price_original;
   const price = clampPrice(targetPrice, botSettings);
   const frozen = applyFreezeFields({ price }, botSettings);
 
-  // Heurísticas de permissão
   const askedLink  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i.test(text);
   const askedPrice = /\b(preç|valor|quanto|cust)/i.test(text);
   const canLink    = askedLink || cooldownOk(mem?.lastLinkAt, 90000);
   const canPrice   = askedPrice || cooldownOk(mem?.lastOfferAt, 90000);
 
-  // PASSO 3: Refinar resposta com dados dos tools
+  // PASSO 3: Refinar com dados dos tools
   const user2 = buildRefineUser({
     message: text,
     stage: plan?.stage || stageHint || "qualify",
@@ -135,16 +119,10 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
 
   let finalText = "";
   try {
-    const { text: refined } = await callLLM({
-      stage: plan?.stage || "qualify",
-      system: sys,
-      prompt: user2,
-      maxTokens: 512,
-    });
+    const { text: refined } = await callLLM({ stage: plan?.stage || "qualify", system: sys, prompt: user2, maxTokens: 512 });
     finalText = enforceLinks(refined, botSettings);
-    finalText = enforcePrice(finalText, canPrice, botSettings);
-  } catch (e) {
-    console.warn("[orchestrator] refine falhou:", e?.message || e);
+    finalText = enforcePrice(finalText, canPrice);
+  } catch {
     finalText = "Beleza! Posso te passar o preço e como funciona, ou quer falar de prazo e pagamento?";
   }
 

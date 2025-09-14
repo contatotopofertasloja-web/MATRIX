@@ -80,7 +80,7 @@ messages:
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
-  # REMOVIDO: offer_templates com preço — preço/link decidido via orquestrador/tools
+  # REMOVIDO: offer_templates com preço/link — preço/link é decidido via orquestrador/tools
   objection_handles:
     - "Super entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer que eu te mostre como aplicar rapidinho?"
     - "Fica tranquila: temos garantia e acompanhamento. Quer que eu te envie o passo a passo simples?"

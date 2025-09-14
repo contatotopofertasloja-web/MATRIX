@@ -29,7 +29,7 @@ export async function getCheckoutLink({ settings: s }) {
 export async function getDeliverySLA({ settings: s }) {
   const SS = getS(s);
   const sla = SS?.product?.delivery_sla || {};
-  return { capitals_hours: sla.capitals_hours || 24, others_hours: 72 };
+  return { capitals_hours: sla.capitals_hours || 24, others_hours: sla.others_hours || 72 };
 }
 
 export async function getPaymentInfo({ settings: s }) {
