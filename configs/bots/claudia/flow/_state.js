@@ -1,4 +1,3 @@
-// configs/bots/claudia/flow/_state.js
 // Estado e helpers da Cláudia (somente nesta pasta do bot)
 export function initialState() {
   return {
@@ -13,6 +12,8 @@ export function initialState() {
     asked_name_once: false,
     asked_hair_once: false,
     consent_checkout: false,
+    price_allowed: false,   // <<< gate: só libera preço se a cliente pedir (ou manualmente)
+    turns: 0,               // contador simples de trocas
 
     // concierge (endereço/contato)
     telefone: null,
@@ -36,11 +37,17 @@ const CARINHOS = ["minha linda", "amor", "gata", "minha flor"];
 export function callUser(state = {}) {
   const nome = (state?.nome || "").trim();
   if (nome && Math.random() < 0.6) return nome.split(" ")[0];
-  // alterna apelidos para não repetir muito
   if (!state._apx) state._apx = 0;
   const ap = CARINHOS[state._apx % CARINHOS.length];
   state._apx++;
   return ap;
+}
+
+function numEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null) return fallback;
+  const n = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : fallback;
 }
 
 export function getFixed(settings = {}) {
@@ -52,13 +59,17 @@ export function getFixed(settings = {}) {
     "Todo mês tem sorteio ✨ (escova 3-em-1, progressiva e ativador capilar).";
 
   const product = s.product || {};
+  // Preço: settings.yaml com override opcional por ENV
+  const priceOriginal = numEnv("PRICE_ORIGINAL", product.price_original ?? 197);
+  const priceTarget   = numEnv("PRICE_TARGET",   product.price_target   ?? 170);
+
   return {
     empresa,
     hora,
     sorteioOn,
     sorteioTeaser,
-    priceOriginal: product.price_original ?? 197,
-    priceTarget: product.price_target ?? 170,
+    priceOriginal,
+    priceTarget,
     applications: product.applications_range || "até 10 aplicações",
     duration: product.duration_avg || "em média 3 meses",
     soldCount: s?.marketing?.sold_count || 40000,

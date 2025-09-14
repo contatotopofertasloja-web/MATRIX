@@ -1,8 +1,8 @@
-// configs/bots/claudia/flow/objections.js
 import { callUser } from "./_state.js";
 
 export default async function objections(ctx) {
   const { text = "", state } = ctx;
+  state.turns = (state.turns || 0) + 1;
   const t = text.toLowerCase();
 
   if (/car[oa]|caro|preç|valor/.test(t)) {
@@ -38,7 +38,6 @@ export default async function objections(ctx) {
     };
   }
 
-  // fallback gentil
   return {
     reply: `Qual foi a sua dúvida principal, ${callUser(state)}? Preço, modo de uso, segurança… posso te ajudar em qualquer ponto 😊`,
     next: "oferta",
