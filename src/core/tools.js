@@ -5,22 +5,31 @@ import { settings } from "../../configs/src/core/settings.js";
 
 const getS = (s) => s || settings;
 
+const numEnv = (k, fallback) => {
+  const raw = process.env[k];
+  if (raw == null) return fallback;
+  const n = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : fallback;
+};
+
 export async function getPrice({ settings: s }) {
   const SS = getS(s);
   const p = SS?.product || {};
-  const price = typeof p.price_target === "number" ? p.price_target : p.price_original;
-  return { price };
+  const orig = numEnv("PRICE_ORIGINAL", typeof p.price_original === "number" ? p.price_original : 197);
+  const targ = numEnv("PRICE_TARGET",   typeof p.price_target   === "number" ? p.price_target   : orig);
+  return { original: orig, price: targ };
 }
 
 export async function getCheckoutLink({ settings: s }) {
   const SS = getS(s);
-  return { url: SS?.product?.checkout_link || "" };
+  const env = (process.env.CHECKOUT_LINK || "").trim();
+  return { url: env || SS?.product?.checkout_link || "" };
 }
 
 export async function getDeliverySLA({ settings: s }) {
   const SS = getS(s);
   const sla = SS?.product?.delivery_sla || {};
-  return { capitals_hours: sla.capitals_hours || 24, others_hours: sla.others_hours || 72 };
+  return { capitals_hours: sla.capitals_hours || 24, others_hours: 72 };
 }
 
 export async function getPaymentInfo({ settings: s }) {
@@ -33,11 +42,10 @@ export async function getPaymentInfo({ settings: s }) {
 export async function getFAQ({ args = {}, settings: s }) {
   const SS = getS(s);
   const cats = SS?.faq?.categories || {};
-  const key = String(args?.key || "").trim(); // se vier uma chave explícita
+  const key = String(args?.key || "").trim();
   if (key && cats[key]?.answers?.length) return { answer: cats[key].answers[0] };
 
   const text = String(args?.text || "").toLowerCase();
-  // tenta casar por triggers
   for (const k of Object.keys(cats)) {
     const trigs = cats[k]?.triggers || [];
     for (const patt of trigs) {

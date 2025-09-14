@@ -22,19 +22,25 @@ function clampPrice(price, s=settings) {
 function enforceLinks(text, s=settings) {
   const allowList = (s?.guardrails?.allow_links_only_from_list && s?.guardrails?.allowed_links) ? s.guardrails.allowed_links : null;
   if (!allowList) return text;
-  // remove/mascarar urls fora da allowlist
   const urlRx = /\bhttps?:\/\/[^\s]+/gi;
   return String(text || '').replace(urlRx, (u) => {
     const ok = allowList.some(t => {
       const tmpl = String(t||'').trim();
       if (!tmpl) return false;
-      // suporta template {{product.checkout_link}}
-      const realized = tmpl.replace(/\{\{\s*product\.checkout_link\s*\}\}/g, settings?.product?.checkout_link || '')
-                           .replace(/\{\{\s*product\.site_url\s*\}\}/g, settings?.product?.site_url || '');
+      const realized = tmpl
+        .replace(/\{\{\s*product\.checkout_link\s*\}\}/g, settings?.product?.checkout_link || '')
+        .replace(/\{\{\s*product\.site_url\s*\}\}/g, settings?.product?.site_url || '');
       return realized && u.startsWith(realized);
     });
     return ok ? u : '[link removido]';
   });
+}
+
+// --- NOVO: enforcer de preço (só aparece quando permitido)
+const RX_PRICE_ANY = /(R\$\s?\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/g;
+function enforcePrice(text, allowed, s=settings) {
+  if (allowed) return text;
+  return String(text || "").replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
 }
 
 function applyFreezeFields(obj={}, s=settings) {
@@ -101,15 +107,15 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
   }
 
   // Atualiza guardrails de preço/link
-  const price = clampPrice(
-    botSettings?.product?.price_target ?? botSettings?.product?.price_original,
-    botSettings
-  );
+  const targetPrice = botSettings?.product?.price_target ?? botSettings?.product?.price_original;
+  const price = clampPrice(targetPrice, botSettings);
   const frozen = applyFreezeFields({ price }, botSettings);
 
-  // Heurística anti-loop: só permita link se usuário pediu OU cooldown passou
-  const askedLink = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i.test(text);
-  const canLink = askedLink || cooldownOk(mem?.lastLinkAt, 90000);
+  // Heurísticas de permissão
+  const askedLink  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i.test(text);
+  const askedPrice = /\b(preç|valor|quanto|cust)/i.test(text);
+  const canLink    = askedLink || cooldownOk(mem?.lastLinkAt, 90000);
+  const canPrice   = askedPrice || cooldownOk(mem?.lastOfferAt, 90000);
 
   // PASSO 3: Refinar resposta com dados dos tools
   const user2 = buildRefineUser({
@@ -121,6 +127,7 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
     slots,
     guards: {
       price: frozen.price,
+      price_allowed: canPrice,
       checkout_allowed: canLink,
       cod_text: botSettings?.messages?.cod_short || "Pagamento na entrega (COD).",
     },
@@ -135,21 +142,20 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
       maxTokens: 512,
     });
     finalText = enforceLinks(refined, botSettings);
+    finalText = enforcePrice(finalText, canPrice, botSettings);
   } catch (e) {
     console.warn("[orchestrator] refine falhou:", e?.message || e);
-    // fallback minimalista
     finalText = "Beleza! Posso te passar o preço e como funciona, ou quer falar de prazo e pagamento?";
   }
 
-  // Anti-spam de link
+  // Anti-spam / memória
   if (!canLink) {
     finalText = String(finalText || "").replace(/\bhttps?:\/\/[^\s]+/gi, "(posso te mandar o link quando você quiser)");
   }
-
-  // Atualiza memória de link/offer
   if (/\bhttps?:\/\/[^\s]+/i.test(finalText)) {
     await memory.merge(jid, { lastLinkAt: nowMs() });
-  } else if (/\bpreço|valor|R\$\b/i.test(finalText)) {
+  }
+  if (/\b(preço|valor|R\$)/i.test(finalText)) {
     await memory.merge(jid, { lastOfferAt: nowMs() });
   }
 

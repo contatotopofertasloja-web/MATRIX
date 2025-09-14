@@ -3,14 +3,19 @@ bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
+company_name: "TopOfertas"
+
 product:
   name: "Progressiva X"
+  # preço será lido preferencialmente de ENV (via tools/orquestrador); estes são fallbacks
   price_original: 197
   price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
   coupon_post_payment_only: true
+  refund_days_after_delivery: 7
+  volume_ml: 500
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
@@ -32,6 +37,18 @@ flags:
   small_talk_soften: true
   useModelsByStage: true
   fallbackToGlobal: true
+
+# Guardrails específicos p/ link/preço
+guardrails:
+  allow_links_only_from_list: true
+  allowed_links:
+    - "{{product.checkout_link}}"
+  freeze_fields:
+    - price_target
+    - checkout_link
+    - sold_count
+  price_min: 50
+  price_max: 999
 
 marketing:
   sold_count: 40000
@@ -63,16 +80,14 @@ messages:
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
-  offer_templates:
-    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
-    - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
+  # REMOVIDO: offer_templates com preço — preço/link decidido via orquestrador/tools
   objection_handles:
     - "Super entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer que eu te mostre como aplicar rapidinho?"
-    - "Fica tranquila: temos registro, garantia e acompanhamento. Quer que eu te envie o passo a passo simples?"
+    - "Fica tranquila: temos garantia e acompanhamento. Quer que eu te envie o passo a passo simples?"
   closing:
-    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD)."
+    - "Perfeito! Posso preparar tudo para finalizar no COD e te guiar em cada passo."
   postsale_pre_coupon:
-    - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega."
+    - "Pedido agendado! 🎉 Você receberá mensagens pelo WhatsApp para acompanhar a entrega."
     - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
   postsale_after_payment_with_coupon:
     - "Aqui vai um cupom de desconto para a próxima compra: {{coupon_code}} 🎁"
