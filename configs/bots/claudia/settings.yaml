@@ -7,7 +7,7 @@ company_name: "TopOfertas"
 
 product:
   name: "Progressiva X"
-  # preço será lido preferencialmente de ENV (via tools/orquestrador); estes são fallbacks
+  # Fallbacks. A FONTE de verdade será o ENV no core (PRICE_TARGET / PRICE_ORIGINAL / CHECKOUT_LINK).
   price_original: 197
   price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
@@ -53,6 +53,7 @@ guardrails:
 marketing:
   sold_count: 40000
 
+# Modelos por estágio (podem ser traduzidos para 4o no core se 5.x indisponível)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -75,12 +76,13 @@ typing:
   max_ms: 5000
 
 messages:
+  cod_short: "Pagamento na entrega (COD)."
   opening:
     - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo: liso, ondulado, cacheado ou crespo?"
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
-  # REMOVIDO: offer_templates com preço/link — preço/link é decidido via orquestrador/tools
+  # REMOVIDO: offer_templates com preço/link — preço/link são decididos via core/tools
   objection_handles:
     - "Super entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer que eu te mostre como aplicar rapidinho?"
     - "Fica tranquila: temos garantia e acompanhamento. Quer que eu te envie o passo a passo simples?"

@@ -95,6 +95,22 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
+// --- INÍCIO: Patch saneador (ENV → YAML → default) ---
+function asNumber(x, def) {
+  if (x == null || x === '') return def;
+  const n = Number(String(x).replace(/[^\d.,-]/g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : def;
+}
+const envProduct = {
+  price_original: asNumber(process.env.PRICE_ORIGINAL, fileSettings?.product?.price_original ?? 197),
+  price_target:   asNumber(process.env.PRICE_TARGET,   fileSettings?.product?.price_target   ?? 170),
+  checkout_link:  process.env.CHECKOUT_LINK?.trim() || fileSettings?.product?.checkout_link || '',
+  site_url:       process.env.SITE_URL?.trim()       || fileSettings?.product?.site_url     || '',
+  coupon_code:    process.env.COUPON_CODE?.trim()    || fileSettings?.product?.coupon_code  || '',
+};
+fileSettings.product = { ...(fileSettings.product || {}), ...envProduct };
+// --- FIM: Patch saneador ---
+
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,

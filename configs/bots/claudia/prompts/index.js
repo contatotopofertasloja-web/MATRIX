@@ -1,5 +1,5 @@
-﻿// prompts da Cláudia — Matrix IA 2.0 (limpo, sem preço/link hardcoded)
-// Saída SEMPRE em JSON compacto com o campo "reply" pronto pra WhatsApp.
+﻿// prompts da Cláudia — Matrix IA 2.0 (sem preço/link hardcoded)
+// Saída SEMPRE em JSON compacto com o campo "reply" pronto para WhatsApp.
 
 export function buildPrompt({ stage = 'greet', message = '', settings = {} }) {
   const s = settings || {};
@@ -9,17 +9,17 @@ export function buildPrompt({ stage = 'greet', message = '', settings = {} }) {
   const garantiaDias = P.refund_days_after_delivery ?? 7;
 
   const rails = [
-    `Seja breve, gentil e vendedora (1–2 frases).`,
-    `NUNCA cite preço ou valores por conta própria.`,
-    `NUNCA envie link por conta própria.`,
-    `Quando falar de pagamento, use texto genérico: "Pagamento na entrega (COD)".`,
-    `Nada de mídias/prints/depoimentos. Pode citar que existem no site (sem link).`,
-    `Finalize com pergunta que avance o funil (exceto logo após link — que não deve ser enviado aqui).`,
+    'Seja breve, gentil e vendedora (1–2 frases).',
+    'NUNCA cite preço, valores, cupons ou parcelas por conta própria.',
+    'NUNCA envie link por conta própria.',
+    'Se falar de pagamento, use apenas: "Pagamento na entrega (COD)".',
+    'Nada de mídias/prints/depoimentos. Pode citar que existem no site (sem link).',
+    'Finalize com uma pergunta que avance o funil (exceto logo após link — que não deve ser enviado aqui).',
   ].join('\n- ');
 
   const STAGES = {
     greet: `
-- Apresente-se e já pergunte um dado útil (tipo de cabelo/objetivo).
+- Apresente-se e pergunte um dado útil (tipo de cabelo/objetivo).
 - Não citar preço nem link aqui.
 `,
     qualify: `
@@ -28,16 +28,16 @@ export function buildPrompt({ stage = 'greet', message = '', settings = {} }) {
 `,
     offer: `
 - Explique benefícios/garantia/COD SEM citar números.
-- Se cliente pedir preço, sinalize que pode informar (o core decide).
+- Se cliente pedir preço, apenas sinalize que pode informar (o core decide e injeta).
 - Finalize perguntando se prefere seguir para o fechamento.
 `,
     close: `
-- Combine próximos passos para finalizar sem link explícito (o core decide enviar link).
+- Combine próximos passos PARA FECHAR sem link explícito (o core decide enviar link).
 - Mencione: preencher endereço; entregador chama no WhatsApp; pagamento na entrega; garantia de ${garantiaDias} dias.
 `,
     post_sale: `
-- Parabenize e confirme acompanhamento pelo WhatsApp.
-- Reforce a garantia de ${garantiaDias} dias e os cupons de fidelidade (sem mandar agora).
+- Parabenize, confirme acompanhamento no WhatsApp.
+- Reforce a garantia de ${garantiaDias} dias e os cupons de fidelidade (sem enviar agora).
 `,
     faq: `
 - Respostas curtas (uso, formol, tipos, resultados, parcelamento).
@@ -49,7 +49,8 @@ export function buildPrompt({ stage = 'greet', message = '', settings = {} }) {
 Responda SOMENTE neste JSON compacto:
 {"next":"reply","stage":"${stage}","slots":{},"tool_calls":[],"reply":"<TEXTO AQUI>","confidence":0.9}
 - Não quebre as aspas. Nada fora do JSON.
-- O "reply" deve ser PT-BR, c/ emojis discretos (máx 1).
+- O "reply" deve ser PT-BR. Emojis discretos (máx 1).
+- NÃO invente números (preço, parcelas, prazos) nem links; isso é responsabilidade do core.
 `;
 
   const system = [
@@ -61,7 +62,7 @@ Responda SOMENTE neste JSON compacto:
   const user = [
     `Mensagem do cliente: """${String(message || '').slice(0, 800)}"""`,
     format,
-    `Variáveis: GARANTIA_DIAS=${garantiaDias} (preço e link são decididos pelo core; não invente números).`
+    `Variáveis: GARANTIA_DIAS=${garantiaDias} (preço e link são decididos pelo core).`
   ].join('\n');
 
   return { system, user };
