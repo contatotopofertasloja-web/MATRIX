@@ -1,148 +1,128 @@
-// src/core/settings.js — COMPLETÃO
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import YAML from 'yaml';
+// src/core/settings.js
+// Core neutro: carrega settings do bot (YAML), aplica defaults/ENVs e exporta.
+import fs from "node:fs";
+import path from "node:path";
+import yaml from "js-yaml";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-const ROOT       = path.resolve(__dirname, '..', '..');
-
-function env(name, def) {
-  const v = process.env[name];
-  return v === undefined || v === null || v === '' ? def : v;
+if (process.env.NODE_ENV !== "production") {
+  try { await import("dotenv/config"); } catch {}
 }
-const asBool = (v, d = false) =>
-  v == null ? d : ['1', 'true', 'yes', 'y', 'on'].includes(String(v).trim().toLowerCase());
 
-export const BOT_ID = env('BOT_ID', 'claudia');
-const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
+export const ROOT_DIR = process.cwd();
+export const BOT_ID = String(process.env.BOT_ID || "claudia");
 
-const STAGE_KEY_ALIASES = new Map([
-  ['recepção', 'recepcao'], ['recepcao', 'recepcao'],
-  ['qualificação', 'qualificacao'], ['qualificacao', 'qualificacao'],
-  ['oferta', 'oferta'],
-  ['objeções', 'objecoes'], ['objecoes', 'objecoes'],
-  ['fechamento', 'fechamento'],
-  ['pós-venda', 'posvenda'], ['posvenda', 'posvenda'], ['postsale', 'posvenda'],
-]);
-function normalizeStageKey(k) {
-  if (!k) return k;
-  const base = String(k).trim().toLowerCase();
-  return STAGE_KEY_ALIASES.get(base) || base;
-}
-function normalizeModelsByStage(map) {
-  const out = {};
-  if (map && typeof map === 'object') {
-    for (const [k, v] of Object.entries(map)) {
-      out[normalizeStageKey(k)] = String(v || '').trim();
-    }
+function loadBotYaml(botId) {
+  const p = path.join(ROOT_DIR, "configs", "bots", botId, "settings.yaml");
+  if (!fs.existsSync(p)) {
+    throw new Error(`[settings] arquivo não encontrado: ${p}`);
   }
-  return out;
+  const raw = fs.readFileSync(p, "utf8");
+  return yaml.load(raw) || {};
 }
 
-const GLOBAL_MODELS = {
-  recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
-  qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
-  oferta:       env('LLM_MODEL_OFERTA',       'gpt-5-mini'),
-  objecoes:     env('LLM_MODEL_OBJECOES',     'gpt-5'),
-  fechamento:   env('LLM_MODEL_FECHAMENTO',   'gpt-5-mini'),
-  posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
+const envBool = (v, d=false) => {
+  if (v === undefined || v === null) return d;
+  const s = String(v).trim().toLowerCase();
+  return ["1","true","yes","y","on"].includes(s);
 };
+const envNum = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
 
-const FLAGS = {
-  useModelsByStage:    asBool(env('USE_MODELS_BY_STAGE', 'true'), true),
-  fallbackToGlobal:    asBool(env('FALLBACK_TO_GLOBAL_MODELS', 'true'), true),
-};
-
-const AUDIO = {
-  asrProvider: env('ASR_PROVIDER', 'openai'),
-  asrModel:    env('ASR_MODEL',    'whisper-1'),
-  ttsProvider: env('TTS_PROVIDER', 'openai'),
-  ttsVoice:    env('TTS_VOICE',    'alloy'),
-  language:    env('ASR_LANG',     'pt'),
-};
-
-const LLM_DEFAULTS = {
-  provider:    env('LLM_PROVIDER', 'openai'),
-  temperature: Number(env('LLM_TEMPERATURE', '0.5')),
-  timeouts: { defaultMs: Number(env('LLM_TIMEOUT_MS', '25000')) },
-  maxTokens: {
-    nano: Number(env('LLM_MAX_TOKENS_NANO', '512')),
-    mini: Number(env('LLM_MAX_TOKENS_MINI', '1024')),
-    full: Number(env('LLM_MAX_TOKENS_FULL', '2048')),
-  },
-  retries: Number(env('LLM_RETRIES', '2')),
-};
-
-let fileSettings = {
-  bot_id: BOT_ID,
-  persona_name: 'Cláudia',
-  language: 'pt-BR',
-  business: { tz_offset_hours: -3, hours_start: '06:00', hours_end: '21:00' },
-  product: { price_original: 197, price_target: 170, checkout_link: '', coupon_code: '' },
-  models_by_stage: {},
-  flags: { has_cod: true, send_opening_photo: true },
-  guardrails: {},
-  messages: {},
-};
-
-try {
-  if (fs.existsSync(BOT_SETTINGS_PATH)) {
-    const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
-    const parsed = YAML.parse(text) || {};
-    if (parsed.models_by_stage) parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
-    if (parsed.global_models)   parsed.global_models   = normalizeModelsByStage(parsed.global_models);
-    fileSettings = { ...fileSettings, ...parsed };
-    console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
-  } else {
-    console.warn(`[SETTINGS] Arquivo não encontrado: ${BOT_SETTINGS_PATH}`);
+function mergeDeep(base, extra) {
+  if (Array.isArray(base) && Array.isArray(extra)) return extra; // override arrays
+  if (base && typeof base === "object" && extra && typeof extra === "object") {
+    const out = { ...base };
+    for (const k of Object.keys(extra)) out[k] = mergeDeep(base[k], extra[k]);
+    return out;
   }
-} catch (e) {
-  console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
+  return extra === undefined ? base : extra;
 }
 
-// ENV overrides
-fileSettings.product = fileSettings.product || {};
-{
-  const envCheckout = env('CHECKOUT_LINK', '').trim();
-  const envCoupon   = env('COUPON_CODE', '').trim();
-  const envPriceT   = env('PRICE_TARGET', '').trim();
-  if (envCheckout) fileSettings.product.checkout_link = envCheckout;
-  if (envCoupon)   fileSettings.product.coupon_code   = envCoupon;
-  if (envPriceT !== '') {
-    const n = Number(envPriceT);
-    if (!Number.isNaN(n)) fileSettings.product.price_target = n;
+function defaultsFromEnv() {
+  // LLM defaults/flags por ENV (opcional)
+  const models = {
+    recepcao:     process.env.LLM_MODEL_RECEPCAO,
+    qualificacao: process.env.LLM_MODEL_QUALIFICACAO,
+    oferta:       process.env.LLM_MODEL_OFERTA,
+    objecoes:     process.env.LLM_MODEL_OBJECOES,
+    fechamento:   process.env.LLM_MODEL_FECHAMENTO,
+    posvenda:     process.env.LLM_MODEL_POSVENDA,
+  };
+
+  return {
+    flags: {
+      useModelsByStage: envBool(process.env.USE_MODELS_BY_STAGE, true),
+      fallbackToGlobal: envBool(process.env.FALLBACK_TO_GLOBAL_MODELS, true),
+    },
+    llm: {
+      provider: process.env.LLM_PROVIDER || "openai",
+      temperature: Number(process.env.LLM_TEMPERATURE ?? 0.5),
+      maxTokens: {
+        nano: Number(process.env.LLM_MAX_TOKENS_NANO ?? 512),
+        mini: Number(process.env.LLM_MAX_TOKENS_MINI ?? 1024),
+        full: Number(process.env.LLM_MAX_TOKENS_FULL ?? 2048),
+      },
+      timeoutMs: envNum(process.env.LLM_TIMEOUT_MS, 25000),
+      retries: envNum(process.env.LLM_RETRIES, 2),
+    },
+    models_by_stage: Object.fromEntries(
+      Object.entries(models).filter(([,v]) => !!v)
+    ),
+    product: {
+      checkout_link: process.env.CHECKOUT_LINK || undefined,
+      coupon_code: process.env.COUPON_CODE || undefined,
+      price_target: envNum(process.env.PRICE_TARGET, undefined),
+    },
+  };
+}
+
+// Sanitização de respostas fixas (empresa/horário/rendimento/garantia)
+function normalizeFixedAnswers(cfg) {
+  const s = { ...cfg };
+
+  // Empresa e horário
+  s.company_name = s.company_name || "TopOfertas";
+  s.business = s.business || {};
+  s.business.tz_offset_hours = Number(s.business.tz_offset_hours ?? -3);
+  s.business.hours_start = s.business.hours_start || "06:00";
+  s.business.hours_end = s.business.hours_end || "21:00";
+
+  // Sweepstake teaser default
+  if (!s.sweepstakes) s.sweepstakes = { enabled: false };
+  if (s.sweepstakes.enabled) {
+    s.sweepstakes.messages = s.sweepstakes.messages || {};
+    s.sweepstakes.messages.teaser = s.sweepstakes.messages.teaser || [
+      "Todo mês tem sorteio: 1º Escova Alisadora 3 em 1, 2º Progressiva Vegetal e 3º Ativador Capilar. Ao comprar, você já concorre 💝",
+    ];
   }
-}
 
-// Audio flags via ENV
-{
-  const audioOutEnv = env('ALLOW_AUDIO_OUT', '');
-  const audioInEnv  = env('ALLOW_AUDIO_IN',  '');
-  fileSettings.flags = fileSettings.flags || {};
-  if (audioOutEnv !== '') fileSettings.flags.allow_audio_out = asBool(audioOutEnv, true);
-  if (audioInEnv  !== '') fileSettings.flags.allow_audio_in  = asBool(audioInEnv,  true);
-}
+  // Produto: rendimento/duração (ajuste pedido)
+  s.product = s.product || {};
+  s.product.applications_range = s.product.applications_range || "até 10 aplicações";
+  s.product.duration_avg = s.product.duration_avg || "em média 3 meses";
 
-// Guardrails → garantir que o checkout esteja na allowlist
-{
-  const g = fileSettings.guardrails || {};
-  if (g.allow_links_only_from_list) {
-    const allow = new Set(Array.isArray(g.allowed_links) ? g.allowed_links : []);
-    if (fileSettings.product.checkout_link) allow.add(fileSettings.product.checkout_link);
-    if (fileSettings?.sweepstakes?.page_url) allow.add(fileSettings.sweepstakes.page_url);
-    fileSettings.guardrails = { ...g, allowed_links: Array.from(allow) };
+  // Guardrails básicos
+  s.guardrails = s.guardrails || {};
+  if (s.guardrails.allow_links_only_from_list) {
+    s.guardrails.allowed_links = s.guardrails.allowed_links || [
+      "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170",
+      "https://entrega.logzz.com.br",
+      "https://tpofertas.com/collections/cod-todos",
+    ];
   }
+
+  // Pagamentos/parcelamento default
+  s.payments = s.payments || {};
+  s.payments.installments = s.payments.installments || { enabled: true, max_installments: 12, hint_text: "até 12x" };
+
+  // Flags essenciais
+  s.flags = s.flags || {};
+  if (!("checkout_mode" in s.flags)) s.flags.checkout_mode = "concierge";
+
+  return s;
 }
 
-export const settings = {
-  botId: BOT_ID,
-  ...fileSettings,
-  llm: LLM_DEFAULTS,
-  flags: { ...(fileSettings.flags || {}), ...FLAGS },
-  audio: AUDIO,
-  global_models: { ...GLOBAL_MODELS, ...(fileSettings.global_models || {}) },
-};
+const fromYaml = loadBotYaml(BOT_ID);
+const merged = mergeDeep(fromYaml, defaultsFromEnv());
+export const settings = normalizeFixedAnswers(merged);
 
-export default settings;
+export default { BOT_ID, settings };

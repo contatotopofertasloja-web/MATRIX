@@ -1,89 +1,80 @@
-// configs/bots/claudia/flow/_state.js — memória e helpers por contato (expandido)
+// configs/bots/claudia/flow/_state.js
+// Estado e helpers da Cláudia (somente nesta pasta do bot)
+export function initialState() {
+  return {
+    // perfil
+    nome: null,
+    apelido: null,          // ex: "minha linda", "amor" (ligth, com moderação)
+    tipo_cabelo: null,      // liso | ondulado | cacheado | crespo
+    objetivo: null,         // alinhar | reduzir volume | frizz | brilho
 
-// Consentimento para enviar link
-const consent = new Map();        // jid -> boolean
-// Cooldown para não repetir preço/oferta toda hora
-const offerCooldown = new Map();  // jid -> timestamp
+    // flags de conversa
+    asked_price_once: false,
+    asked_name_once: false,
+    asked_hair_once: false,
+    consent_checkout: false,
 
-// Perfil simples por contato
-const profile = new Map();        // jid -> { name, hairType, goal }
-// Throttle de perguntas (evita perguntar a mesma coisa toda hora)
-const asked = new Map();          // jid -> Map<key, timestamp>
+    // concierge (endereço/contato)
+    telefone: null,
+    cep: null,
+    rua: null,
+    numero: null,
+    complemento: null,
+    bairro: null,
+    cidade: null,
+    uf: null,
+    referencia: null,
 
-// Sinalizadores de sessão (ex.: teaser de sorteio já mostrado)
-const sessionFlags = new Map();   // jid -> { teaserShown?: boolean }
-
-export function setAwaitingConsent(jid, val = true) { if (jid) consent.set(jid, !!val); }
-export function isAwaitingConsent(jid) { return !!consent.get(jid); }
-export function clearConsent(jid) { consent.delete(jid); }
-
-export function canOfferNow(jid, ms = 90_000) {
-  const t = offerCooldown.get(jid) || 0;
-  const ok = Date.now() - t > ms;
-  if (ok) offerCooldown.set(jid, Date.now());
-  return ok;
+    // etapas
+    stage: "recepcao", // recepcao -> qualificacao -> oferta -> fechamento -> posvenda
+    last_intent: null,
+  };
 }
 
-// ---- Perfil / Perguntas
-function _slot(map, jid) {
-  const cur = map.get(jid);
-  if (cur) return cur;
-  const fresh = map === asked ? new Map() : {};
-  map.set(jid, fresh);
-  return fresh;
+// lista curta, sem exagero
+const CARINHOS = ["minha linda", "amor", "gata", "minha flor"];
+export function callUser(state = {}) {
+  const nome = (state?.nome || "").trim();
+  if (nome && Math.random() < 0.6) return nome.split(" ")[0];
+  // alterna apelidos para não repetir muito
+  if (!state._apx) state._apx = 0;
+  const ap = CARINHOS[state._apx % CARINHOS.length];
+  state._apx++;
+  return ap;
 }
 
-export function setUserProfile(jid, patch = {}) {
-  const cur = _slot(profile, jid);
-  profile.set(jid, { ...cur, ...patch });
-}
-export function getUserProfile(jid) { return profile.get(jid) || {}; }
+export function getFixed(settings = {}) {
+  const s = settings || {};
+  const empresa = s.company_name || "TopOfertas";
+  const hora = `${s?.business?.hours_start || "06:00"}–${s?.business?.hours_end || "21:00"}`;
+  const sorteioOn = !!s?.sweepstakes?.enabled;
+  const sorteioTeaser = (s?.sweepstakes?.messages?.teaser || [])[0] ||
+    "Todo mês tem sorteio ✨ (escova 3-em-1, progressiva e ativador capilar).";
 
-export function shouldAsk(jid, key, cooldownMs = 90_000) {
-  const meter = _slot(asked, jid);
-  const last = meter.get(key) || 0;
-  const ok = Date.now() - last > cooldownMs;
-  if (ok) meter.set(key, Date.now());
-  return ok;
-}
-
-// ---- Sorteio (mostrar teaser só 1x por sessão)
-export function shouldShowTeaser(jid) {
-  const flags = _slot(sessionFlags, jid);
-  return !flags.teaserShown;
-}
-export function markTeaserShown(jid) {
-  const flags = _slot(sessionFlags, jid);
-  flags.teaserShown = true;
-}
-
-// ---- Negócio / horário
-export function isWithinBusinessHours(settings, date = new Date()) {
-  const tz = Number(settings?.business?.tz_offset_hours ?? -3);
-  const start = settings?.business?.hours_start ?? '06:00';
-  const end   = settings?.business?.hours_end   ?? '21:00';
-  const local = new Date(date.getTime() + tz * 3600 * 1000);
-  const h = local.getHours(), m = local.getMinutes();
-  const [sh, sm] = String(start).split(':').map(n => +n || 0);
-  const [eh, em] = String(end).split(':').map(n => +n || 0);
-  const nowM = h * 60 + m, startM = sh * 60 + sm, endM = eh * 60 + em;
-  return nowM >= startM && nowM < endM;
+  const product = s.product || {};
+  return {
+    empresa,
+    hora,
+    sorteioOn,
+    sorteioTeaser,
+    priceOriginal: product.price_original ?? 197,
+    priceTarget: product.price_target ?? 170,
+    applications: product.applications_range || "até 10 aplicações",
+    duration: product.duration_avg || "em média 3 meses",
+    soldCount: s?.marketing?.sold_count || 40000,
+    hasCOD: !!s?.flags?.has_cod,
+  };
 }
 
-// ---- Checkout/Preço com fallbacks
-export function getCheckoutLink(settings) {
-  // 1) settings da bot
-  if (settings?.product?.checkout_link) return settings.product.checkout_link;
-  // 2) ENV (Railway)
-  if (process.env.CHECKOUT_LINK) return process.env.CHECKOUT_LINK;
-  // 3) Fallback seguro (o link oficial informado)
-  return 'https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170';
-}
-
-export function getTargetPrice(settings) {
-  const envPrice = Number(process.env.PRICE_TARGET);
-  if (Number.isFinite(envPrice)) return envPrice;
-  const sPrice = Number(settings?.product?.price_target);
-  if (Number.isFinite(sPrice)) return sPrice;
-  return 170;
+export function summarizeAddress(st) {
+  const p = [];
+  if (st.rua) p.push(st.rua);
+  if (st.numero) p.push(`nº ${st.numero}`);
+  const a = [];
+  if (st.bairro) a.push(st.bairro);
+  if (st.cidade && st.uf) a.push(`${st.cidade}/${st.uf}`);
+  const linha1 = p.join(", ");
+  const linha2 = a.join(" – ");
+  const comp = st.complemento ? ` (${st.complemento})` : "";
+  return `${linha1}${comp}${linha2 ? " – " + linha2 : ""} ${st.cep ? " • CEP " + st.cep : ""}`.trim();
 }

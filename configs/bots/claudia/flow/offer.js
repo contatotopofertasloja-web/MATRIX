@@ -1,77 +1,46 @@
-// Oferta com aquecimento, âncora 197→170, COD, garantia, sorteio.
-// Só envia link se pedirem explicitamente ou após consentimento.
-// Usa getCheckoutLink/getTargetPrice para garantir o link e preço.
-import { setAwaitingConsent, canOfferNow, getCheckoutLink, getTargetPrice, shouldShowTeaser, markTeaserShown } from './_state.js';
+// configs/bots/claudia/flow/offer.js
+import { callUser, getFixed } from "./_state.js";
 
-function stripAccents(s=''){return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-function clean(t=''){return stripAccents(String(t||'').toLowerCase()).replace(/\s+/g,' ').trim();}
+export default async function offer(ctx) {
+  const { text = "", state, settings } = ctx;
+  const fx = getFixed(settings);
+  const t = text.toLowerCase();
 
-const RX = {
-  askPrice:/\b(preco|preço|quanto\s*custa|valor|desconto|promo(cao|ção)|oferta)\b/i,
-  askLink:/\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i,
-  priceObjection:/\b(caro|preco\s*alto|preço\s*alto|muito\s*car[oa])\b/i,
-};
-
-const pick = arr => Array.isArray(arr)&&arr.length? arr[Math.floor(Math.random()*arr.length)] : '';
-
-export default {
-  id:'offer',
-  stage:'oferta',
-
-  match(text=''){ 
-    const t=clean(text); 
-    return RX.askPrice.test(t) || RX.askLink.test(t) || RX.priceObjection.test(t);
-  },
-
-  async run(ctx={}) {
-    const { jid, text='', settings={}, send } = ctx;
-    const t = clean(text);
-    const p = settings?.product || {};
-    const priceOriginal = Number(p?.price_original ?? 197);
-    const priceTarget   = Number(getTargetPrice(settings));           // robusto
-    const checkout      = getCheckoutLink(settings);                  // robusto
-    const hook = pick(p?.value_props) || 'alisa/alinhar, reduz volume e controla frizz com brilho saudável';
-    const cod  = settings?.messages?.cod_short || 'Pagamento na entrega (COD), sem risco.';
-    const grt  = settings?.messages?.guarantee_short || 'Garantia de 7 dias após a entrega.';
-    const sold = settings?.marketing?.sold_count || 40000;
-
-    const teaser =
-      settings?.sweepstakes?.enabled && shouldShowTeaser(jid)
-        ? (settings?.messages?.sweepstakes_teaser || 'Comprando este mês você concorre a 3 prêmios 🎁')
-        : '';
-
-    // Pedido direto de link
-    if (RX.askLink.test(t) && checkout) {
-      setAwaitingConsent(jid, false);
-      await send(jid, `Perfeito! Link seguro do checkout:\n${checkout}\nDepois o entregador chama no WhatsApp. ${cod}`);
-      return;
-    }
-
-    // Objeção de preço → reforça valor antes de repetir preço
-    if (RX.priceObjection.test(t)) {
-      await send(jid, `Entendo! A ideia é *economizar salão* e ter resultado em casa: ${hook}. Já são *${sold.toLocaleString('pt-BR')}* frascos vendidos. Hoje consigo *R$${priceTarget}* (${cod} ${grt}). Quer o link pra conferir?`);
-      setAwaitingConsent(jid, true);
-      return;
-    }
-
-    // Perguntou preço → âncora + valor
-    if (RX.askPrice.test(t)) {
-      if (teaser) markTeaserShown(jid);
-      await send(jid, `Normalmente é *R$${priceOriginal}*, mas hoje consigo *R$${priceTarget}*. ${hook}. ${cod} ${grt} ${teaser}\nTe envio o link?`);
-      setAwaitingConsent(jid, true);
-      return;
-    }
-
-    // Sem pergunta de preço → aquece sem revelar
-    if (!canOfferNow(jid)) {
-      await send(jid, `Ela ${hook}. Quer que eu te explique rapidinho *como usar* e as *condições*?`);
-      setAwaitingConsent(jid, true);
-      return;
-    }
-
-    // Pode ofertar → revela
-    if (teaser) markTeaserShown(jid);
-    await send(jid, `Hoje sai de *R$${priceOriginal}* por *R$${priceTarget}*. ${hook}. ${cod} ${grt} ${teaser}\nQuer o link do checkout?`);
-    setAwaitingConsent(jid, true);
+  // se pedirem preço cedo, responder sem link (âncora + prova social + COD + garantia + sorteio)
+  if (/preç|valor|quanto|cust/.test(t)) {
+    state.asked_price_once = true;
+    const p = `De ${fx.priceOriginal} por **R$${fx.priceTarget}**`;
+    return {
+      reply:
+        `Pra você ter noção, ${callUser(state)}: ${p} no **COD** (paga só ao receber) + garantia de **7 dias**.\n` +
+        `A gente já ajudou **${fx.soldCount.toLocaleString("pt-BR")}+** clientes, e todo mês tem **sorteio** 🎁. ` +
+        `Quer que eu **adicione seus dados** rapidinho e deixe tudo pronto?`,
+      next: "fechamento",
+    };
   }
-};
+
+  // se perguntarem rendimento/duração
+  if (/quantas|aplica|rende|dura|mes(es)?/.test(t)) {
+    return {
+      reply: `Rende **${fx.applications}** e dura **${fx.duration}**, ${callUser(state)}. Com rotina certinha, o resultado fica ainda mais lindo ✨. Quer que eu te diga como usar, ou prefere já agilizar o pedido no **COD**?`,
+      next: "fechamento",
+    };
+  }
+
+  // resposta padrão de oferta (sem preço se não pediram)
+  if (!state.asked_price_once) {
+    return {
+      reply:
+        `Pelo que me contou, a Progressiva Vegetal bate certinho com seu objetivo, ${callUser(state)}. ` +
+        `É prática, segura e deixa o cabelo com acabamento de salão.\n` +
+        `Se quiser, eu já **adianto seu pedido no COD** e você só confere. Pode ser?`,
+      next: "fechamento",
+    };
+  }
+
+  // fallback
+  return {
+    reply: `Posso seguir e adiantar seu pedido no **COD**, ${callUser(state)}? Prometo agilizar e te mandar um resumo pra conferir 😌`,
+    next: "fechamento",
+  };
+}

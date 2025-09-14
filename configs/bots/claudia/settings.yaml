@@ -1,114 +1,94 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml
+bot_id: claudia
 persona_name: "Cláudia"
-company_name: "TopOfertas"
 language: "pt-BR"
 
+company_name: "TopOfertas"
+
 business:
-  tz_offset_hours: -3         # BRT
+  tz_offset_hours: -3          # BRT
   hours_start: "06:00"
-  hours_end:   "21:00"
-
-product:
-  name: "Progressiva Vegetal"
-  price_original: 197
-  price_target: 170
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"   # OFICIAL
-  site_url: "https://tpofertas.com"
-  coupon_code: "TOP-FIDELIDADE"
-  coupon_post_payment_only: true
-  refund_days_after_delivery: 7
-  delivery_sla:
-    capitals_hours: 24
-    others_hours: 72
-  how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir ~40 minutos.
-    Para maior durabilidade, finalize com escova/chapinha (opcional).
-  value_props:
-    - "alisa/alinhar e *reduz volume*"
-    - "controla *frizz* sem pesar"
-    - "brilho e maciez já na primeira aplicação"
-    - "aplicação simples em casa (40 min)"
-
-payments:
-  cod: true
-  card_installments:
-    enabled: true
-    max: 12
-    min_per_installment: 16.00      # 12× de ~R$16
+  hours_end: "21:00"
 
 marketing:
   sold_count: 40000
 
 sweepstakes:
   enabled: true
-  draw_frequency: "monthly"
-  page_url: "https://tpofertas.com/collections/cod-todos"
   prizes:
-    - "1º Escova Alisadora 3-em-1"
-    - "2º Progressiva Vegetal"
-    - "3º Ativador de Crescimento Pro"
-  disclosure: "Participação automática nas compras válidas do período. Regulamento no site."
+    - "1º: Escova/Chapinha Alisadora 3 em 1"
+    - "2º: 1 Progressiva Vegetal"
+    - "3º: Ativador Capilar"
+  messages:
+    teaser:
+      - "Ah! Todo mês rola um sorteio ✨ 1º Escova Alisadora 3 em 1, 2º uma Progressiva Vegetal e 3º um Ativador Capilar. Você já está participando ao comprar 😉"
 
-media:
-  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
+product:
+  name: "Progressiva Vegetal"
+  price_original: 197
+  price_target: 170
+  volume_ml: 500
+  applications_range: "até 10 aplicações"
+  duration_avg: "em média 3 meses"
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"  # fallback
+  site_url: "https://tpofertas.com/collections/cod-todos"
+  coupon_code: ""
+  coupon_post_payment_only: true
+  delivery_sla:
+    capitals_hours: 24
+    others_hours: 72
+  how_to_use: >
+    Lave os cabelos, aplique o produto e deixe agir por ~40 minutos. Para maior durabilidade, finalize com prancha/escova (opcional).
 
 flags:
   has_cod: true
-  send_opening_photo: true
+  send_opening_photo: false            # evitar foto com CTA precoce
   guardrails_strict: true
+  use_telemetry: true
   allow_audio_in: true
-  allow_audio_out: true
+  allow_audio_out: false
   small_talk_soften: true
   useModelsByStage: true
   fallbackToGlobal: true
+  checkout_mode: "concierge"           # "link" | "concierge" | "hybrid"
 
-models_by_stage:
-  recepcao:     "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5"
-  objecoes:     "gpt-5"
-  fechamento:   "gpt-5"
-  posvenda:     "gpt-5-nano"
+payments:
+  installments:
+    enabled: true
+    max_installments: 12
+    hint_text: "até 12x"
 
-# ===== Mensagens (sem preço/CTA na abertura!) =====
-messages:
-  style_note: >
-    Tom de *amiga que usa e recomenda*. Respostas curtas (1–2 frases).
-    Só revelar preço quando pedirem e só enviar link quando a pessoa pedir
-    ou concordar. Use o nome da pessoa quando souber.
-
-  opening:
-    - "Oi! Eu sou a Cláudia 💛 Seu cabelo é liso, ondulado, cacheado ou crespo? Posso te chamar por qual nome?"
-
-  qualify_followups:
-    - "O que mais te incomoda hoje: *frizz*, *volume* ou quer deixar *bem liso*?"
-    - "Você já fez progressiva antes ou seria a primeira vez?"
-
-  cod_short: "Pagamento na entrega (COD) — você só paga quando receber."
-  guarantee_short: "Garantia de 7 dias após a entrega."
-  sweepstakes_teaser: "Promo do mês: comprando você concorre a *3 prêmios* 🎁 (detalhes no site)."
-  checkout_explain: >
-    O link serve para confirmar o endereço. Depois de preencher, o entregador
-    chama no WhatsApp para combinar a entrega.
-
-  closing:
-    - "Perfeito! Vou te enviar o link seguro para confirmar o endereço. {{messages.checkout_explain}}"
-
-  closing_link_after:
-    - |
-      Link de checkout: {{product.checkout_link}}
-      Se não abrir, copie e cole no navegador.
-      Finalizando, me chama aqui que eu confirmo sua participação no *sorteio do mês* 🎁
-
-  postsale_pre_coupon:
-    - "Pedido confirmado 🎉 Vou te atualizando por aqui sobre a entrega."
+media:
+  opening_photo_url: ""                # opcional
 
 guardrails:
   allow_links_only_from_list: true
   allowed_links:
-    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"   # precisa ser idêntico
+    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+    - "https://entrega.logzz.com.br"
     - "https://tpofertas.com/collections/cod-todos"
-  freeze_fields:
-    - "product.price_target"
-    - "product.checkout_link"
-    - "marketing.sold_count"
+
+messages:
+  opening:
+    - "Oi, amor! 💖 Eu sou a Cláudia. Me conta rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
+  postsale_pre_coupon:
+    - "Compra confirmada! ✨ Se precisar de ajuda com a aplicação, tô aqui. E você já está concorrendo aos prêmios do mês 🎁"
+  postsale_after_payment_with_coupon:
+    - "Obrigada pela confiança! Anota seu cupom para próxima compra: {{coupon_code}} 🥰"
+
+# Modelos por estágio — pode manter 5.x (o core traduz p/ 4o/4o-mini se necessário)
+models_by_stage:
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
+
+global_models:
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
