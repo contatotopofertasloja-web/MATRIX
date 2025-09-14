@@ -1,36 +1,25 @@
 ﻿// src/adapters/whatsapp/index.js
-// Seleciona o adapter via ENV e expõe named exports usados pelo core.
+// Seleciona o adapter de WhatsApp via ENV e expõe interface unificada.
 
 const NAME = String(process.env.WPP_ADAPTER || 'baileys').toLowerCase();
 
-async function loadImpl() {
-  if (NAME === 'baileys') {
-    const mod = await import('./baileys/index.js');
+let impl;
 
-    const adapter = mod.adapter;
-    const isReady = mod.isReady;
-    const getQrDataURL = mod.getQrDataURL;
-
-    if (typeof adapter !== 'object' || typeof adapter.onMessage !== 'function') {
-      throw new Error('[wpp/index] Adapter inválido: precisa expor .onMessage/.sendMessage/.sendImage');
-    }
-    if (typeof isReady !== 'function')      throw new Error('[wpp/index] isReady ausente');
-    if (typeof getQrDataURL !== 'function') throw new Error('[wpp/index] getQrDataURL ausente');
-
-    const init = typeof mod.init === 'function' ? mod.init : async () => {};
-    const stop = typeof mod.stop === 'function' ? mod.stop : async () => {};
-
-    return { adapter, isReady, getQrDataURL, init, stop };
-  }
-
-  if (NAME === 'meta' || NAME === 'cloudapi') {
-    throw new Error('[wpp/index] Adapter "meta/cloudapi" ainda não implementado. Use WPP_ADAPTER=baileys.');
-  }
-
-  throw new Error(`[wpp/index] WPP_ADAPTER desconhecido: "${NAME}"`);
+if (NAME === 'baileys') {
+  const mod = await import('./baileys/index.js');
+  impl = {
+    adapter: mod.adapter,
+    isReady: mod.isReady,
+    getQrDataURL: mod.getQrDataURL,
+    init: mod.init,
+    stop: mod.stop,
+  };
+} else if (NAME === 'meta' || NAME === 'cloudapi') {
+  throw new Error('Adapter "meta/cloudapi" ainda não implementado.');
+} else {
+  throw new Error(`WPP_ADAPTER desconhecido: ${NAME}`);
 }
 
-const impl = await loadImpl();
 export const adapter = impl.adapter;
 export const isReady = impl.isReady;
 export const getQrDataURL = impl.getQrDataURL;

@@ -3,80 +3,39 @@ bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
-company_name: "TopOfertas"
-
-business:
-  tz_offset_hours: -3          # BRT
-  hours_start: "06:00"
-  hours_end: "21:00"
-
-marketing:
-  sold_count: 40000
-
-sweepstakes:
-  enabled: true
-  prizes:
-    - "1º: Escova/Chapinha Alisadora 3 em 1"
-    - "2º: 1 Progressiva Vegetal"
-    - "3º: Ativador Capilar"
-  messages:
-    teaser:
-      - "Ah! Todo mês rola um sorteio ✨ 1º Escova Alisadora 3 em 1, 2º uma Progressiva Vegetal e 3º um Ativador Capilar. Você já está participando ao comprar 😉"
-
 product:
-  name: "Progressiva Vegetal"
+  name: "Progressiva X"
   price_original: 197
   price_target: 170
-  volume_ml: 500
-  applications_range: "até 10 aplicações"
-  duration_avg: "em média 3 meses"
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"  # fallback
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
-  coupon_code: ""
+  coupon_code: "TOP-AGO2025-PROGRVG-150"
   coupon_post_payment_only: true
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
   how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir por ~40 minutos. Para maior durabilidade, finalize com prancha/escova (opcional).
+    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
+    Opcional: finalize com chapinha para maior durabilidade.
+
+media:
+  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 flags:
   has_cod: true
-  send_opening_photo: false            # evitar foto com CTA precoce
+  send_opening_photo: true
   guardrails_strict: true
   use_telemetry: true
+  use_thompson: true
   allow_audio_in: true
   allow_audio_out: false
   small_talk_soften: true
   useModelsByStage: true
   fallbackToGlobal: true
-  checkout_mode: "concierge"           # "link" | "concierge" | "hybrid"
 
-payments:
-  installments:
-    enabled: true
-    max_installments: 12
-    hint_text: "até 12x"
+marketing:
+  sold_count: 40000
 
-media:
-  opening_photo_url: ""                # opcional
-
-guardrails:
-  allow_links_only_from_list: true
-  allowed_links:
-    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
-    - "https://entrega.logzz.com.br"
-    - "https://tpofertas.com/collections/cod-todos"
-
-messages:
-  opening:
-    - "Oi, amor! 💖 Eu sou a Cláudia. Me conta rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
-  postsale_pre_coupon:
-    - "Compra confirmada! ✨ Se precisar de ajuda com a aplicação, tô aqui. E você já está concorrendo aos prêmios do mês 🎁"
-  postsale_after_payment_with_coupon:
-    - "Obrigada pela confiança! Anota seu cupom para próxima compra: {{coupon_code}} 🥰"
-
-# Modelos por estágio — pode manter 5.x (o core traduz p/ 4o/4o-mini se necessário)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -92,3 +51,28 @@ global_models:
   objecoes:     "gpt-5"
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
+
+typing:
+  ms_per_char: 35
+  min_ms: 800
+  max_ms: 5000
+
+messages:
+  opening:
+    - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo: liso, ondulado, cacheado ou crespo?"
+  qualify_followups:
+    - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
+    - "Prefere resultado bem liso ou só alinhado com brilho?"
+  offer_templates:
+    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
+    - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
+  objection_handles:
+    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer que eu te mostre como aplicar rapidinho?"
+    - "Fica tranquila: temos registro, garantia e acompanhamento. Quer que eu te envie o passo a passo simples?"
+  closing:
+    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD)."
+  postsale_pre_coupon:
+    - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega."
+    - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
+  postsale_after_payment_with_coupon:
+    - "Aqui vai um cupom de desconto para a próxima compra: {{coupon_code}} 🎁"
