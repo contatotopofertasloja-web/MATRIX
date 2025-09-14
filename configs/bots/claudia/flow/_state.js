@@ -4,7 +4,7 @@ export function initialState() {
   return {
     // perfil
     nome: null,
-    apelido: null,          // ex: "minha linda", "amor" (ligth, com moderação)
+    apelido: null,          // ex: "minha linda", "amor" (light, com moderação)
     tipo_cabelo: null,      // liso | ondulado | cacheado | crespo
     objetivo: null,         // alinhar | reduzir volume | frizz | brilho
 
