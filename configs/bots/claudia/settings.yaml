@@ -2,8 +2,17 @@
 persona_name: "Cláudia"
 language: "pt-BR"
 
+# >>> EMPRESA & HORÁRIOS <<<
+company_name: "TopOfertas"
+business:
+  hours_start: "06:00"
+  hours_end: "21:00"
+  schedule_policy: "Vendedoras em escala flexível dentro desse intervalo."
+
+# >>> PRODUTO <<<
 product:
   name: "Progressiva X"
+  volume_ml: 500
   price_original: 197
   price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
@@ -14,11 +23,23 @@ product:
     capitals_hours: 24
     others_hours: 72
   how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
+    Lave os cabelos, aplique o produto e deixe agir por ~40 minutos.
     Opcional para maior durabilidade: finalize com chapinha.
+  applications_range: "até 10 aplicações"
+  duration_avg: "em média 3 meses"
   upsell_flatiron:
     enabled: true
     pitch: "Se quiser, te indico uma chapinha com ótimo custo-benefício para potencializar o efeito."
+
+# >>> MARKETING / SORTEIO <<<
+marketing:
+  sold_count: 40000
+
+sweepstakes:
+  enabled: false
+  messages:
+    teaser:
+      - "Atualmente não temos sorteios ativos, mas pintando novidade eu te aviso 😉"
 
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
@@ -34,10 +55,10 @@ flags:
   small_talk_soften: true
   useModelsByStage: true
   fallbackToGlobal: true
+  # mantenha desligado em produção; ligue só para depurar prompts da bot
+  force_core_prompts: false
 
-marketing:
-  sold_count: 40000
-
+# >>> MODELOS POR ETAPA <<<
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -45,9 +66,6 @@ models_by_stage:
   objecoes:     "gpt-5"
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
-  entrega:      "gpt-5-nano"
-  pagamento:    "gpt-5-nano"
-  features:     "gpt-5-nano"
 
 global_models:
   recepcao:     "gpt-5-nano"
@@ -69,17 +87,11 @@ messages:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
   offer_templates:
-    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
-    - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
+    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Quer que eu adiante seu pedido no COD?"
   objection_handles:
-    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas em todo o Brasil ✅ No nosso site (link no perfil) você confere depoimentos reais..."
+    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas em todo o Brasil ✅"
   closing:
-    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD)."
-  postsale_pre_coupon:
-    - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega."
-  postsale_after_payment_with_coupon:
-    - "Como agradecimento, aqui vai um cupom: {{coupon_code}} 🎁"
-  postsale_followup_days: 7
+    - "Perfeito! Vou preparar seu pedido no COD e te mando o resumo pra confirmar."
 
 guardrails:
   price_min: 149

@@ -12,8 +12,8 @@ export function initialState() {
     asked_name_once: false,
     asked_hair_once: false,
     consent_checkout: false,
-    price_allowed: false,   // <<< gate: só libera preço se a cliente pedir (ou manualmente)
-    turns: 0,               // contador simples de trocas
+    price_allowed: false,
+    turns: 0,
 
     // concierge (endereço/contato)
     telefone: null,
@@ -27,12 +27,11 @@ export function initialState() {
     referencia: null,
 
     // etapas
-    stage: "recepcao", // recepcao -> qualificacao -> oferta -> fechamento -> posvenda
+    stage: "recepcao",
     last_intent: null,
   };
 }
 
-// lista curta, sem exagero
 const CARINHOS = ["minha linda", "amor", "gata", "minha flor"];
 export function callUser(state = {}) {
   const nome = (state?.nome || "").trim();
@@ -56,10 +55,9 @@ export function getFixed(settings = {}) {
   const hora = `${s?.business?.hours_start || "06:00"}–${s?.business?.hours_end || "21:00"}`;
   const sorteioOn = !!s?.sweepstakes?.enabled;
   const sorteioTeaser = (s?.sweepstakes?.messages?.teaser || [])[0] ||
-    "Todo mês tem sorteio ✨ (escova 3-em-1, progressiva e ativador capilar).";
+    "Atualmente, não temos sorteios ativos.";
 
   const product = s.product || {};
-  // Preço: settings.yaml com override opcional por ENV
   const priceOriginal = numEnv("PRICE_ORIGINAL", product.price_original ?? 197);
   const priceTarget   = numEnv("PRICE_TARGET",   product.price_target   ?? 170);
 

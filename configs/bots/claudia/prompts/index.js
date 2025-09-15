@@ -4,7 +4,7 @@
 export function buildPrompt({ stage = 'greet', message = '', settings = {} }) {
   const s = settings || {};
   const P = s.product || {};
-  const brand = P.brand || P.name || 'Progressiva Vegetal';
+  const brand = P.brand || P.name || 'Progressiva X';
   const company = s.company_name || 'TopOfertas';
   const garantiaDias = P.refund_days_after_delivery ?? 7;
 
