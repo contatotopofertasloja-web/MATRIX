@@ -23,7 +23,8 @@
 //   QUEUE_OUTBOX_BACKOFF_CAP_MS=15000
 
 import { qpushLeft, qpopRightBlocking, qlen, getJson, setexJson } from "../redis.js";
-import { allowSend } from "../rate-limit.js";
+// ⚠️ Import corrigido: o módulo real está em ./rate-limit.js (dentro de core/queue/)
+import { allowSend } from "./rate-limit.js";
 
 const envNum  = (k, d) => (Number.isFinite(+process.env[k]) ? +process.env[k] : d);
 const envBool = (k, d=false) => ["1","true","yes","y","on"].includes(String(process.env[k]||"").toLowerCase());

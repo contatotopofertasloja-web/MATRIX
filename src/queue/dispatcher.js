@@ -55,7 +55,7 @@ export async function size() {
 // --- Healthcheck Express ---
 export function mountHealthCheck(app) {
   if (!app || typeof app.get !== "function") return;
-  app.get("/health/queue", async (req, res) => {
+  app.get("/health/queue", async (_req, res) => {
     try {
       const qsize = await size();
       res.json({ ok: true, topic: OUTBOX_TOPIC, size: qsize });
