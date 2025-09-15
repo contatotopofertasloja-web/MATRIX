@@ -5,26 +5,8 @@
 //   startOutboxWorkers({ topic, concurrency?, ratePerSec?, sendFn, minGapMs?, minGapGlobalMs?, maxRetries?, baseRetryDelayMs?, dlqEnabled?, onAfterSend?, onError? })
 //   stopOutboxWorkers(topic?)   // encerra workers daquele tópico (ou todos)
 //   queueSize(topic)
-//
-// Recursos:
-// - Retries com backoff exponencial + jitter (com CAP)
-// - Dead-letter queue (DLQ) opcional: <topic>:dlq
-// - Min gap global e por destinatário (além do ratePerSec via allowSend)
-// - Logs de correlação por job.id
-// - BRPOP com timeout (5s) → permite shutdown limpo
-//
-// ENV (opcionais):
-//   QUEUE_OUTBOX_RETRIES=2
-//   QUEUE_OUTBOX_RETRY_DELAY_MS=1000
-//   QUEUE_OUTBOX_MIN_GAP_GLOBAL_MS=300
-//   QUEUE_OUTBOX_MIN_GAP_MS=1500
-//   QUEUE_OUTBOX_CONCURRENCY=1
-//   QUEUE_OUTBOX_DLQ_ENABLED=true|false
-//   QUEUE_OUTBOX_BACKOFF_CAP_MS=15000
 
-// 🔧 FIX: remover getJson/setexJson (não existem no teu redis.js)
-import { qpushLeft, qpopRightBlocking, qlen } from "../redis.js";
-// 🔧 FIX: caminho correto para o rate-limit que existe em core/queue/
+import { qpushLeft, qpopRightBlocking, qlen, getJson, setexJson } from "../redis.js";
 import { allowSend } from "./rate-limit.js";
 
 const envNum  = (k, d) => (Number.isFinite(+process.env[k]) ? +process.env[k] : d);
@@ -80,7 +62,7 @@ export async function enqueueOutbox({ topic, to, content, meta = {} }) {
 export async function startOutboxWorkers({
   topic,
   concurrency      = DEFAULTS.CONCURRENCY,
-  ratePerSec       = 0.5, // ~1 msg a cada 2s por processo (ajuste conforme sua infra)
+  ratePerSec       = 0.5, // ~1 msg a cada 2s por processo
   sendFn,
   minGapMs         = DEFAULTS.MIN_GAP_MS,
   minGapGlobalMs   = DEFAULTS.MIN_GAP_GLOBAL_MS,
@@ -88,8 +70,8 @@ export async function startOutboxWorkers({
   baseRetryDelayMs = DEFAULTS.RETRY_DELAY_MS,
   dlqEnabled       = DEFAULTS.DLQ_ENABLED,
   backoffCapMs     = DEFAULTS.BACKOFF_CAP_MS,
-  onAfterSend,                 // opcional: (job) => void
-  onError,                     // opcional: (err, job) => void
+  onAfterSend,
+  onError,
 } = {}) {
   if (!topic) throw new Error("startOutboxWorkers: topic obrigatório");
   if (typeof sendFn !== "function") throw new Error("startOutboxWorkers: sendFn obrigatório");
@@ -122,7 +104,7 @@ async function loop(opts) {
         return;
       }
 
-      // 0) busca job (bloqueante até 5s para permitir shutdowns limpos)
+      // 0) busca job (bloqueante até 5s para permitir shutdown limpo)
       const job = await qpopRightBlocking(topic, 5);
       if (!job) continue;
 
@@ -136,7 +118,7 @@ async function loop(opts) {
       const now = Date.now();
 
       // 2) min-gap global
-      const lastGlobal = await readJson(GAP_GLOBAL_KEY);
+      const lastGlobal = await getJson(GAP_GLOBAL_KEY);
       if (lastGlobal?.at && now - lastGlobal.at < minGapGlobalMs) {
         const wait = Math.max(0, minGapGlobalMs - (now - lastGlobal.at));
         await requeueWithBackoff(topic, job, wait);
@@ -145,7 +127,7 @@ async function loop(opts) {
 
       // 3) min-gap por destinatário
       const gapKeyPerTo = `outbox:${topic}:gap:${normalizeTo(job.to)}`;
-      const lastPerTo = await readJson(gapKeyPerTo);
+      const lastPerTo = await getJson(gapKeyPerTo);
       if (lastPerTo?.at && now - lastPerTo.at < minGapMs) {
         const wait = Math.max(0, minGapMs - (now - lastPerTo.at));
         await requeueWithBackoff(topic, job, wait);
@@ -158,8 +140,8 @@ async function loop(opts) {
 
         // sucesso → grava gaps (TTL ~ gap)
         const nowAt = Date.now();
-        await writeJson(GAP_GLOBAL_KEY, { at: nowAt }, Math.ceil(minGapGlobalMs/1000)+2);
-        await writeJson(gapKeyPerTo, { at: nowAt }, Math.ceil(minGapMs/1000)+2);
+        await setexJson(GAP_GLOBAL_KEY, { at: nowAt }, Math.ceil(minGapGlobalMs/1000)+2);
+        await setexJson(gapKeyPerTo,  { at: nowAt }, Math.ceil(minGapMs/1000)+2);
 
         if (typeof onAfterSend === "function") {
           try { await onAfterSend(job); } catch (hookErr) {
@@ -199,17 +181,6 @@ async function loop(opts) {
       await sleep(500);
     }
   }
-}
-
-// ---------------- Helpers Redis JSON ----------------
-async function readJson(key) {
-  // Se teu redis.js expuser helpers getJson/setexJson, eles serão usados;
-  // caso contrário, estas funções viram NO-OP (seguimos só com min-gaps via RAM/loop).
-  try { if (typeof getJson === "function") return await getJson(key); } catch {}
-  return null;
-}
-async function writeJson(key, obj, ttlSec = 5) {
-  try { if (typeof setexJson === "function") return await setexJson(key, obj, ttlSec); } catch {}
 }
 
 // ---------------- Helpers requeue/DLQ ----------------
