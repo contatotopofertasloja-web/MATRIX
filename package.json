@@ -1,41 +1,37 @@
 {
-  "name": "matrix-wpp",
-  "version": "2.0.1",
-  "description": "Projeto Matrix IA 2.0 — Cláudia (assistente de vendas no WhatsApp, Baileys + GPT)",
-  "main": "src/index.js",
+  "name": "matrix-ia-2.0",
+  "version": "1.0.0",
+  "description": "Plataforma Matrix IA 2.0 — multi-bots WhatsApp (Cláudia, etc.)",
   "type": "module",
+  "main": "src/index.js",
   "scripts": {
     "dev": "cross-env NODE_ENV=development nodemon src/index.js",
     "start": "node src/index.js",
-    "lint": "eslint . --ext .js",
     "matrix:init": "node tools/scaffold-bot.mjs init",
     "matrix:add": "node tools/scaffold-bot.mjs add",
-    "sanity:settings": "node scripts/sanity-check.mjs",
-    "sanity:flows": "node scripts/check-flows-static.mjs",
-    "sanity:all": "npm run sanity:settings && npm run sanity:flows"
+    "lint": "eslint . --ext .js",
+    "format": "prettier --write ."
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.7",
+    "@whiskeysockets/baileys": "^6.7.7",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0",
-    "ioredis": "^5.3.2",
+    "express-rate-limit": "^7.3.0",
     "morgan": "^1.10.0",
+    "nodemailer": "^6.9.8",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^6.9.14",
-    "openai": "^4.0.0",
-    "pino": "^9.0.0",
-    "qrcode": "^1.5.4",
-    "redis": "^4.6.13",
-    "yaml": "^2.5.0"
+    "openai": "^4.30.0",
+    "pino": "^8.17.0",
+    "qrcode": "^1.5.3",
+    "yaml": "^2.5.0",
+    "dotenv": "^16.4.5",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
+    "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
-    "eslint": "^8.57.0",
-    "nodemon": "^3.1.0"
-  },
-  "engines": { "node": ">=18.17.0" },
-  "license": "MIT",
-  "author": "Matrix Project Team"
+    "nodemon": "^3.1.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.5"
+  }
 }
