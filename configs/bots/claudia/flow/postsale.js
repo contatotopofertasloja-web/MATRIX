@@ -1,4 +1,3 @@
-// configs/bots/claudia/flow/postsale.js
 // Confirma pedido, reforça acompanhamento, prazo de entrega e (se houver) cupom pós-pagamento.
 
 import { callUser } from "./_state.js";

@@ -39,12 +39,11 @@ function enforceLinks(text, s=settings) {
   });
 }
 
-// NOVO: além de números, limita menções em estágios bloqueados
+// Além de números, limita menções de preço em estágios bloqueados
 function enforcePrice(text, { allow=false, stage="" } = {}) {
   let out = String(text||"");
   if (!allow || STAGES_NO_PRICE.has(String(stage||"").toLowerCase())) {
     out = out.replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
-    // neutraliza frases do tipo "o preço é ...", "custa ..."
     out = out
       .replace(/\b(preço|preco)\s*(é|esta|fica)\s*\[preço disponível sob pedido\]/gi, "posso te informar o valor quando quiser")
       .replace(/\bcusta\s*\[preço disponível sob pedido\]/gi, "tem um valor que posso te informar quando quiser");
@@ -80,7 +79,7 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
 
   const safeToolCalls = Array.isArray(plan?.tool_calls) ? plan.tool_calls.filter(tc => {
     const name = String(tc?.name || "").trim();
-    if (/getPrice/i.test(name))      return canPrice && !STAGES_NO_PRICE.has(stage);
+    if (/getPrice/i.test(name))        return canPrice && !STAGES_NO_PRICE.has(stage);
     if (/getCheckoutLink/i.test(name)) return canLink;
     return true;
   }) : [];
@@ -106,7 +105,7 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
     message: text,
     stage,
     plan,
-    tools: execResults,
+    tools: execResults, // agora é um objeto e o base.js trata corretamente
     settings: botSettings,
     slots,
     guards: {

@@ -1,4 +1,5 @@
 // Estado e helpers da Cláudia (somente nesta pasta do bot)
+
 export function initialState() {
   return {
     // perfil

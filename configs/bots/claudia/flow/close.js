@@ -1,5 +1,5 @@
-// configs/bots/claudia/flow/close.js
-// Fechamento COD: coleta endereço e gera resumo.
+// Fechamento COD: coleta endereço e gera resumo. Preenchimento "smart" para reduzir atrito.
+// Pergunta na ordem correta e só repete o que falta. Quando terminar, confirma COD e avança.
 
 import { callUser, summarizeAddress } from "./_state.js";
 
@@ -16,6 +16,7 @@ const ASK_ORDER = [
   { key: "referencia",   q: "Um ponto de referência ajuda na entrega 😉" },
 ];
 
+// Extrações rápidas (não perfeitas, mas reduzem digitação)
 const RX = {
   telefone: /(\+?55)?\s*\(?(?<ddd>\d{2})\)?\s*(?<p1>\d{4,5})[-.\s]?(?<p2>\d{4})/i,
   cep: /\b(?<cep>\d{5})[-.\s]?(?<suf>\d{3})\b/,
@@ -46,15 +47,24 @@ export default async function close(ctx) {
   const { text = "", state } = ctx;
   state.turns = (state.turns || 0) + 1;
 
-  // tenta preencher automaticamente
+  // Preenche automaticamente quando der
   smartFill(state, text);
 
+  // Pergunta apenas o próximo campo faltante
   const missing = nextMissing(state);
   if (missing) {
-    return { reply: missing.q, next: "fechamento" };
+    // Cooldown simples pra não repetir a mesma pergunta sem resposta
+    const now = Date.now();
+    const tag = `__asked_${missing.key}_at`;
+    if (!state[tag] || (now - state[tag]) > 60_000) {
+      state[tag] = now;
+      return { reply: missing.q, next: "fechamento" };
+    }
+    // fallback bem curto
+    return { reply: `Me passa isso rapidinho pra eu confirmar teu pedido 😉`, next: "fechamento" };
   }
 
-  // tudo preenchido → gera resumo
+  // Tudo preenchido → gera resumo e segue
   const resumo = summarizeAddress(state);
   return {
     reply: `Perfeito, ${callUser(state)}! Confere se está certo:\n${resumo}\n\nPosso já confirmar teu pedido COD?`,
