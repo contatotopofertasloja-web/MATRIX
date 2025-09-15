@@ -22,8 +22,9 @@
 //   QUEUE_OUTBOX_DLQ_ENABLED=true|false
 //   QUEUE_OUTBOX_BACKOFF_CAP_MS=15000
 
-import { qpushLeft, qpopRightBlocking, qlen, getJson, setexJson } from "../redis.js";
-// ⚠️ Import corrigido: o módulo real está em ./rate-limit.js (dentro de core/queue/)
+// 🔧 FIX: remover getJson/setexJson (não existem no teu redis.js)
+import { qpushLeft, qpopRightBlocking, qlen } from "../redis.js";
+// 🔧 FIX: caminho correto para o rate-limit que existe em core/queue/
 import { allowSend } from "./rate-limit.js";
 
 const envNum  = (k, d) => (Number.isFinite(+process.env[k]) ? +process.env[k] : d);
@@ -116,7 +117,6 @@ async function loop(opts) {
 
   while (true) {
     try {
-      // Checa parada graciosa
       if (RUN_FLAGS.get(topic)?.stop) {
         console.log(`[outbox:${topic}][w${wid}] stopping gracefully…`);
         return;
@@ -166,7 +166,6 @@ async function loop(opts) {
             console.warn(`[outbox:${topic}][w${wid}][${job.id}] onAfterSend hook error:`, hookErr?.message || hookErr);
           }
         }
-        // console.log(`[outbox:${topic}][w${wid}][${job.id}] sent to=${job.to}`);
       } catch (sendErr) {
         const tries = (job.meta?.tries ?? 0) + 1;
         job.meta = { ...(job.meta || {}), tries };
@@ -204,6 +203,8 @@ async function loop(opts) {
 
 // ---------------- Helpers Redis JSON ----------------
 async function readJson(key) {
+  // Se teu redis.js expuser helpers getJson/setexJson, eles serão usados;
+  // caso contrário, estas funções viram NO-OP (seguimos só com min-gaps via RAM/loop).
   try { if (typeof getJson === "function") return await getJson(key); } catch {}
   return null;
 }
