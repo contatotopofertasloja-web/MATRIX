@@ -13,7 +13,7 @@ export function initialState() {
     asked_price_once: false,
     asked_name_once: false,
     asked_hair_once: false,
-    consent_checkout: false,   // ← usado por listingConsent()
+    consent_checkout: false,   // ← usado por listingConsent/isAwaitingConsent
     price_allowed: false,
     turns: 0,
 
@@ -90,8 +90,16 @@ export function summarizeAddress(st) {
   return `${linha1}${comp}${linha2 ? " – " + linha2 : ""} ${st.cep ? " • CEP " + st.cep : ""}`.trim();
 }
 
-/** Alguns flows importam isso para decidir se já podemos listar/mostrar o checkout/link. */
+/** Alguns flows usam para decidir se já podemos listar/mostrar checkout/link. */
 export function listingConsent(state = {}) {
-  // sinaliza se o usuário já consentiu em avançar para checkout/link
   return !!state?.consent_checkout;
 }
+
+/** Compat com flows antigos: se ainda estamos aguardando consentimento para checkout/link. */
+export function isAwaitingConsent(state = {}) {
+  return !listingConsent(state);
+}
+
+// Aliases de compat (inclusive com possível typo visto no log)
+export const isAwatingConsent = isAwaitingConsent;   // alias com um 'i' faltando
+export const isAwaitingCheckout = isAwaitingConsent; // alias semântico
