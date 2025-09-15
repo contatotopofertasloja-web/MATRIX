@@ -7,6 +7,7 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import { adapter, isReady as wppReady, getQrDataURL } from './adapters/whatsapp/index.js';
 import { createOutbox } from './core/queue.js';
+import { stopOutboxWorkers } from './core/queue/dispatcher.js'; // ⬅️ NEW: shutdown limpo dos workers
 
 import { BOT_ID, settings } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
@@ -528,12 +529,28 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`);
 });
 
-function gracefulClose(signal) {
+// ===== Shutdown limpo (SIGINT/SIGTERM) =====
+async function gracefulClose(signal) {
   console.log(`[shutdown] signal=${signal}`);
-  server?.close?.(() => console.log('[http] closed'));
+  try {
+    // 1) Para consumo de novos jobs no outbox (todos os tópicos)
+    await stopOutboxWorkers(); // ⬅️ NEW: bloqueia loops BRPOP e permite concluir jobs atuais
+  } catch (e) {
+    console.warn('[shutdown] stopOutboxWorkers error:', e?.message || e);
+  }
+
+  try {
+    // 2) Fecha HTTP
+    await new Promise((resolve) => server?.close?.(() => resolve()));
+    console.log('[http] closed');
+  } catch {}
+
   try { adapter?.close?.(); } catch {}
   try { outbox?.stop?.(); } catch {}
-  setTimeout(() => process.exit(0), 1500);
+
+  // 3) Timeout de segurança
+  setTimeout(() => process.exit(0), 1500).unref();
 }
-process.on('SIGINT', () => gracefulClose('SIGINT'));
-process.on('SIGTERM', () => gracefulClose('SIGTERM'));
+process.once('SIGINT',  () => { gracefulClose('SIGINT');  });
+process.once('SIGTERM', () => { gracefulClose('SIGTERM'); });
+

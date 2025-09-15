@@ -1,21 +1,15 @@
 // src/core/orchestrator.js
-// Orquestrador Matrix IA 2.0 — com gate duro de PREÇO e LINK
-// - Só fala preço se a cliente pedir (ou cooldown).
-// - Só manda link se a cliente pedir (ou cooldown) e estiver na allowlist.
-// - Em greet/qualify/faq, preço é SEMPRE suprimido.
-
 import { callLLM } from "./llm.js";
 import { settings } from "../../configs/src/core/settings.js";
 import * as tools from "./tools.js";
 import * as memory from "./memory.js";
 import { buildSystem, buildPlannerUser, buildRefineUser } from "./prompts/base.js";
+import { sanitizeOutbound } from "../utils/polish.js";
 
-// Utils
 const nowMs = () => Date.now();
-const COOLDOWN_MS = 90_000; // 1m30s
+const COOLDOWN_MS = 90_000;
 
-const STAGES_NO_PRICE = new Set(["greet","qualify","faq","recepcao","qualificacao"]); // alias
-
+const STAGES_NO_PRICE = new Set(["greet","qualify","faq","recepcao","qualificacao"]);
 const RX_PRICE_ANY = /\bR\$\s?\d{1,3}(?:\.\d{3})*(?:,\d{2})?\b/g;
 const RX_ASK_PRICE = /\b(preç|valor|quanto|cust)/i;
 const RX_ASK_LINK  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i;
@@ -45,64 +39,50 @@ function enforceLinks(text, s=settings) {
   });
 }
 
+// NOVO: além de números, limita menções em estágios bloqueados
 function enforcePrice(text, { allow=false, stage="" } = {}) {
-  // Em greet/qualify/faq, nunca mostra preço
-  if (STAGES_NO_PRICE.has(String(stage||"").toLowerCase())) {
-    return String(text||"").replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
+  let out = String(text||"");
+  if (!allow || STAGES_NO_PRICE.has(String(stage||"").toLowerCase())) {
+    out = out.replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
+    // neutraliza frases do tipo "o preço é ...", "custa ..."
+    out = out
+      .replace(/\b(preço|preco)\s*(é|esta|fica)\s*\[preço disponível sob pedido\]/gi, "posso te informar o valor quando quiser")
+      .replace(/\bcusta\s*\[preço disponível sob pedido\]/gi, "tem um valor que posso te informar quando quiser");
   }
-  // Fora desses estágios, só mostra se allowed=true
-  if (!allow) {
-    return String(text||"").replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
-  }
-  return text;
+  return out;
 }
 
 export async function orchestrate({ jid, text, stageHint, botSettings = settings }) {
   const mem = await memory.get(jid) || {};
   const sys = buildSystem({ settings: botSettings });
 
-  // ---------- Passo 1: Planejamento ----------
-  const user1 = buildPlannerUser({
-    message: text,
-    stageHint,
-    settings: botSettings,
-    memory: mem
-  });
+  const user1 = buildPlannerUser({ message: text, stageHint, settings: botSettings, memory: mem });
 
   let plan;
   try {
-    const { text: planStr } = await callLLM({
-      stage: "planner",
-      system: sys,
-      prompt: user1,
-      maxTokens: 512,
-    });
+    const { text: planStr } = await callLLM({ stage: "planner", system: sys, prompt: user1, maxTokens: 512 });
     plan = JSON.parse(planStr || "{}");
   } catch {
     plan = { next: "reply", stage: stageHint || "qualify", tool_calls: [], slots: {}, reply: null, confidence: 0.2 };
   }
 
-  // Merge de slots
   const slots = { ...(mem.slots || {}), ...(plan.slots || {}) };
   await memory.merge(jid, { slots });
 
-  // ---------- Gate de preço/link ----------
   const askedPrice = RX_ASK_PRICE.test(text || "");
-  const askedLink  = RX_ASK_LINK.test(text || "");
+  const askedLink  = RX_ASK_LINK .test(text || "");
 
   const canPrice = askedPrice || cooldownOk(mem.lastOfferAt);
   const canLink  = askedLink  || cooldownOk(mem.lastLinkAt);
 
-  // ---------- Passo 2: Execução de tools (apenas as permitidas) ----------
   const execResults = {};
   const stage = String(plan?.stage || stageHint || "qualify").toLowerCase();
 
-  // Só chama tool de preço quando permitido
   const safeToolCalls = Array.isArray(plan?.tool_calls) ? plan.tool_calls.filter(tc => {
     const name = String(tc?.name || "").trim();
-    if (/getPrice/i.test(name))  return canPrice && !STAGES_NO_PRICE.has(stage);
+    if (/getPrice/i.test(name))      return canPrice && !STAGES_NO_PRICE.has(stage);
     if (/getCheckoutLink/i.test(name)) return canLink;
-    return true; // outras tools liberadas
+    return true;
   }) : [];
 
   for (const call of safeToolCalls) {
@@ -110,25 +90,18 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
     const args = call?.args || {};
     try {
       if (typeof tools[name] === "function") {
-        execResults[name] = await tools[name]({
-          jid,
-          args,
-          settings: botSettings,
-          memory: { get: () => memory.get(jid) }
-        });
+        execResults[name] = await tools[name]({ jid, args, settings: botSettings, memory: { get: () => memory.get(jid) } });
       }
     } catch (e) {
       execResults[name] = { error: String(e?.message || e) };
     }
   }
 
-  // Congela campos sensíveis usados na resposta refinada
   const frozenPrice = clampPrice(
     botSettings?.product?.price_target ?? botSettings?.product?.price_original,
     botSettings
   );
 
-  // ---------- Passo 3: Refinamento ----------
   const user2 = buildRefineUser({
     message: text,
     stage,
@@ -146,31 +119,25 @@ export async function orchestrate({ jid, text, stageHint, botSettings = settings
 
   let finalText = "";
   try {
-    const { text: refined } = await callLLM({
-      stage,
-      system: sys,
-      prompt: user2,
-      maxTokens: 512,
-    });
+    const { text: refined } = await callLLM({ stage, system: sys, prompt: user2, maxTokens: 512 });
     finalText = refined;
   } catch {
-    finalText = "Posso te explicar como funciona, prazos e pagamento, ou prefere saber do preço?";
+    finalText = "Posso te explicar como funciona, prazos e pagamento, ou prefere saber do valor?";
   }
 
-  // ---------- Pós-processadores (última barreira) ----------
+  // Primeira barreira (allowlist de link + neutralização de números)
   finalText = enforceLinks(finalText, botSettings);
   finalText = enforcePrice(finalText, { allow: canPrice, stage });
 
-  // Anti-spam + memória
-  if (!canLink) {
-    finalText = String(finalText || "").replace(/\bhttps?:\/\/[^\s]+/gi, "(posso te mandar o link quando você quiser)");
-  }
-  if (/\bhttps?:\/\/[^\s]+/i.test(finalText)) {
-    await memory.merge(jid, { lastLinkAt: nowMs() });
-  }
-  if (RX_PRICE_ANY.test(finalText) || askedPrice) {
-    await memory.merge(jid, { lastOfferAt: nowMs() });
-  }
+  // Segunda barreira (sanitizador final, inclusive MENÇÕES sem número)
+  finalText = sanitizeOutbound(finalText, {
+    allowPrice: canPrice && !STAGES_NO_PRICE.has(stage),
+    allowLink: canLink,
+  });
+
+  // memória anti-spam
+  if (/\bhttps?:\/\/[^\s]+/i.test(finalText)) await memory.merge(jid, { lastLinkAt: nowMs() });
+  if (RX_PRICE_ANY.test(finalText) || askedPrice) await memory.merge(jid, { lastOfferAt: nowMs() });
 
   return String(finalText || "").trim();
 }
