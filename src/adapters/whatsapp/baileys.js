@@ -1,7 +1,3 @@
-// Adapter Baileys — compatível com o teu src/index.js atual.
-// Requisitos atendidos: onMessage(cb), sendMessage, sendImage, sendAudio/sendVoice,
-// getAudioBuffer/downloadMedia (para ASR), stop(), QR em dataURL.
-
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -9,7 +5,6 @@ import makeWASocket, {
   downloadContentFromMessage,
   jidNormalizedUser
 } from '@whiskeysockets/baileys';
-
 import Pino from 'pino';
 import { toDataURL } from 'qrcode';
 
@@ -18,10 +13,9 @@ let _onMsgCb = null;
 let _stopRequested = false;
 let _lastQrText = null;
 
-const SESSION = process.env.WPP_SESSION || 'default';
+const SESSION   = process.env.WPP_SESSION || 'default';
 const LOG_LEVEL = process.env.BAILEYS_LOG_LEVEL || 'error';
-
-const logger = Pino({ level: LOG_LEVEL });
+const logger    = Pino({ level: LOG_LEVEL });
 
 export async function init({ onReady, onQr, onDisconnect } = {}) {
   _stopRequested = false;
@@ -39,9 +33,7 @@ export async function init({ onReady, onQr, onDisconnect } = {}) {
 
   _sock.ev.on('creds.update', saveCreds);
 
-  _sock.ev.on('connection.update', async (u) => {
-    const { connection, lastDisconnect, qr } = u;
-
+  _sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       _lastQrText = qr;
       try {
@@ -65,9 +57,7 @@ export async function init({ onReady, onQr, onDisconnect } = {}) {
         reason !== DisconnectReason.badSession;
 
       if (typeof onDisconnect === 'function') onDisconnect(reason);
-      if (shouldReconnect) {
-        setTimeout(() => init({ onReady, onQr, onDisconnect }), 1000).unref();
-      }
+      if (shouldReconnect) setTimeout(() => init({ onReady, onQr, onDisconnect }), 1000).unref();
     }
   });
 
@@ -76,16 +66,15 @@ export async function init({ onReady, onQr, onDisconnect } = {}) {
     for (const m of messages || []) {
       const remoteJid = m?.key?.remoteJid;
       if (!remoteJid) continue;
-
-      let text = '';
-      let hasMedia = false;
-
       try {
         const msg = m?.message || {};
-        const txt = msg.conversation || msg?.extendedTextMessage?.text || '';
-        text = String(txt || '').trim();
+        const text = String(
+          msg.conversation ||
+          msg?.extendedTextMessage?.text ||
+          ''
+        ).trim();
 
-        hasMedia = Boolean(
+        const hasMedia = Boolean(
           msg?.audioMessage ||
           msg?.imageMessage ||
           msg?.documentMessage ||
@@ -128,13 +117,11 @@ export async function sendAudio(to, buffer, { mime = 'audio/ogg', ptt = true } =
   return { ok: true };
 }
 
-// Opcional — alguns callers preferem "voice" nomenclatura
 export async function sendVoice(to, buffer, { mime = 'audio/ogg' } = {}) {
   return sendAudio(to, buffer, { mime, ptt: true });
 }
 
 export async function getAudioBuffer(rawBaileysMsg) {
-  // Extrai só áudio
   const msg = rawBaileysMsg?.message;
   const audio = msg?.audioMessage;
   if (!audio) return null;
@@ -145,13 +132,11 @@ export async function getAudioBuffer(rawBaileysMsg) {
 }
 
 export async function downloadMedia(rawBaileysMsg, { audioOnly = false } = {}) {
-  // Fallback genérico (não usado quando getAudioBuffer cobre)
   const msg = rawBaileysMsg?.message;
   const kind = audioOnly ? 'audio' :
     (msg?.imageMessage ? 'image' :
     (msg?.videoMessage ? 'video' :
     (msg?.documentMessage ? 'document' : null)));
-
   if (!kind) return null;
 
   const mediaNode =

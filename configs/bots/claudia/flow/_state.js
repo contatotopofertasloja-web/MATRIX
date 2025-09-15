@@ -1,18 +1,19 @@
 // Estado e helpers da Cláudia (somente nesta pasta do bot)
+// Mantém core neutro, sem “cheiro” de bot no /src/core.
 
 export function initialState() {
   return {
     // perfil
     nome: null,
-    apelido: null,          // ex: "minha linda", "amor" (light, com moderação)
-    tipo_cabelo: null,      // liso | ondulado | cacheado | crespo
-    objetivo: null,         // alinhar | reduzir volume | frizz | brilho
+    apelido: null,
+    tipo_cabelo: null,
+    objetivo: null,
 
     // flags de conversa
     asked_price_once: false,
     asked_name_once: false,
     asked_hair_once: false,
-    consent_checkout: false,
+    consent_checkout: false,   // ← usado por listingConsent()
     price_allowed: false,
     turns: 0,
 
@@ -87,4 +88,10 @@ export function summarizeAddress(st) {
   const linha2 = a.join(" – ");
   const comp = st.complemento ? ` (${st.complemento})` : "";
   return `${linha1}${comp}${linha2 ? " – " + linha2 : ""} ${st.cep ? " • CEP " + st.cep : ""}`.trim();
+}
+
+/** Alguns flows importam isso para decidir se já podemos listar/mostrar o checkout/link. */
+export function listingConsent(state = {}) {
+  // sinaliza se o usuário já consentiu em avançar para checkout/link
+  return !!state?.consent_checkout;
 }
