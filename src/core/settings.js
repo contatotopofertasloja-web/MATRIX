@@ -1,7 +1,4 @@
 // src/core/settings.js
-// Loader unificado de settings com merge ENV → YAML → defaults,
-// normalização de estágios, flags e saneamento de produto (preço/link).
-
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,9 +14,9 @@ function env(name, def) {
 }
 
 export const BOT_ID = env('BOT_ID', 'claudia');
-const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
+const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml'); // sem "configs/configs"
 
-// ----- Normalização de estágios (aliases → chave canônica)
+// Aliases → chave canônica
 const STAGE_KEY_ALIASES = new Map([
   ['recepção','recepcao'], ['recepcao','recepcao'], ['greet','recepcao'], ['saudacao','recepcao'], ['saudação','recepcao'], ['start','recepcao'], ['hello','recepcao'],
   ['qualificação','qualificacao'], ['qualificacao','qualificacao'], ['qualify','qualificacao'],
@@ -37,14 +34,12 @@ function normalizeStageKey(k) {
 function normalizeModelsByStage(map) {
   const out = {};
   if (map && typeof map === 'object') {
-    for (const [k, v] of Object.entries(map)) {
-      out[normalizeStageKey(k)] = String(v || '').trim();
-    }
+    for (const [k, v] of Object.entries(map)) out[normalizeStageKey(k)] = String(v || '').trim();
   }
   return out;
 }
 
-// ----- Defaults globais de modelos (fallback)
+// Defaults globais
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -54,15 +49,12 @@ const GLOBAL_MODELS = {
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
-// ----- Flags padrão (podem ser sobrepostas pelo YAML da bot)
 const FLAGS = {
-  useModelsByStage:      env('USE_MODELS_BY_STAGE', 'true') === 'true',
-  fallbackToGlobal:      env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
-  // força o core/base em prompts (útil pra depurar bot-prompts sem removê-los)
-  force_core_prompts:    env('PROMPTS_FORCE_CORE', '') === '1',
+  useModelsByStage:   env('USE_MODELS_BY_STAGE', 'true') === 'true',
+  fallbackToGlobal:   env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
+  force_core_prompts: env('PROMPTS_FORCE_CORE', '') === '1',
 };
 
-// ----- Áudio/voz (mantém compat com base do projeto)
 const AUDIO = {
   asrProvider: env('ASR_PROVIDER', 'openai'),
   asrModel:    env('ASR_MODEL',    'whisper-1'),
@@ -70,7 +62,6 @@ const AUDIO = {
   ttsVoice:    env('TTS_VOICE',    'alloy'),
 };
 
-// ----- LLM defaults (aplicados se bot não definir no YAML)
 const LLM_DEFAULTS = {
   provider:    env('LLM_PROVIDER', 'openai'),
   temperature: Number(env('LLM_TEMPERATURE', '0.5')),
@@ -83,7 +74,6 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
-// ----- Carrega YAML da bot + saneia com ENV (preço/link/cupom)
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -104,31 +94,17 @@ try {
     console.warn(`[SETTINGS] Arquivo não encontrado: ${BOT_SETTINGS_PATH}`);
   }
 } catch (e) {
-  console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
+  console.warn('[SETTINGS] Falha ao ler settings:', e?.message || e);
 }
 
-// Patch saneador: ENV tem prioridade suave sobre YAML para campos críticos do produto
-function asNumber(x, def) {
-  if (x == null || x === '') return def;
-  const n = Number(String(x).replace(/[^\d.,-]/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? n : def;
-}
-const envProduct = {
-  price_original: asNumber(process.env.PRICE_ORIGINAL, fileSettings?.product?.price_original ?? 197),
-  price_target:   asNumber(process.env.PRICE_TARGET,   fileSettings?.product?.price_target   ?? 170),
-  checkout_link:  process.env.CHECKOUT_LINK?.trim() || fileSettings?.product?.checkout_link || '',
-  site_url:       process.env.SITE_URL?.trim()       || fileSettings?.product?.site_url     || '',
-  coupon_code:    process.env.COUPON_CODE?.trim()    || fileSettings?.product?.coupon_code  || '',
-};
-fileSettings.product = { ...(fileSettings.product || {}), ...envProduct };
-
-// ----- Export final (core-neutro)
 export const settings = {
-  botId: BOT_ID,
   ...fileSettings,
-  llm: LLM_DEFAULTS,
+  audio: { ...(fileSettings.audio || {}), ...AUDIO },
   flags: { ...FLAGS, ...(fileSettings.flags || {}) },
-  audio: AUDIO,
-  global_models: { ...(fileSettings.global_models || {}), ...GLOBAL_MODELS },
+  models_by_stage: fileSettings.models_by_stage || {},
+  global_models: fileSettings.global_models || GLOBAL_MODELS,
+  llm: { ...LLM_DEFAULTS, ...(fileSettings.llm || {}) },
+  guardrails: fileSettings.guardrails || { allowed_links: [] },
+  product: fileSettings.product || {},
+  sweepstakes: fileSettings.sweepstakes || {},
 };
-export default settings;

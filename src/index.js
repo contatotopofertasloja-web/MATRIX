@@ -5,9 +5,9 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
-import { adapter, isReady as wppReady, getQrDataURL } from './adapters/whatsapp/index.js';
+import { init as wppInit, adapter, isReady as wppReady, getQrDataURL } from './adapters/whatsapp/index.js';
 import { createOutbox } from './core/queue.js';
-import { stopOutboxWorkers } from './core/queue/dispatcher.js'; // ⬅️ NEW: shutdown limpo dos workers
+import { stopOutboxWorkers } from './core/queue/dispatcher.js';
 
 import { BOT_ID, settings } from './core/settings.js';
 import { loadFlows } from './core/flow-loader.js';
@@ -525,6 +525,9 @@ app.post('/inbound', async (req, res) => {
   }
 });
 
+// ===== Boot do WhatsApp e HTTP =====
+await wppInit({ onQr: () => {} });
+
 const server = app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`);
 });
@@ -533,14 +536,12 @@ const server = app.listen(PORT, HOST, () => {
 async function gracefulClose(signal) {
   console.log(`[shutdown] signal=${signal}`);
   try {
-    // 1) Para consumo de novos jobs no outbox (todos os tópicos)
-    await stopOutboxWorkers(); // ⬅️ NEW: bloqueia loops BRPOP e permite concluir jobs atuais
+    await stopOutboxWorkers();
   } catch (e) {
     console.warn('[shutdown] stopOutboxWorkers error:', e?.message || e);
   }
 
   try {
-    // 2) Fecha HTTP
     await new Promise((resolve) => server?.close?.(() => resolve()));
     console.log('[http] closed');
   } catch {}
@@ -548,9 +549,7 @@ async function gracefulClose(signal) {
   try { adapter?.close?.(); } catch {}
   try { outbox?.stop?.(); } catch {}
 
-  // 3) Timeout de segurança
   setTimeout(() => process.exit(0), 1500).unref();
 }
 process.once('SIGINT',  () => { gracefulClose('SIGINT');  });
 process.once('SIGTERM', () => { gracefulClose('SIGTERM'); });
-

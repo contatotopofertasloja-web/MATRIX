@@ -1,6 +1,6 @@
 {
   "name": "matrix-wpp",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Projeto Matrix IA 2.0 — Cláudia (assistente de vendas no WhatsApp, Baileys + GPT)",
   "main": "src/index.js",
   "type": "module",
@@ -10,7 +10,6 @@
     "lint": "eslint . --ext .js",
     "matrix:init": "node tools/scaffold-bot.mjs init",
     "matrix:add": "node tools/scaffold-bot.mjs add",
-
     "sanity:settings": "node scripts/sanity-check.mjs",
     "sanity:flows": "node scripts/check-flows-static.mjs",
     "sanity:all": "npm run sanity:settings && npm run sanity:flows"
@@ -28,6 +27,7 @@
     "openai": "^4.0.0",
     "pino": "^9.0.0",
     "qrcode": "^1.5.4",
+    "redis": "^4.6.13",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
@@ -35,9 +35,7 @@
     "eslint": "^8.57.0",
     "nodemon": "^3.1.0"
   },
-  "engines": {
-    "node": ">=18.17.0"
-  },
+  "engines": { "node": ">=18.17.0" },
   "license": "MIT",
   "author": "Matrix Project Team"
 }
