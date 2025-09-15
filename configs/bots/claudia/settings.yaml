@@ -2,25 +2,23 @@
 persona_name: "Cláudia"
 language: "pt-BR"
 
-company_name: "TopOfertas"
-
 product:
   name: "Progressiva X"
-  # Fallbacks. A FONTE de verdade será o ENV no core (PRICE_TARGET / PRICE_ORIGINAL / CHECKOUT_LINK).
   price_original: 197
   price_target: 170
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
   coupon_post_payment_only: true
-  refund_days_after_delivery: 7
-  volume_ml: 500
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
   how_to_use: >
     Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
-    Opcional: finalize com chapinha para maior durabilidade.
+    Opcional para maior durabilidade: finalize com chapinha.
+  upsell_flatiron:
+    enabled: true
+    pitch: "Se quiser, te indico uma chapinha com ótimo custo-benefício para potencializar o efeito."
 
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
@@ -37,22 +35,9 @@ flags:
   useModelsByStage: true
   fallbackToGlobal: true
 
-# Guardrails específicos p/ link/preço
-guardrails:
-  allow_links_only_from_list: true
-  allowed_links:
-    - "{{product.checkout_link}}"
-  freeze_fields:
-    - price_target
-    - checkout_link
-    - sold_count
-  price_min: 50
-  price_max: 999
-
 marketing:
   sold_count: 40000
 
-# Modelos por estágio (podem ser traduzidos para 4o no core se 5.x indisponível)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -60,6 +45,9 @@ models_by_stage:
   objecoes:     "gpt-5"
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
+  entrega:      "gpt-5-nano"
+  pagamento:    "gpt-5-nano"
+  features:     "gpt-5-nano"
 
 global_models:
   recepcao:     "gpt-5-nano"
@@ -75,20 +63,55 @@ typing:
   max_ms: 5000
 
 messages:
-  cod_short: "Pagamento na entrega (COD)."
   opening:
-    - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo: liso, ondulado, cacheado ou crespo?"
+    - "Oi! 💖 Eu sou a Cláudia. Quer me contar rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
   qualify_followups:
     - "Você já fez progressiva antes? Te incomoda mais o frizz ou o volume?"
     - "Prefere resultado bem liso ou só alinhado com brilho?"
-  # REMOVIDO: offer_templates com preço/link — preço/link são decididos via core/tools
+  offer_templates:
+    - "Com base no que você me falou, recomendo o kit por R${{price_target}} 🛒 Posso te passar o link do checkout agora?"
+    - "Fechando hoje, consigo manter por R${{price_target}}. Te mando o link seguro do checkout?"
   objection_handles:
-    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas no Brasil ✅ Quer que eu te mostre como aplicar rapidinho?"
-    - "Fica tranquila: temos garantia e acompanhamento. Quer que eu te envie o passo a passo simples?"
+    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas em todo o Brasil ✅ No nosso site (link no perfil) você confere depoimentos reais..."
   closing:
-    - "Perfeito! Posso preparar tudo para finalizar no COD e te guiar em cada passo."
+    - "Perfeito! Te envio o link do checkout agora. Pagamento na entrega (COD)."
   postsale_pre_coupon:
-    - "Pedido agendado! 🎉 Você receberá mensagens pelo WhatsApp para acompanhar a entrega."
-    - "Dúvidas no uso? Posso te mandar a rotina de aplicação e manutenção ✨"
+    - "Pagamento confirmado! 🎉 Você receberá mensagens pelo WhatsApp para agendar e acompanhar a entrega."
   postsale_after_payment_with_coupon:
-    - "Aqui vai um cupom de desconto para a próxima compra: {{coupon_code}} 🎁"
+    - "Como agradecimento, aqui vai um cupom: {{coupon_code}} 🎁"
+  postsale_followup_days: 7
+
+guardrails:
+  price_min: 149
+  price_max: 249
+  allow_links_only_from_list: true
+  allowed_links:
+    - "{{checkout_link}}"
+    - "{{site_url}}"
+  freeze_fields:
+    - "price_target"
+    - "checkout_link"
+    - "coupon_code"
+    - "sold_count"
+
+telemetry:
+  enabled: true
+  db: "postgres"
+  tables:
+    events: "telemetry_events"
+    sessions: "telemetry_sessions"
+
+thompson:
+  enabled: true
+  buckets:
+    - id: "offer_a"
+      weight: 1
+    - id: "offer_b"
+      weight: 1
+  metric: "conversion"
+
+audio:
+  asr_provider: "openai"
+  asr_model: "whisper-1"
+  tts_provider: "none"
+  tts_voice: "alloy"

@@ -1,4 +1,7 @@
 // src/core/settings.js
+// Loader unificado de settings com merge ENV → YAML → defaults,
+// normalização de estágios, flags e saneamento de produto (preço/link).
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,13 +19,14 @@ function env(name, def) {
 export const BOT_ID = env('BOT_ID', 'claudia');
 const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
+// ----- Normalização de estágios (aliases → chave canônica)
 const STAGE_KEY_ALIASES = new Map([
-  ['recepção', 'recepcao'], ['recepcao', 'recepcao'],
-  ['qualificação', 'qualificacao'], ['qualificacao', 'qualificacao'],
-  ['oferta', 'oferta'],
-  ['objeções', 'objecoes'], ['objecoes', 'objecoes'], ['obstrucoes', 'objecoes'],
-  ['fechamento', 'fechamento'],
-  ['pós-venda', 'posvenda'], ['posvenda', 'posvenda'], ['postsale', 'posvenda'],
+  ['recepção','recepcao'], ['recepcao','recepcao'], ['greet','recepcao'], ['saudacao','recepcao'], ['saudação','recepcao'], ['start','recepcao'], ['hello','recepcao'],
+  ['qualificação','qualificacao'], ['qualificacao','qualificacao'], ['qualify','qualificacao'],
+  ['oferta','oferta'], ['offer','oferta'], ['apresentacao','oferta'], ['apresentação','oferta'], ['pitch','oferta'],
+  ['objeções','objecoes'], ['objecoes','objecoes'], ['objection','objecoes'], ['negociacao','objecoes'], ['negociação','objecoes'], ['objection_handling','objecoes'],
+  ['fechamento','fechamento'], ['close','fechamento'], ['checkout','fechamento'], ['closing','fechamento'],
+  ['pós-venda','posvenda'], ['posvenda','posvenda'], ['postsale','posvenda'], ['pos_venda','posvenda'], ['pós_venda','posvenda'],
 ]);
 
 function normalizeStageKey(k) {
@@ -40,6 +44,7 @@ function normalizeModelsByStage(map) {
   return out;
 }
 
+// ----- Defaults globais de modelos (fallback)
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -49,11 +54,15 @@ const GLOBAL_MODELS = {
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
 
+// ----- Flags padrão (podem ser sobrepostas pelo YAML da bot)
 const FLAGS = {
-  useModelsByStage: env('USE_MODELS_BY_STAGE', 'true') === 'true',
-  fallbackToGlobal: env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
+  useModelsByStage:      env('USE_MODELS_BY_STAGE', 'true') === 'true',
+  fallbackToGlobal:      env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
+  // força o core/base em prompts (útil pra depurar bot-prompts sem removê-los)
+  force_core_prompts:    env('PROMPTS_FORCE_CORE', '') === '1',
 };
 
+// ----- Áudio/voz (mantém compat com base do projeto)
 const AUDIO = {
   asrProvider: env('ASR_PROVIDER', 'openai'),
   asrModel:    env('ASR_MODEL',    'whisper-1'),
@@ -61,6 +70,7 @@ const AUDIO = {
   ttsVoice:    env('TTS_VOICE',    'alloy'),
 };
 
+// ----- LLM defaults (aplicados se bot não definir no YAML)
 const LLM_DEFAULTS = {
   provider:    env('LLM_PROVIDER', 'openai'),
   temperature: Number(env('LLM_TEMPERATURE', '0.5')),
@@ -73,6 +83,7 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
+// ----- Carrega YAML da bot + saneia com ENV (preço/link/cupom)
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -86,6 +97,7 @@ try {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
     const parsed = YAML.parse(text) || {};
     if (parsed.models_by_stage) parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
+    if (parsed.global_models)   parsed.global_models   = normalizeModelsByStage(parsed.global_models);
     fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
@@ -95,7 +107,7 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
-// --- INÍCIO: Patch saneador (ENV → YAML → default) ---
+// Patch saneador: ENV tem prioridade suave sobre YAML para campos críticos do produto
 function asNumber(x, def) {
   if (x == null || x === '') return def;
   const n = Number(String(x).replace(/[^\d.,-]/g, '').replace(',', '.'));
@@ -109,14 +121,14 @@ const envProduct = {
   coupon_code:    process.env.COUPON_CODE?.trim()    || fileSettings?.product?.coupon_code  || '',
 };
 fileSettings.product = { ...(fileSettings.product || {}), ...envProduct };
-// --- FIM: Patch saneador ---
 
+// ----- Export final (core-neutro)
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,
   llm: LLM_DEFAULTS,
-  flags: { ...fileSettings.flags, ...FLAGS },
+  flags: { ...FLAGS, ...(fileSettings.flags || {}) },
   audio: AUDIO,
-  global_models: GLOBAL_MODELS,
+  global_models: { ...(fileSettings.global_models || {}), ...GLOBAL_MODELS },
 };
 export default settings;

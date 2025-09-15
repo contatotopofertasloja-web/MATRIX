@@ -1,14 +1,18 @@
 // src/core/llm.js
+// Seletor de modelo por estágio + tradução GPT-5→GPT-4o (compat de transição)
+// + retries com backoff e limites de tokens por porte do modelo.
+
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
+// ----- Aliases de estágio
 const STAGE_KEYS = {
-  recepcao: ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
+  recepcao:     ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
   qualificacao: ["qualificacao","qualificação","qualify"],
-  oferta: ["oferta","offer","apresentacao","apresentação","pitch"],
-  objecoes: ["objeções","objecoes","objection","negociacao","negociação","objection_handling"],
-  fechamento: ["fechamento","close","checkout","closing"],
-  posvenda: ["posvenda","pósvenda","postsale","pos_venda","pós_venda"],
+  oferta:       ["oferta","offer","apresentacao","apresentação","pitch"],
+  objecoes:     ["objeções","objecoes","objection","negociacao","negociação","objection_handling"],
+  fechamento:   ["fechamento","close","checkout","closing"],
+  posvenda:     ["posvenda","pósvenda","postsale","pos_venda","pós_venda"],
 };
 function resolveStageKey(stage) {
   const t = String(stage || "").toLowerCase().trim();
@@ -16,12 +20,13 @@ function resolveStageKey(stage) {
   return "recepcao";
 }
 
+// ----- Defaults/ENV
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
             : Number.isFinite(+process.env.LLM_TEMPERATURE) ? +process.env.LLM_TEMPERATURE
             : 0.5,
-  retries:     Number.isFinite(+process.env.LLM_RETRIES) ? +process.env.LLM_RETRIES : 2,
+  retries:     Number.isFinite(+process.env.LLM_RETRIES) ? +process.env.LLM_RETRIES : (Number.isFinite(+settings?.llm?.retries) ? +settings.llm.retries : 2),
   maxTokens: {
     nano: Number.isFinite(+settings?.llm?.maxTokens?.nano) ? +settings.llm.maxTokens.nano
         : Number.isFinite(+process.env.LLM_MAX_TOKENS_NANO) ? +process.env.LLM_MAX_TOKENS_NANO
@@ -34,6 +39,8 @@ const ENV_DEFAULTS = {
         : 2048,
   },
 };
+
+// Variáveis de modelo por estágio (ENV)
 const ENV_STAGE_VARS = {
   recepcao: "LLM_MODEL_RECEPCAO",
   qualificacao: "LLM_MODEL_QUALIFICACAO",
@@ -43,6 +50,7 @@ const ENV_STAGE_VARS = {
   posvenda: "LLM_MODEL_POSVENDA",
 };
 
+// ----- Tradução GPT-5→GPT-4o (modo transição)
 function translateModel(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return n;
@@ -52,25 +60,28 @@ function translateModel(name) {
   return name;
 }
 
+// ----- Escolha do modelo por estágio
 export function pickModelForStage(stageRaw) {
   const stage = resolveStageKey(stageRaw);
-  const fromYaml =
-    settings?.models_by_stage?.[stage] ??
-    (stage === "objecoes" ? settings?.models_by_stage?.["objeções"] : undefined);
+
+  // 1) YAML por estágio
+  const fromYaml = settings?.models_by_stage?.[stage];
   if (settings?.flags?.useModelsByStage && fromYaml) return fromYaml;
 
+  // 2) ENV por estágio
   const envKey = ENV_STAGE_VARS[stage];
   const fromEnv = envKey ? process.env[envKey] : undefined;
   if (settings?.flags?.fallbackToGlobal && fromEnv) return fromEnv;
 
-  const fromGlobalYaml =
-    settings?.global_models?.[stage] ??
-    (stage === "objecoes" ? settings?.global_models?.["objeções"] : undefined);
+  // 3) YAML global_models
+  const fromGlobalYaml = settings?.global_models?.[stage];
   if (settings?.flags?.fallbackToGlobal && fromGlobalYaml) return fromGlobalYaml;
 
-  return "GPT-5-nano";
+  // 4) default neutro
+  return "gpt-5-nano";
 }
 
+// ----- Limites de tokens por porte
 function defaultMaxTokensForModel(modelName = "") {
   const m = String(modelName).toLowerCase();
   if (m.includes("nano")) return ENV_DEFAULTS.maxTokens.nano;
@@ -78,12 +89,14 @@ function defaultMaxTokensForModel(modelName = "") {
   return ENV_DEFAULTS.maxTokens.full;
 }
 
+// ----- OpenAI client
 let openai = null;
 function getOpenAI() {
   if (!openai) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return openai;
 }
 
+// ----- Chamada com retries/backoff
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
   const rawModel    = model || pickModelForStage(stage);
   const chosenModel = translateModel(rawModel);
@@ -112,6 +125,7 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
       return { model: chosenModel, text };
     } catch (e) {
       lastErr = e;
+      // backoff exponencial com cap (1s, 2s, 4s)
       const backoff = Math.min(1000 * (2 ** attempt), 4000);
       await new Promise(r => setTimeout(r, backoff));
     }
