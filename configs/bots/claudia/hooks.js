@@ -1,12 +1,9 @@
-// configs/bots/claudia/hooks.js
-// Hooks específicos da Cláudia. Identidade e preferências ficam neste nível.
-// Os demais comportamentos caem nos defaults genéricos.
-
+// Hooks específicos da Cláudia — identidade e preferências ficam aqui.
+// O core deve permanecer neutro.
 import { buildPrompt } from './prompts/index.js';
 
 export const hooks = {
-  async safeBuildPrompt({ stage, message /*, settings */ }) {
-    // Usa o builder de prompt da Cláudia. Se falhar, o registry cai no default.
+  async safeBuildPrompt({ stage, message }) {
     try {
       const p = buildPrompt({ stage, message });
       if (p && (p.system || p.user)) return p;
@@ -14,8 +11,25 @@ export const hooks = {
     return null; // força fallback genérico do registry
   },
 
-  // Se quiser personalizar fallbackText/openingMedia/onPaymentConfirmed para a Cláudia,
-  // exporta aqui; caso contrário, defaults genéricos serão usados.
-  
+  // Exemplos de overrides opcionais:
+  async openingMedia(settings) {
+    const url = settings?.media?.opening_photo_url;
+    return url ? { type: 'image', url, caption: '' } : null;
+  },
+
+  async fallbackText(/*ctx, settings*/) {
+    return 'Consegue me contar rapidinho como é seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)';
+  },
+
+  async onPaymentConfirmed(ctx, settings) {
+    for (const line of settings?.messages?.postsale_pre_coupon ?? []) {
+      await ctx.outbox.publish({ to: ctx.jid, kind: 'text', payload: { text: line } });
+    }
+    if (settings?.product?.coupon_post_payment_only && settings?.product?.coupon_code) {
+      const tpl = settings?.messages?.postsale_after_payment_with_coupon?.[0] || '';
+      const txt = tpl.replace('{{coupon_code}}', settings.product.coupon_code);
+      if (txt) await ctx.outbox.publish({ to: ctx.jid, kind: 'text', payload: { text: txt } });
+    }
+  },
 };
 export default { hooks };
