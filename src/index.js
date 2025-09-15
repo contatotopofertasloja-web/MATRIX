@@ -1,5 +1,6 @@
 ﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox/Direct + ASR + TTS + LLM + Promo Admin)
 // Core neutro. Filtra JSON do LLM, aplica guardrails de link e suporta áudio end-to-end.
+// + Anti-spam por contato (cooldown) e idempotência simples por mensagem.
 
 import express from 'express';
 import cors from 'cors';
@@ -67,6 +68,10 @@ const ECHO_MODE = envBool(process.env.ECHO_MODE, false);
 let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
 let sendEnabled = envBool(process.env.SEND_ENABLED, true);
 let DIRECT_SEND = envBool(process.env.DIRECT_SEND, true);
+
+// Anti-spam (ajustável por ENV)
+const MIN_GAP_PER_CONTACT_MS = envNum(process.env.QUEUE_OUTBOX_MIN_GAP_MS, 2500);
+const MIN_GAP_GLOBAL_MS      = envNum(process.env.QUEUE_OUTBOX_MIN_GAP_GLOBAL_MS, 800);
 
 // Redis / Outbox
 const REDIS_MAIN_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || '';
@@ -137,7 +142,17 @@ await outbox.start(async (job) => {
 // =================== Flows/Hooks ===================
 const flows = await loadFlows(BOT_ID);
 const hooks = await getBotHooks();
-const sentOpening = new Set();
+
+// Anti-duplicação de mídia de abertura e anti-spam
+const sentOpening = new Set();                 // já mandou mídia de abertura p/ esse JID?
+const lastSentAt  = new Map();                 // timestamp da última resposta por JID
+const lastHash    = new Map();                 // hash curto do último inbound por JID
+const processedIds = new Set();                // idempotência curta (TTL manual)
+
+// GC simples do processedIds
+setInterval(() => {
+  if (processedIds.size > 5000) processedIds.clear();
+}, 60_000).unref();
 
 // =================== ASR helpers ===================
 async function tryGetAudioBuffer(raw) {
@@ -237,6 +252,16 @@ function prepareOutboundText(llmOut) {
   return sanitizeLinks(reply);
 }
 
+// Utilidades anti-spam
+const hash = (s) => {
+  let h = 0; const str = String(s || '');
+  for (let i=0;i<str.length;i++) { h = (h*31 + str.charCodeAt(i)) | 0; }
+  return h;
+};
+const getMsgId = (raw) => {
+  try { return raw?.key?.id || raw?.message?.key?.id || ''; } catch { return ''; }
+};
+
 // =================== Entrega unificada (texto + opcional áudio) ===================
 async function deliverReply({ to, text, wantAudio = false }) {
   const cleanText = prepareOutboundText(text);
@@ -257,6 +282,22 @@ async function deliverReply({ to, text, wantAudio = false }) {
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
   try {
+    const now = Date.now();
+
+    // --------- Idempotência de inbound ---------
+    const mid = getMsgId(raw);
+    if (mid) {
+      if (processedIds.has(mid)) return '';
+      processedIds.add(mid);
+      // TTL curto
+      setTimeout(() => processedIds.delete(mid), 3 * 60_000).unref();
+    } else {
+      // Sem id → evita duplicados toscos (hash de texto por 3s)
+      const h = `${from}:${hash(text)}`;
+      if (lastHash.get(from) === h && (now - (lastSentAt.get(from) || 0)) < 3000) return '';
+      lastHash.set(from, h);
+    }
+
     // mídia de abertura (1x por contato)
     if (!sentOpening.has(from)) {
       const media = await hooks.openingMedia({ settings });
@@ -273,6 +314,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     // echo
     if (ECHO_MODE && text) {
       await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } });
+      lastSentAt.set(from, now);
       return '';
     }
 
@@ -286,6 +328,13 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) return '';
 
+    // --------- Cooldown por contato (anti-metralhadora) ---------
+    const last = lastSentAt.get(from) || 0;
+    if (now - last < MIN_GAP_PER_CONTACT_MS) {
+      // segura silenciosamente se ainda estamos no cool-down
+      return '';
+    }
+
     // webhook-like por texto (pós-venda)
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await hooks.onPaymentConfirmed({
@@ -293,6 +342,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
         settings,
         send: async (to, t) => enqueueOrDirect({ to, payload: { text: t } }),
       });
+      lastSentAt.set(from, Date.now());
       return '';
     }
 
@@ -307,6 +357,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
 
     if (reply && reply.trim()) {
       await deliverReply({ to: from, text: reply, wantAudio: incomingIsAudio });
+      lastSentAt.set(from, Date.now());
       return '';
     }
 
@@ -318,6 +369,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     if (flowObj?.run) {
       const send = async (to, t) => deliverReply({ to, text: String(t || ''), wantAudio: incomingIsAudio });
       await flowObj.run({ jid: from, text: msgText, settings, send });
+      lastSentAt.set(from, Date.now());
       return '';
     }
 
@@ -329,6 +381,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       text: fb || 'Posso te explicar rapidamente como funciona e o valor?',
       wantAudio: incomingIsAudio,
     });
+    lastSentAt.set(from, Date.now());
     return '';
   } catch (e) {
     console.error('[onMessage]', e);

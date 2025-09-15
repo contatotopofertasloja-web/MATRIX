@@ -83,6 +83,10 @@ export async function stopOutboxWorkers(/* topic */) {
     return { ok: false, error: e?.message || String(e) };
   }
 }
+// src/core/queue/dispatcher.js
+// (sem alterações além do que você enviou — é o shim compat 2.0 que delega para createOutbox)
+export * from './_shim.js'; // opcional: se preferir, mantenha o conteúdo inline idêntico ao enviado
+export { default } from './_shim.js';
 
 // queueSize(topic)
 export async function queueSize(/* topic */) {

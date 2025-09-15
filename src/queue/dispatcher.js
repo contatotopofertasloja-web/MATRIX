@@ -1,9 +1,7 @@
 // src/queue/dispatcher.js
-// Wrapper do core para WhatsApp (Baileys adapter) + healthcheck Express.
-
 import express from "express";
 import { enqueueOutbox, startOutboxWorkers, queueSize } from "../core/queue/dispatcher.js";
-import { adapter as wpp } from "../adapters/whatsapp/baileys/index.js";
+import { adapter as wpp } from "../adapters/whatsapp/index.js"; // <— garante que aponta pro adapter atual
 
 const OUTBOX_TOPIC           = process.env.OUTBOX_TOPIC || "outbox:whatsapp";
 const OUTBOX_RATE_PER_SEC    = Number(process.env.OUTBOX_RATE_PER_SEC || 0.5);
@@ -14,7 +12,6 @@ const OUTBOX_RETRIES         = Number(process.env.OUTBOX_RETRIES || 2);
 const OUTBOX_RETRY_DELAY_MS  = Number(process.env.OUTBOX_RETRY_DELAY_MS || 1000);
 const OUTBOX_DLQ_ENABLED     = String(process.env.OUTBOX_DLQ_ENABLED || "true").toLowerCase() === "true";
 
-// --- sendFn: integra com adapter WhatsApp ---
 async function sendFn(jid, content) {
   if (content && typeof content === "object" && content.imageUrl) {
     const { imageUrl, caption = "", allowLink = false, allowPrice = false } = content;
@@ -27,7 +24,6 @@ async function sendFn(jid, content) {
   await wpp.sendMessage(jid, { text, allowLink, allowPrice });
 }
 
-// --- API de alto nível ---
 export async function enqueueText(to, text, meta = {}) {
   return enqueueOutbox({ topic: OUTBOX_TOPIC, to, content: String(text || ""), meta });
 }
@@ -52,7 +48,6 @@ export async function size() {
   return queueSize(OUTBOX_TOPIC);
 }
 
-// --- Healthcheck Express ---
 export function mountHealthCheck(app) {
   if (!app || typeof app.get !== "function") return;
   app.get("/health/queue", async (_req, res) => {

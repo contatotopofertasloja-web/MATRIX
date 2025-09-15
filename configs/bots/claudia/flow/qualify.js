@@ -1,52 +1,58 @@
-// Oferta consultiva. Mostra preço/link apenas quando solicitado ou quando já liberado.
-// Respeita cooldown de oferta e prepara transição natural para fechamento.
+// configs/bots/claudia/flow/qualify.js
+// Slot-filling de qualificação. Não repete pergunta já respondida e
+// salta para oferta quando pedir valor/link/comprar.
 
-import { callUser, getFixed } from "./_state.js";
+import { callUser } from "./_state.js";
 
-const RX_PRICE_INTENT = /(preç|valor|quanto|cust)/i;
-const RX_LINK_INTENT  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i;
+const RX_HAIR = /\b(liso|ondulado|cachead[oa]|crespo)\b/i;
+const RX_PRICE = /(preç|valor|quanto|cust)/i;
+const RX_LINK  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i;
 
-export default async function offer(ctx) {
-  const { text = "", state, settings } = ctx;
+const QUESTIONS = [
+  { key: "hair_type", q: "Seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?" },
+  { key: "had_prog_before", q: "Você já fez progressiva antes?" },
+  { key: "goal", q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
+];
+
+function smartFill(state, text) {
+  const m = String(text || "").toLowerCase().match(RX_HAIR);
+  if (m && !state.hair_type) state.hair_type = m[1];
+}
+
+function nextQuestion(state) {
+  return QUESTIONS.find(q => !state[q.key]);
+}
+
+export default async function qualify(ctx) {
+  const { text = "", state } = ctx;
   state.turns = (state.turns || 0) + 1;
 
-  const fx = getFixed(settings);
-  const askedPrice = RX_PRICE_INTENT.test(text);
-  const askedLink  = RX_LINK_INTENT.test(text);
-
-  const now = Date.now();
-  const cool = (ts, ms=90_000) => !ts || (now - ts) > ms;
-
-  // Se pediu link, podemos ir ao fechamento direto
-  if (askedLink) {
+  // Se pediu preço ou link, pula pra oferta/fechamento
+  if (RX_LINK.test(text)) {
     state.link_allowed = true;
-    state.last_link_at = now;
-    return {
-      reply: `Posso te mandar o **link seguro do checkout** agora mesmo, ${callUser(state)}. Quer receber?`,
-      next: "fechamento",
-    };
+    return { reply: "Posso te enviar o **link seguro do checkout** agora mesmo. Quer receber?", next: "fechamento" };
   }
-
-  // Caso peça preço explicitamente (ou cooldown permita), libera preço
-  if (askedPrice || cool(state.last_offer_at)) {
+  if (RX_PRICE.test(text)) {
     state.price_allowed = true;
-    state.last_offer_at = now;
-    const priceLine = `De R$${fx.priceOriginal} por **R$${fx.priceTarget}**`;
-    return {
-      reply: `${priceLine}. Quer que eu te envie o **link seguro do checkout**?`,
-      next: "fechamento",
-    };
+    return { reply: "Já te passo o valor e as condições 👌", next: "oferta" };
   }
 
-  // Se já liberamos preço antes nesta sessão, podemos repetir sem “número cru” em excesso
-  if (state.price_allowed) {
-    const priceLine = `Sai **R$${fx.priceTarget}** no **COD** (paga só na entrega). Quer o link agora?`;
-    return { reply: priceLine, next: "fechamento" };
+  // Preenchimento automático
+  smartFill(state, text);
+
+  const pending = nextQuestion(state);
+  if (pending) {
+    const tag = `__asked_${pending.key}_at`;
+    const now = Date.now();
+    if (!state[tag] || (now - state[tag]) > 45_000) {
+      state[tag] = now;
+      return { reply: pending.q, next: "qualificacao" };
+    }
+    return { reply: "Me dá só essa informação rapidinho pra eu te orientar certinho 😊", next: "qualificacao" };
   }
 
-  // Oferta consultiva antes de preço (sem sair distribuindo valor à toa)
-  const pitch =
-    `Pelo que me contou, essa progressiva bate certinho com teu objetivo, ${callUser(state)}. ` +
-    `É prática, segura e com resultado de salão. Quer que eu **adiant(e)** teu pedido no COD?`;
-  return { reply: pitch, next: "fechamento" };
+  // Tudo coletado → encaminha para oferta consultiva
+  const nome = callUser(state);
+  const sum = `Entendi, ${nome}! Vou te sugerir a melhor forma de uso e te falo do valor.`;
+  return { reply: sum, next: "oferta" };
 }

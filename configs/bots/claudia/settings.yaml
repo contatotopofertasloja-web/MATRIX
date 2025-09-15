@@ -27,7 +27,7 @@ media:
 
 flags:
   has_cod: true
-  send_opening_photo: true
+  send_opening_photo: false          # <— evita duplicidade (index já envia mídia 1x)
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
@@ -73,3 +73,8 @@ messages:
     - "Super entendo! Já são mais de {{sold_count}} unidades vendidas ✅. Quer que eu resuma o modo de uso?"
   closing:
     - "Perfeito! Te envio o link seguro do checkout. Pagamento na entrega (COD)."
+
+guardrails:
+  allowed_links:
+    - "{{product.checkout_link}}"
+    - "{{product.site_url}}"
