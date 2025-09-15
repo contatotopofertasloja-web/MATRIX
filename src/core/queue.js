@@ -1,144 +1,172 @@
-// src/core/queue.js — Outbox robusto (Redis List com fallback em memória)
-//
-// API:
-//   const outbox = await createOutbox({ topic, concurrency, redisUrl })
-//   await outbox.start(async (job) => { ... })   // job = { to, kind, payload, _ts }
-//   await outbox.publish({ to, kind, payload })
-//   outbox.isConnected() -> boolean
-//   outbox.backend()     -> { driver: 'redis-list'|'memory', topic }
-//   await outbox.stop()
-
-import Redis from 'ioredis';
+// src/core/queue.js
+// Outbox com backend auto-seletivo: ioredis -> redis -> memória.
+// API enxuta usada no index: createOutbox({topic, concurrency, redisUrl})
+//   - .start(handler)
+//   - .publish(job)
+//   - .stop()
+//   - .isConnected()
+//   - .backend()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const env = (k, d='') => (process.env[k] ?? d);
 
-function makeRedisClient(url, label) {
-  const useTLS = url.startsWith('rediss://');
-  const opts = {
-    lazyConnect: false,
-    enableReadyCheck: true,
-    connectTimeout: 8000,
-    keepAlive: 15000,
-    maxRetriesPerRequest: null,
-    autoResubscribe: true,
-    autoResendUnfulfilledCommands: true,
-    retryStrategy: (times) => Math.min(30000, 1000 + times * 500),
-    reconnectOnError: (err) => {
-      const code = err?.code || '';
-      const msg  = String(err?.message || '');
-      return (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ETIMEDOUT' || msg.includes('READONLY'));
-    },
-    tls: useTLS ? { rejectUnauthorized: false } : undefined,
-  };
+let IORedis = null;   // preferencial
+let RedisV4 = null;   // fallback node-redis
+try { const mod = await import('ioredis'); IORedis = mod?.default || mod; } catch {}
+if (!IORedis) { try { const mod = await import('redis'); RedisV4 = mod; } catch {} }
 
-  const r = new Redis(url, opts);
-  r.on('connect', () => console.log(`[redis][${label}] connected`));
-  r.on('ready',   () => console.log(`[redis][${label}] ready`));
-  r.on('end',     () => console.warn(`[redis][${label}] connection ended`));
-  r.on('error',   (e) => console.warn(`[redis][${label}] error:`, e?.code || e?.message || e));
-  return r;
-}
+// ----- Estado global (para o dispatcher controlar no shutdown)
+let _globalOutboxController = null;
+export function _getGlobalOutboxController() { return _globalOutboxController; }
+export function _setGlobalOutboxController(c) { _globalOutboxController = c; }
 
-function makeMemoryImpl({ topic, concurrency }) {
+// ===== Backends =====
+function makeMemoryOutbox({ topic = 'outbox:default', concurrency = 1 } = {}) {
   const q = [];
-  let closing = false;
-  let running = 0;
+  let running = false;
+  let workers = [];
+  let handler = async () => {};
+  let connected = true;
 
-  async function drain(handler) {
-    if (running >= concurrency) return;
-    const job = q.shift();
-    if (!job) return;
-    running++;
-    try { await handler(job); }
-    catch (e) { console.error('[outbox][mem][handler]', e?.message || e); }
-    finally { running--; setImmediate(() => drain(handler)); }
-  }
-
-  return {
-    backend: () => ({ driver: 'memory', topic }),
-    isConnected: () => true,
-    async publish(msg) { q.push({ ...msg, _ts: Date.now() }); },
-    async start(handler) {
-      console.log(`[outbox] memory backend start (topic=${topic})`);
-      const tick = setInterval(() => {
-        if (closing) return clearInterval(tick);
-        while (running < concurrency && q.length) drain(handler);
-      }, 25);
-    },
-    async stop() { closing = true; },
-  };
-}
-
-async function makeRedisImpl({ topic, concurrency, url }) {
-  const cmd = makeRedisClient(url, 'outbox');
-  const blk = makeRedisClient(url, 'outboxB');
-
-  let closing = false;
-
-  async function publish(msg) {
-    try {
-      const body = JSON.stringify({ ...msg, _ts: Date.now() });
-      await cmd.lpush(topic, body); // FIFO com LPUSH + BRPOP no mesmo tópico
-      return true;
-    } catch (e) {
-      console.error('[outbox][publish]', e?.message || e);
-      return false;
+  async function loop() {
+    while (running) {
+      const job = q.shift();
+      if (!job) { await sleep(150); continue; }
+      try { await handler(job); } catch (e) { console.warn('[outbox:mem] job error:', e?.message || e); }
     }
   }
 
-  async function workerLoop(id, handler) {
-    console.log(`[outbox] worker #${id} start (topic=${topic})`);
-    while (!closing) {
+  return {
+    backend: () => 'memory',
+    isConnected: () => connected,
+    async start(fn) {
+      handler = typeof fn === 'function' ? fn : handler;
+      running = true;
+      workers = Array.from({ length: Math.max(1, Number(concurrency) || 1) }, () => loop());
+    },
+    async publish(job) { q.push(job); },
+    async stop() { running = false; connected = false; },
+    _topic: topic,
+  };
+}
+
+function makeIORedisOutbox({ topic = 'outbox:default', concurrency = 1, redisUrl }) {
+  const key = `queue:${topic}`;
+  const client = new IORedis(redisUrl);
+  let running = false;
+  let handler = async () => {};
+  let workers = [];
+
+  client.on('error', (e) => console.warn('[outbox:ioredis] error:', e?.message || e));
+  client.on('end',   () => console.log('[outbox:ioredis] connection ended'));
+
+  async function worker() {
+    while (running) {
       try {
-        if (blk.status !== 'ready') { await sleep(250); continue; }
-        const res = await blk.brpop(topic, 5); // 5s timeout
+        const res = await client.brpop(key, 5); // [list, payload] ou null
         if (!res) continue;
-        const [, body] = res;
+        const payload = res[1];
         let job = null;
-        try { job = JSON.parse(body); } catch { /* drop */ }
-        if (job) {
-          try { await handler(job); }
-          catch (e) { console.error('[outbox][handler]', e?.message || e); }
-        }
+        try { job = JSON.parse(payload); } catch { job = null; }
+        if (job) await handler(job);
       } catch (e) {
-        console.warn('[outbox][loop]', e?.code || e?.message || e);
+        console.warn('[outbox:ioredis] worker err:', e?.message || e);
         await sleep(300);
       }
     }
-    console.log(`[outbox] worker #${id} stop`);
   }
 
   return {
-    backend: () => ({ driver: 'redis-list', topic }),
-    isConnected: () => cmd.status === 'ready' && blk.status === 'ready',
-    publish,
-    async start(handler) {
-      const conc = Math.max(1, Number(concurrency) || 1);
-      for (let i = 0; i < conc; i++) workerLoop(i + 1, handler);
-      console.log(`[outbox] redis backend start (topic=${topic}, concurrency=${conc})`);
+    backend: () => 'ioredis',
+    isConnected: () => client?.status === 'ready',
+    async start(fn) {
+      handler = typeof fn === 'function' ? fn : handler;
+      running = true;
+      workers = Array.from({ length: Math.max(1, Number(concurrency) || 1) }, () => worker());
+    },
+    async publish(job) {
+      await client.lpush(key, JSON.stringify(job));
     },
     async stop() {
-      closing = true;
-      await sleep(220);
-      try { cmd.disconnect(); } catch {}
-      try { blk.disconnect(); } catch {}
+      running = false;
+      try { await client.quit(); } catch {}
     },
+    _topic: topic,
   };
 }
 
-export async function createOutbox({
-  topic = env('OUTBOX_TOPIC', `outbox:${env('WPP_SESSION', 'default')}`),
-  concurrency = Number(env('QUEUE_OUTBOX_CONCURRENCY', '4')),
-  redisUrl = env('MATRIX_REDIS_URL', env('REDIS_URL', '')),
-} = {}) {
-  if (redisUrl) {
-    try {
-      return await makeRedisImpl({ topic, concurrency, url: redisUrl });
-    } catch (e) {
-      console.warn('[outbox] Redis indisponível, usando memória:', e?.message || e);
+function makeNodeRedisOutbox({ topic = 'outbox:default', concurrency = 1, redisUrl }) {
+  const key = `queue:${topic}`;
+  const client = RedisV4.createClient({ url: redisUrl });
+  let running = false;
+  let handler = async () => {};
+  let workers = [];
+
+  client.on('error', (e) => console.warn('[outbox:redis] error:', e?.message || e));
+
+  async function brpop(timeout = 5) {
+    // node-redis v4: BRPOP via comando genérico
+    const res = await client.sendCommand(['BRPOP', key, String(timeout)]);
+    if (!res) return null;
+    // res: [list, payload]
+    return res;
+  }
+
+  async function worker() {
+    while (running) {
+      try {
+        const res = await brpop(5);
+        if (!res) continue;
+        const payload = res[1];
+        let job = null;
+        try { job = JSON.parse(payload); } catch { job = null; }
+        if (job) await handler(job);
+      } catch (e) {
+        console.warn('[outbox:redis] worker err:', e?.message || e);
+        await sleep(300);
+      }
     }
   }
-  console.warn('[outbox] redisUrl ausente — fallback em memória');
-  return makeMemoryImpl({ topic, concurrency });
+
+  return {
+    backend: () => 'redis',
+    isConnected: () => client?.isOpen === true,
+    async start(fn) {
+      await client.connect();
+      handler = typeof fn === 'function' ? fn : handler;
+      running = true;
+      workers = Array.from({ length: Math.max(1, Number(concurrency) || 1) }, () => worker());
+    },
+    async publish(job) {
+      await client.lPush(key, JSON.stringify(job));
+    },
+    async stop() {
+      running = false;
+      try { await client.quit(); } catch {}
+    },
+    _topic: topic,
+  };
+}
+
+// ===== Factory principal =====
+export function createOutbox({ topic = 'outbox:default', concurrency = 1, redisUrl = '' } = {}) {
+  let ctrl = null;
+
+  if (redisUrl && IORedis) {
+    ctrl = makeIORedisOutbox({ topic, concurrency, redisUrl });
+  } else if (redisUrl && RedisV4?.createClient) {
+    ctrl = makeNodeRedisOutbox({ topic, concurrency, redisUrl });
+  } else {
+    ctrl = makeMemoryOutbox({ topic, concurrency });
+  }
+
+  // expõe helpers de inspeção
+  ctrl.backend = ctrl.backend || (() => (IORedis ? 'ioredis' : (RedisV4 ? 'redis' : 'memory')));
+  ctrl.isConnected = ctrl.isConnected || (() => true);
+  ctrl.publish = ctrl.publish || (async () => {});
+  ctrl.start = ctrl.start || (async () => {});
+  ctrl.stop = ctrl.stop || (async () => {});
+
+  // deixa disponível para o shutdown externo
+  _setGlobalOutboxController(ctrl);
+  return ctrl;
 }

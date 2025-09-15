@@ -1,206 +1,103 @@
 // src/core/queue/dispatcher.js
-// Outbox com Redis (LIST LPUSH/BRPOP) + rate-limit distribuído + retries + DLQ opcional.
-// API:
+// -----------------------------------------------------------------------------
+// Dispatcher compatível com o base antigo do projeto.
+// Mantém a mesma API (enqueueOutbox, startOutboxWorkers, stopOutboxWorkers, queueSize)
+// porém delega para o controlador global criado em src/core/queue.js.
+// -----------------------------------------------------------------------------
+//
+// Por que assim?
+// - O index atual cria o outbox via createOutbox() e já dá start() nos workers.
+// - Este arquivo passa a ser um "shim" de compatibilidade para quem ainda
+//   chama as funções do dispatcher antigo, sem quebrar a arquitetura 2.0.
+//
+// Exports:
 //   enqueueOutbox({ topic, to, content, meta? })
-//   startOutboxWorkers({ topic, concurrency?, ratePerSec?, sendFn, minGapMs?, minGapGlobalMs?, maxRetries?, baseRetryDelayMs?, dlqEnabled?, onAfterSend?, onError? })
-//   stopOutboxWorkers(topic?)   // encerra workers daquele tópico (ou todos)
-//   queueSize(topic)
+//   startOutboxWorkers(opts)        // no-op (compat), retorna { ok: true }
+//   stopOutboxWorkers(topic?)       // encerra workers do outbox global
+//   queueSize(topic)                // -1 (mem) | tenta Redis quando disponível
+//
+// Obs: se no futuro você reativar o modelo "por tópico" via Redis puro,
+//      dá para plugar aqui uma implementação por LIST/BRPOP sem tocar no index.
+//
 
-import { qpushLeft, qpopRightBlocking, qlen, getJson, setexJson } from "../redis.js";
-import { allowSend } from "./rate-limit.js";
+import { _getGlobalOutboxController } from '../queue.js';
 
-const envNum  = (k, d) => (Number.isFinite(+process.env[k]) ? +process.env[k] : d);
-const envBool = (k, d=false) => ["1","true","yes","y","on"].includes(String(process.env[k]||"").toLowerCase());
+// ------------- helpers -------------
+const isObj = (v) => v && typeof v === 'object' && !Buffer.isBuffer(v);
 
-const DEFAULTS = {
-  RETRIES:           envNum("QUEUE_OUTBOX_RETRIES", 2),
-  RETRY_DELAY_MS:    envNum("QUEUE_OUTBOX_RETRY_DELAY_MS", 1000),
-  MIN_GAP_GLOBAL_MS: envNum("QUEUE_OUTBOX_MIN_GAP_GLOBAL_MS", 300),
-  MIN_GAP_MS:        envNum("QUEUE_OUTBOX_MIN_GAP_MS", 1500),
-  CONCURRENCY:       envNum("QUEUE_OUTBOX_CONCURRENCY", 1),
-  DLQ_ENABLED:       envBool("QUEUE_OUTBOX_DLQ_ENABLED", true),
-  BACKOFF_CAP_MS:    envNum("QUEUE_OUTBOX_BACKOFF_CAP_MS", 15000),
-};
-
-const sleep  = (ms) => new Promise(r => setTimeout(r, ms));
-const jitter = (ms, pct=0.2) => {
-  const j = Math.floor(ms * pct);
-  return Math.max(0, ms + (Math.floor(Math.random() * (2*j + 1)) - j));
-};
-
-// ----- Estado de execução por tópico (shutdown/graceful) -----
-const RUN_FLAGS = new Map(); // topic -> { stop: boolean }
-
-/** Marca tópico para parada graciosa */
-export function stopOutboxWorkers(topic) {
-  if (!topic) {
-    for (const key of RUN_FLAGS.keys()) RUN_FLAGS.set(key, { stop: true });
-    return;
+/** Converte o "content" legado em { kind, payload } aceito pelo outbox 2.0 */
+function normalizeContent(content) {
+  // Se já vier no novo formato
+  if (isObj(content) && (content.kind || content.payload)) {
+    const kind = content.kind || 'text';
+    const payload = content.payload || (isObj(content) ? { ...content } : { text: String(content ?? '') });
+    return { kind, payload };
   }
-  const curr = RUN_FLAGS.get(topic) || { stop: false };
-  RUN_FLAGS.set(topic, { ...curr, stop: true });
+
+  // Se vier só texto
+  if (!isObj(content)) return { kind: 'text', payload: { text: String(content ?? '') } };
+
+  // Se vier objeto simples sem "kind"
+  // heurísticas mínimas:
+  if (content.imageUrl || content.url) {
+    return { kind: 'image', payload: { url: content.imageUrl || content.url, caption: content.caption || '' } };
+  }
+  if (content.text) {
+    return { kind: 'text', payload: { text: String(content.text) } };
+  }
+
+  // fallback: vira texto com JSON
+  return { kind: 'text', payload: { text: JSON.stringify(content) } };
 }
 
-// ---------------- Enqueue ----------------
+// ------------- API -------------
+// enqueueOutbox({ topic, to, content, meta? })
 export async function enqueueOutbox({ topic, to, content, meta = {} }) {
-  if (!topic)   throw new Error("enqueueOutbox: topic obrigatório");
-  if (!to)      throw new Error("enqueueOutbox: to obrigatório");
-  if (content == null) throw new Error("enqueueOutbox: content obrigatório");
-
-  const job = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    at: Date.now(),
-    to,
-    content,
-    meta: { tries: 0, ...meta },
-  };
-  await qpushLeft(topic, job);
-  return { ok: true, enqueued: true, topic, id: job.id };
-}
-
-// ---------------- Workers ----------------
-export async function startOutboxWorkers({
-  topic,
-  concurrency      = DEFAULTS.CONCURRENCY,
-  ratePerSec       = 0.5, // ~1 msg a cada 2s por processo
-  sendFn,
-  minGapMs         = DEFAULTS.MIN_GAP_MS,
-  minGapGlobalMs   = DEFAULTS.MIN_GAP_GLOBAL_MS,
-  maxRetries       = DEFAULTS.RETRIES,
-  baseRetryDelayMs = DEFAULTS.RETRY_DELAY_MS,
-  dlqEnabled       = DEFAULTS.DLQ_ENABLED,
-  backoffCapMs     = DEFAULTS.BACKOFF_CAP_MS,
-  onAfterSend,
-  onError,
-} = {}) {
-  if (!topic) throw new Error("startOutboxWorkers: topic obrigatório");
-  if (typeof sendFn !== "function") throw new Error("startOutboxWorkers: sendFn obrigatório");
-
-  RUN_FLAGS.set(topic, { stop: false });
-
-  for (let i = 0; i < concurrency; i++) {
-    loop({
-      topic, wid: i, ratePerSec, sendFn,
-      minGapMs, minGapGlobalMs, maxRetries, baseRetryDelayMs, dlqEnabled, backoffCapMs,
-      onAfterSend, onError,
-    }).catch((e) => console.error(`[outbox:${topic}][w${i}] loop error`, e?.stack || e));
+  const ctrl = _getGlobalOutboxController();
+  if (!ctrl || typeof ctrl.publish !== 'function') {
+    throw new Error('enqueueOutbox: outbox não inicializado (createOutbox/start não chamados)');
   }
+  if (!to) throw new Error('enqueueOutbox: "to" obrigatório');
+  const { kind, payload } = normalizeContent(content);
+  await ctrl.publish({ to, kind, payload, meta });
+  return { ok: true, enqueued: true, topic: ctrl._topic || topic || 'default' };
 }
 
-// ---------------- Loop principal ----------------
-async function loop(opts) {
-  const {
-    topic, wid, ratePerSec, sendFn,
-    minGapMs, minGapGlobalMs, maxRetries, baseRetryDelayMs, dlqEnabled, backoffCapMs,
-    onAfterSend, onError,
-  } = opts;
+// startOutboxWorkers({...})
+// Compatibilidade: hoje o index já inicia os workers (createOutbox().start()).
+// Mantemos a função para não quebrar chamadas legadas.
+export async function startOutboxWorkers(/* opts */) {
+  return { ok: true, message: 'workers já iniciados pelo index (compat no-op)' };
+}
 
-  const GAP_GLOBAL_KEY = `outbox:${topic}:gap:global`;
-
-  while (true) {
-    try {
-      if (RUN_FLAGS.get(topic)?.stop) {
-        console.log(`[outbox:${topic}][w${wid}] stopping gracefully…`);
-        return;
-      }
-
-      // 0) busca job (bloqueante até 5s para permitir shutdown limpo)
-      const job = await qpopRightBlocking(topic, 5);
-      if (!job) continue;
-
-      // 1) rate-limit distribuído (token-bucket em Redis)
-      const allowed = await allowSend({ topic, ratePerSec });
-      if (!allowed) {
-        await requeueWithBackoff(topic, job, 1000);
-        continue;
-      }
-
-      const now = Date.now();
-
-      // 2) min-gap global
-      const lastGlobal = await getJson(GAP_GLOBAL_KEY);
-      if (lastGlobal?.at && now - lastGlobal.at < minGapGlobalMs) {
-        const wait = Math.max(0, minGapGlobalMs - (now - lastGlobal.at));
-        await requeueWithBackoff(topic, job, wait);
-        continue;
-      }
-
-      // 3) min-gap por destinatário
-      const gapKeyPerTo = `outbox:${topic}:gap:${normalizeTo(job.to)}`;
-      const lastPerTo = await getJson(gapKeyPerTo);
-      if (lastPerTo?.at && now - lastPerTo.at < minGapMs) {
-        const wait = Math.max(0, minGapMs - (now - lastPerTo.at));
-        await requeueWithBackoff(topic, job, wait);
-        continue;
-      }
-
-      // 4) envio
-      try {
-        await sendFn(job.to, job.content);
-
-        // sucesso → grava gaps (TTL ~ gap)
-        const nowAt = Date.now();
-        await setexJson(GAP_GLOBAL_KEY, { at: nowAt }, Math.ceil(minGapGlobalMs/1000)+2);
-        await setexJson(gapKeyPerTo,  { at: nowAt }, Math.ceil(minGapMs/1000)+2);
-
-        if (typeof onAfterSend === "function") {
-          try { await onAfterSend(job); } catch (hookErr) {
-            console.warn(`[outbox:${topic}][w${wid}][${job.id}] onAfterSend hook error:`, hookErr?.message || hookErr);
-          }
-        }
-      } catch (sendErr) {
-        const tries = (job.meta?.tries ?? 0) + 1;
-        job.meta = { ...(job.meta || {}), tries };
-        const errMsg = sendErr?.message || String(sendErr);
-
-        if (typeof onError === "function") {
-          try { await onError(sendErr, job); } catch (hookErr) {
-            console.warn(`[outbox:${topic}][w${wid}][${job.id}] onError hook error:`, hookErr?.message || hookErr);
-          }
-        }
-
-        if (tries > maxRetries) {
-          if (dlqEnabled) {
-            await pushDLQ(topic, { ...job, error: errMsg });
-            console.error(`[outbox:${topic}][w${wid}][${job.id}] DLQ after ${tries} tries: ${errMsg}`);
-          } else {
-            console.error(`[outbox:${topic}][w${wid}][${job.id}] dropped after ${tries} tries: ${errMsg}`);
-          }
-          continue;
-        }
-
-        // backoff exponencial com CAP + jitter
-        const exp = baseRetryDelayMs * Math.pow(2, Math.min(tries - 1, 3));
-        const capped = Math.min(exp, backoffCapMs);
-        const delay = jitter(capped);
-        console.warn(`[outbox:${topic}][w${wid}][${job.id}] retry ${tries}/${maxRetries} in ~${delay}ms: ${errMsg}`);
-        await requeueWithBackoff(topic, job, delay);
-      }
-    } catch (e) {
-      console.error(`[outbox:${topic}][w${wid}] loop exception`, e?.message || e);
-      await sleep(500);
+// stopOutboxWorkers(topic?)
+export async function stopOutboxWorkers(/* topic */) {
+  try {
+    const ctrl = _getGlobalOutboxController();
+    if (ctrl && typeof ctrl.stop === 'function') {
+      await ctrl.stop();
+      return { ok: true };
     }
+    return { ok: false, error: 'outbox controller ausente' };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
   }
 }
 
-// ---------------- Helpers requeue/DLQ ----------------
-async function requeueWithBackoff(topic, job, waitMs) {
-  await sleep(Math.min(5000, Math.max(25, waitMs || 0)));
-  await qpushLeft(topic, job);
-}
-async function pushDLQ(topic, job) {
-  try { await qpushLeft(`${topic}:dlq`, job); } catch (e) {
-    console.error(`[outbox:${topic}] DLQ push error`, e?.message || e);
+// queueSize(topic)
+export async function queueSize(/* topic */) {
+  try {
+    const ctrl = _getGlobalOutboxController();
+    // Para backends em memória não temos introspecção de tamanho.
+    if (!ctrl) return -1;
+
+    // Se for ioredis/node-redis, poderíamos implementar aqui um LLen.
+    // Como a chave é interna ao ctrl, retornamos -1 por padrão para não quebrar.
+    // (Se você quiser LLEN real, expanda o ctrl para expor a key ou um método size)
+    return -1;
+  } catch {
+    return -1;
   }
-}
-
-function normalizeTo(to) {
-  return String(to || "").replace(/\D/g, "") || "unknown";
-}
-
-// ---------------- Util ----------------
-export async function queueSize(topic) {
-  try { return await qlen(topic); } catch { return -1; }
 }
 
 export default { enqueueOutbox, startOutboxWorkers, stopOutboxWorkers, queueSize };
