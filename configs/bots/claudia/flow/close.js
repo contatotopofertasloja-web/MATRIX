@@ -35,13 +35,18 @@ function smartFill(state, textRaw) {
   if (!state.referencia){ const r = text.match(/\b(refer[eê]ncia|perto de|ao lado de)\b[^.\n]*/i); if (r) state.referencia = r[0].replace(/^refer[eê]ncia[: ]*/i, "").trim(); }
 }
 
-function nextMissing(state) {
-  return ASK_ORDER.find(i => !state[i.key]);
-}
+const nextMissing = (s) => ASK_ORDER.find(i => !s[i.key]);
 
 export default async function close(ctx) {
-  const { text = "", state } = ctx;
+  const { text = "", state, settings } = ctx;
   state.turns = (state.turns || 0) + 1;
+
+  // Se ainda não mandou o link (veio da oferta pedindo link), envia aqui também por segurança
+  if (state.__send_link_on_close_once !== true && (state.link_allowed || /link|checkout/i.test(text))) {
+    state.__send_link_on_close_once = true;
+    const link = settings?.product?.checkout_link || "";
+    return { reply: `Segue o **link seguro do checkout**: ${link}\nQualquer dúvida, tô aqui 💛`, next: "fechamento" };
+  }
 
   smartFill(state, text);
 
@@ -58,7 +63,7 @@ export default async function close(ctx) {
 
   const resumo = summarizeAddress(state);
   return {
-    reply: `Perfeito, ${callUser(state)}! Confere se está certo:\n${resumo}\n\nPosso já confirmar teu pedido COD?`,
+    reply: `Perfeito, ${callUser(state)}! Confere:\n${resumo}\n\nConfirmo teu pedido COD agora?`,
     next: "posvenda",
   };
 }

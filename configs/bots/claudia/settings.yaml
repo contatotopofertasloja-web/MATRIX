@@ -7,10 +7,11 @@ company:
   hours: "06:00–21:00"
 
 product:
-  name: "Progressiva X"
+  name: "Progressiva Vegetal"
   volume_ml: 500
   price_original: 197
   price_target: 170
+  applications_up_to: 10
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
@@ -19,15 +20,15 @@ product:
     capitals_hours: 24
     others_hours: 72
   how_to_use: >
-    Lave os cabelos, aplique e deixe agir 40 min.
-    Para maior durabilidade, finalize com prancha.
+    Lave os cabelos, aplique e deixe agir 40 min. Para maior durabilidade,
+    finalize com prancha. Um frasco rende até {{product.applications_up_to}} aplicações.
 
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 flags:
   has_cod: true
-  send_opening_photo: false          # <— evita duplicidade (index já envia mídia 1x)
+  send_opening_photo: true        # <- volta a imagem na abertura
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
@@ -63,14 +64,14 @@ typing:
 
 messages:
   opening:
-    - "Oi! 💖 Eu sou a Cláudia. Me conta rapidinho como é seu cabelo (liso, ondulado, cacheado ou crespo)?"
+    - "Oi, amor! 💖 Eu sou a Cláudia. Antes de tudo, deixa eu te mostrar a *Progressiva Vegetal* que eu amo — e já te explico rapidinho 😉"
   qualify_followups:
     - "Você já fez progressiva antes?"
     - "Prefere resultado bem liso ou só alinhado?"
   offer_templates:
-    - "Com base no que me falou, recomendo por **R${{price_target}}** 🛒 Posso te mandar o link do checkout?"
+    - "É *Progressiva Vegetal* por **R${{price_target}}**. Rende até **{{product.applications_up_to}} aplicações**. Quer que eu te envie o link do checkout?"
   objection_handles:
-    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas ✅. Quer que eu resuma o modo de uso?"
+    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas ✅. Posso te resumir o modo de uso em 10s."
   closing:
     - "Perfeito! Te envio o link seguro do checkout. Pagamento na entrega (COD)."
 

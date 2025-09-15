@@ -5,6 +5,7 @@ export default async function greet(ctx) {
   const { settings, outbox, jid, state } = ctx;
   state.turns = (state.turns || 0) + 1;
 
+  // Foto de abertura (1x por contato)
   if (
     settings?.flags?.send_opening_photo &&
     settings?.media?.opening_photo_url &&
@@ -18,9 +19,10 @@ export default async function greet(ctx) {
     state.__sent_opening_photo = true;
   }
 
+  const name = callUser(state);
   const opening =
     settings?.messages?.opening?.[0] ||
-    `Oi! Eu sou a Cláudia. ${callUser(state)}, teu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
+    `Oi, ${name}! 💖 Eu sou a Cláudia. Posso te explicar rapidinho sobre a *Progressiva Vegetal*?`;
 
   return { reply: opening, next: "qualificacao" };
 }
