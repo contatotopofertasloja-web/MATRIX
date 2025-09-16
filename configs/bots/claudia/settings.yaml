@@ -28,7 +28,11 @@ media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 flags:
-flags:
+
+  flow_only: true
+  debug_trace_replies: true
+  debug_log_router: true
+
   # ... (suas flags atuais)
   debug_log_router: true        # loga pick/saída do router
   debug_trace_replies: true     # mantém os "carimbos" enquanto testamos
