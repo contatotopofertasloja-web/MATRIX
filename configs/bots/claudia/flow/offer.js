@@ -15,7 +15,7 @@ export default async function offer(ctx) {
   const now = Date.now();
   const cool = (ts, ms=90_000) => !ts || (now - ts) > ms;
 
-  // Se pediu link, manda direto o link do checkout
+  // Se pedir link (ou já tiver sido permitido), manda direto
   if (askedLink || state.link_allowed) {
     const link = settings?.product?.checkout_link || "";
     const msg  = `Aqui está o **link seguro do checkout**: ${link}\n` +
@@ -26,7 +26,7 @@ export default async function offer(ctx) {
     return { reply: msg, next: "fechamento" };
   }
 
-  // Preço e vantagens (sem repetir demais)
+  // Preço objetivo + convite pro link (com cooldown)
   if (askedPrice || cool(state.last_offer_at)) {
     state.price_allowed = true;
     state.last_offer_at = now;
@@ -36,7 +36,7 @@ export default async function offer(ctx) {
     return { reply: `${priceLine} ${note}`, next: "fechamento" };
   }
 
-  // Pitch curto
+  // Pitch curto e humano
   const pitch =
     `Pelo que me contou, essa progressiva bate certinho com teu objetivo, ${callUser(state)}. ` +
     `Resultado de salão e aplicação prática em casa. Quer que eu já te envie o **link**?`;

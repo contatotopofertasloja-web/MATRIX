@@ -28,7 +28,7 @@ media:
 
 flags:
   has_cod: true
-  send_opening_photo: true        # <- volta a imagem na abertura
+  send_opening_photo: true        # <- imagem volta no 1º contato
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
