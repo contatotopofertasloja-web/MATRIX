@@ -1,5 +1,7 @@
 // configs/bots/claudia/flow/router.js
-// Prioridade: pós-venda → close → FAQ → oferta → objeções → qualify → greet
+// Router ÚNICO da Cláudia — decide o fluxo com base no texto + estado.
+// Prioridade: pós-venda → fechamento → FAQ → oferta → objeções → qualificação → saudação.
+
 import greet from './greet.js';
 import qualify from './qualify.js';
 import offer from './offer.js';
@@ -9,8 +11,12 @@ import postsale from './postsale.js';
 import faq, { match as faqMatch } from './faq.js';
 import { isAwaitingConsent } from './_state.js';
 
-function stripAccents(s=''){return s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-function clean(t=''){return stripAccents(String(t||'').toLowerCase()).replace(/\s+/g,' ').trim();}
+function stripAccents(s = '') {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function clean(t = '') {
+  return stripAccents(String(t || '').toLowerCase()).replace(/\s+/g, ' ').trim();
+}
 
 const RX = {
   postsale: /\b(paguei|pagamento\s*feito|pago|comprovante|finalizei|finalizado)\b/i,
@@ -18,32 +24,33 @@ const RX = {
   offer:    /\b(preco|preço|quanto\s*custa|valor|desconto|promo(cao|ção)|oferta|cust[ao])\b/i,
 };
 
-// ordem referencial
 export const ordered = [postsale, close, faq, offer, objections, qualify, greet];
 
 export function pickFlow(text = '', settings = {}, state = {}) {
   const t = clean(text);
-  if (!t) return greet;
 
-  // 1) pós-venda e fechamento primeiro
+  // 1) Pós-venda e fechamento primeiro
   if (RX.postsale.test(t)) return postsale;
-  if (isAwaitingConsent(state) || RX.close.test(t)) return close; // ← bugfix: usa state
+  if (isAwaitingConsent(state) || RX.close.test(t)) return close; // usa STATE, não JID
 
-  // 2) FAQ determinístico (empresa, horário, etc.)
-  if (typeof faqMatch === 'function' && faqMatch(text, settings)) return faq;
+  // 2) FAQ determinístico
+  try {
+    if (typeof faqMatch === 'function' && faqMatch(text, settings)) return faq;
+  } catch { /* noop */ }
 
-  // 3) oferta e objeções
+  // 3) Oferta e objeções
   if (RX.offer.test(t)) return offer;
-  if (typeof objections.match === 'function' && objections.match(text, settings)) return objections;
+  try {
+    if (typeof objections.match === 'function' && objections.match(text, settings)) return objections;
+  } catch { /* noop */ }
 
-  // 4) qualificação
-  if (typeof qualify.match === 'function' && qualify.match(text)) return qualify;
+  // 4) Qualificação (detecção leve)
+  try {
+    if (typeof qualify.match === 'function' && qualify.match(text)) return qualify;
+  } catch { /* noop */ }
 
-  // 5) saudação fallback
+  // 5) Saudação / fallback
   return greet;
 }
 
-export function __route(text = '', settings = {}, state = {}) {
-  return pickFlow(text, settings, state);
-}
 export default ordered;
