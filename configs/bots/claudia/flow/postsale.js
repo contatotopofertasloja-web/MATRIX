@@ -1,5 +1,4 @@
 // Confirma pedido, reforça acompanhamento, prazo de entrega e (se houver) cupom pós-pagamento.
-
 import { callUser } from "./_state.js";
 
 export default async function postsale(ctx) {
@@ -35,7 +34,6 @@ export default async function postsale(ctx) {
     lines.push(how);
   }
 
-  // Fallback simpático
   const reply = lines.length
     ? lines.join("\n")
     : `Pedido confirmado, ${callUser(state)}! Você vai receber as atualizações por aqui. Qualquer dúvida, me chama 💛`;

@@ -1,4 +1,5 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml
+bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -28,10 +29,10 @@ media:
 
 flags:
   has_cod: true
-  send_opening_photo: true        # <- imagem volta no 1º contato
+  send_opening_photo: true
   guardrails_strict: true
   use_telemetry: true
-  use_thompson: true
+  use_thompson: true          # fica inerte se o core não usar
   allow_audio_in: true
   allow_audio_out: false
   small_talk_soften: true
