@@ -1,6 +1,4 @@
 // configs/bots/claudia/flow/index.js
-// Registry + runner da Cláudia (Matrix 2.0-ready)
-
 import greet from './greet.js';
 import qualify from './qualify.js';
 import offer from './offer.js';
@@ -8,37 +6,24 @@ import objections from './objections.js';
 import close from './close.js';
 import postsale from './postsale.js';
 import faq from './faq.js';
-import router, { pickFlow, ordered } from './router.js';
+import { pickFlow } from './router.js';
+import { initialState } from './_state.js';
 
-export const registry = {
-  greet,
-  qualificacao: qualify,  // alias pt
-  qualify,
-  oferta: offer,          // alias pt
-  offer,
-  objeções: objections,   // alias acentuado
-  objecoes: objections,   // alias sem acento
-  objections,
-  fechamento: close,      // alias pt
-  close,
-  posvenda: postsale,     // alias pt
-  postsale,
-  faq,
-};
+function log(...a){ if(process.env.NODE_ENV!=='production') console.log('[CLAUDIA]', ...a); }
 
-// Runner padrão: decide o flow e executa
-export async function handle(ctx) {
-  const Flow = pickFlow(ctx?.text || '', ctx?.settings || {}, ctx?.state || {});
-  return Flow(ctx);
+export const registry = { greet, qualify, offer, objections, close, postsale, faq };
+
+export async function handle(ctx = {}) {
+  ctx.state = ctx.state || {};
+  const base = initialState();
+  for (const k of Object.keys(base)) if (ctx.state[k] === undefined) ctx.state[k] = base[k];
+
+  const Flow = pickFlow(ctx.text || '', ctx.settings || {}, ctx.state || {});
+  log('PICK', Flow.name, 'text=', ctx.text);
+
+  const out = await Flow(ctx);
+  log('OUT', { next: out?.next, preview: (out?.reply||'').slice(0,120) });
+  return out;
 }
 
-// Exporta também o roteador e a ordem referencial
-export { router, pickFlow, ordered };
-
-export default {
-  registry,
-  handle,
-  router,
-  pickFlow,
-  ordered,
-};
+export default { registry, handle };

@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/close.js
-import { callUser, summarizeAddress } from "./_state.js";
+import { callUser, summarizeAddress, tagReply } from "./_state.js";
 
 const ASK_ORDER = [
   { key: "telefone",     q: "Pra agilizar seu **pedido COD**, me passa seu *telefone* com DDD?" },
@@ -41,11 +41,10 @@ export default async function close(ctx) {
   const { text = "", state, settings } = ctx;
   state.turns = (state.turns || 0) + 1;
 
-  // Failsafe: se pedir link aqui, envia de novo
   if (state.__send_link_on_close_once !== true && (state.link_allowed || /link|checkout/i.test(text))) {
     state.__send_link_on_close_once = true;
     const link = settings?.product?.checkout_link || "";
-    return { reply: `Segue o **link seguro do checkout**: ${link}\nQualquer dúvida, tô aqui 💛`, next: "fechamento" };
+    return { reply: tagReply(settings, `Segue o **link seguro do checkout**: ${link}\nQualquer dúvida, tô aqui 💛`, "flow/close"), next: "fechamento" };
   }
 
   smartFill(state, text);
@@ -56,14 +55,14 @@ export default async function close(ctx) {
     const tag = `__asked_${missing.key}_at`;
     if (!state[tag] || (now - state[tag]) > 60_000) {
       state[tag] = now;
-      return { reply: missing.q, next: "fechamento" };
+      return { reply: tagReply(settings, missing.q, "flow/close"), next: "fechamento" };
     }
-    return { reply: `Me passa isso rapidinho pra eu confirmar teu pedido 😉`, next: "fechamento" };
+    return { reply: tagReply(settings, `Me passa isso rapidinho pra eu confirmar teu pedido 😉`, "flow/close"), next: "fechamento" };
   }
 
   const resumo = summarizeAddress(state);
   return {
-    reply: `Perfeito, ${callUser(state)}! Confere:\n${resumo}\n\nConfirmo teu pedido COD agora?`,
+    reply: tagReply(settings, `Perfeito, ${callUser(state)}! Confere:\n${resumo}\n\nConfirmo teu pedido COD agora?`, "flow/close"),
     next: "posvenda",
   };
 }
