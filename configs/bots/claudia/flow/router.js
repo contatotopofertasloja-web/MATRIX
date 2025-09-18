@@ -1,11 +1,11 @@
 // configs/bots/claudia/flow/router.js
-// Router ÚNICO da Cláudia — decide o fluxo com base no texto + estado.
+// Router ÚNICO: decide o fluxo com base no texto + estado.
 // Prioridade: pós-venda → fechamento → FAQ → oferta → objeções → qualificação → saudação.
 
 import greet from './greet.js';
 import qualify from './qualify.js';
 import offer from './offer.js';
-import objections from './objections.js';
+import objections, { match as objectionsMatch } from './objections.js';
 import close from './close.js';
 import postsale from './postsale.js';
 import faq, { match as faqMatch } from './faq.js';
@@ -31,26 +31,21 @@ export function pickFlow(text = '', settings = {}, state = {}) {
 
   // 1) Pós-venda e fechamento primeiro
   if (RX.postsale.test(t)) return postsale;
-  if (isAwaitingConsent(state) || RX.close.test(t)) return close; // usa STATE, não JID
+  if (isAwaitingConsent(state) || RX.close.test(t)) return close;
 
   // 2) FAQ determinístico
-  try {
-    if (typeof faqMatch === 'function' && faqMatch(text, settings)) return faq;
-  } catch { /* noop */ }
+  try { if (typeof faqMatch === 'function' && faqMatch(text, settings)) return faq; } catch {}
 
   // 3) Oferta e objeções
   if (RX.offer.test(t)) return offer;
-  try {
-    if (typeof objections.match === 'function' && objections.match(text, settings)) return objections;
-  } catch { /* noop */ }
+  try { if (typeof objectionsMatch === 'function' && objectionsMatch(text, settings)) return objections; } catch {}
 
-  // 4) Qualificação (detecção leve)
-  try {
-    if (typeof qualify.match === 'function' && qualify.match(text)) return qualify;
-  } catch { /* noop */ }
+  // 4) Qualificação (leve)
+  if (/\b(liso|ondulado|cachead[oa]|crespo|frizz|volume)\b/i.test(t)) return qualify;
 
-  // 5) Saudação / fallback
-  return greet;
+  // 5) Saudação
+  if (/\b(oi|ol[áa]|bom\s*dia|boa\s*tarde|boa\s*noite|hey|hi|hello)\b/i.test(t)) return greet;
+
+  // Default
+  return qualify;
 }
-
-export default ordered;

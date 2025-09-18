@@ -15,27 +15,29 @@ export default async function offer(ctx) {
   const now = Date.now();
   const cool = (ts, ms=90_000) => !ts || (now - ts) > ms;
 
+  // Link primeiro, se pediu
   if (askedLink || state.link_allowed) {
     const link = settings?.product?.checkout_link || "";
     const msg  = `Aqui está o **link seguro do checkout**: ${link}\n` +
                  `Preço: **R$${fx.priceTarget}** no COD (paga só na entrega). ` +
-                 `Rende até **${settings?.product?.applications_up_to || 10} aplicações**.`;
+                 `Rende ${fx.applications}.`;
     state.link_allowed = false;
     state.last_link_at = now;
     return { reply: tagReply(settings, msg, "flow/offer"), next: "fechamento" };
   }
 
+  // Se pediu preço (ou passou o cooldown)
   if (askedPrice || cool(state.last_offer_at)) {
     state.price_allowed = true;
     state.last_offer_at = now;
     const priceLine = `A *Progressiva Vegetal* está de R$${fx.priceOriginal} por **R$${fx.priceTarget}**.`;
-    const note = `Rende até **${settings?.product?.applications_up_to || 10} aplicações**. ` +
-                 `Quer o **link** pra finalizar?`;
+    const note = `Rende ${fx.applications}. Quer o **link** pra finalizar?`;
     return { reply: tagReply(settings, `${priceLine} ${note}`, "flow/offer"), next: "fechamento" };
   }
 
+  // Pitch consultivo
   const pitch =
     `Pelo que me contou, essa progressiva bate certinho com teu objetivo, ${callUser(state)}. ` +
-    `Resultado de salão e aplicação prática em casa. Quer que eu já te envie o **link**?`;
+    `Resultado de salão e aplicação prática em casa. Quer que eu já te encaminhe o **link seguro** pra fechar?`;
   return { reply: tagReply(settings, pitch, "flow/offer"), next: "fechamento" };
 }

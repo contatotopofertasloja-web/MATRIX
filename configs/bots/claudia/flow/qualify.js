@@ -21,6 +21,7 @@ export default async function qualify(ctx) {
   const { text = "", state, settings } = ctx;
   state.turns = (state.turns || 0) + 1;
 
+  // Saltos rápidos
   if (RX_LINK.test(text)) {
     state.link_allowed = true;
     return { reply: tagReply(settings, "Te envio o **link seguro** agora mesmo, tá? 💛", "flow/qualify"), next: "fechamento" };
@@ -30,6 +31,7 @@ export default async function qualify(ctx) {
     return { reply: tagReply(settings, "Já te passo o valor e as condições 👌", "flow/qualify"), next: "oferta" };
   }
 
+  // Slot-filling leve
   smartFill(state, text);
 
   const pending = nextQuestion(state);
@@ -43,6 +45,9 @@ export default async function qualify(ctx) {
     return { reply: tagReply(settings, "Me dá só essa info rapidinho pra eu te orientar certinho 😊", "flow/qualify"), next: "qualificacao" };
   }
 
-  const nome = callUser(state);
-  return { reply: tagReply(settings, `Fechado, ${nome}! Já preparo a oferta certeira pra ti.`, "flow/qualify"), next: "oferta" };
+  // Coletou o necessário → oferta
+  return {
+    reply: tagReply(settings, `Perfeito, ${callUser(state)}! Com base no que me disse, acho que já consigo te recomendar certinho.`, "flow/qualify"),
+    next: "oferta",
+  };
 }

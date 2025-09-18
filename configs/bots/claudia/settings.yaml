@@ -1,5 +1,4 @@
-﻿# configs/bots/claudia/settings.yaml
-bot_id: claudia
+﻿bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -28,22 +27,20 @@ media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 flags:
-
-  flow_only: true
-  debug_trace_replies: true
+  # Debug/roteamento
   debug_log_router: true
+  debug_trace_replies: true
 
-  # ... (suas flags atuais)
-  debug_log_router: true        # loga pick/saída do router
-  debug_trace_replies: true     # mantém os "carimbos" enquanto testamos
-  flow_only: true               # força core → flow; prompts só sob demanda
-  disable_prompt_tools: true    # só por redundância; bloqueia uso de tools por prompt
+  # Confinamento ao flow
+  flow_only: true
+  disable_prompt_tools: true
 
+  # Operação
   has_cod: true
   send_opening_photo: true
   guardrails_strict: true
   use_telemetry: true
-  use_thompson: true          # fica inerte se o core não usar
+  use_thompson: true
   allow_audio_in: true
   allow_audio_out: false
   small_talk_soften: true
@@ -83,7 +80,7 @@ messages:
   offer_templates:
     - "É *Progressiva Vegetal* por **R${{price_target}}**. Rende até **{{product.applications_up_to}} aplicações**. Quer que eu te envie o link do checkout?"
   objection_handles:
-    - "Super entendo! Já são mais de {{sold_count}} unidades vendidas ✅. Posso te resumir o modo de uso em 10s."
+    - "Super entendo! Já são mais de {{marketing.sold_count}} unidades vendidas ✅. Posso te resumir o modo de uso em 10s."
   closing:
     - "Perfeito! Te envio o link seguro do checkout. Pagamento na entrega (COD)."
 

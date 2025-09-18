@@ -1,17 +1,23 @@
 // configs/bots/claudia/flow/_state.js
-// (base preservada)
+// Estado curto + helpers: saudação carinhosa, números fixos, resumo de endereço e carimbo (flow/*)
+
 export function initialState() {
   return {
+    // identificação & qualificação
     nome: null,
     apelido: null,
-    tipo_cabelo: null,
-    objetivo: null,
-    asked_price_once: false,
-    asked_name_once: false,
-    asked_hair_once: false,
-    consent_checkout: false,
+    hair_type: null,          // liso | ondulado | cacheado | crespo
+    had_prog_before: null,    // boolean | null
+    goal: null,               // "liso" | "alinhado" | "reduzir frizz"...
+    // intenções rápidas
     price_allowed: false,
+    link_allowed: false,
+    consent_checkout: false,
+    // rastros
     turns: 0,
+    stage: "recepcao",
+    last_intent: null,
+    // fechamento
     telefone: null,
     cep: null,
     rua: null,
@@ -21,8 +27,10 @@ export function initialState() {
     cidade: null,
     uf: null,
     referencia: null,
-    stage: "recepcao",
-    last_intent: null,
+    // anti-loop
+    __sent_opening_photo: false,
+    last_offer_at: 0,
+    last_link_at: 0,
   };
 }
 
@@ -45,51 +53,49 @@ function numEnv(name, fallback) {
 
 export function getFixed(settings = {}) {
   const s = settings || {};
-  const empresa = s.company_name || "TopOfertas";
-  const hora = `${s?.business?.hours_start || "06:00"}–${s?.business?.hours_end || "21:00"}`;
-  const sorteioOn = !!s?.sweepstakes?.enabled;
-  const sorteioTeaser = (s?.sweepstakes?.messages?.teaser || [])[0] || "Atualmente, não temos sorteios ativos.";
-
+  const empresa = (s.company && s.company.name) || "TopOfertas";
+  const hours = (s.company && s.company.hours) || "06:00–21:00";
   const product = s.product || {};
+
   const priceOriginal = numEnv("PRICE_ORIGINAL", product.price_original ?? 197);
   const priceTarget   = numEnv("PRICE_TARGET",   product.price_target   ?? 170);
 
   return {
     empresa,
-    hora,
-    sorteioOn,
-    sorteioTeaser,
+    hours,
     priceOriginal,
     priceTarget,
-    applications: product.applications_range || "até 10 aplicações",
-    duration: product.duration_avg || "em média 3 meses",
+    applications: product.applications_up_to ? `até ${product.applications_up_to} aplicações` : "várias aplicações",
+    duration: product.duration_avg || "de 2 a 3 meses",
     soldCount: s?.marketing?.sold_count || 40000,
     hasCOD: !!s?.flags?.has_cod,
   };
 }
 
-export function summarizeAddress(st) {
-  const p = [];
-  if (st.rua) p.push(st.rua);
-  if (st.numero) p.push(`nº ${st.numero}`);
-  const a = [];
-  if (st.bairro) a.push(st.bairro);
-  if (st.cidade && st.uf) a.push(`${st.cidade}/${st.uf}`);
-  const linha1 = p.join(", ");
-  const linha2 = a.join(" – ");
+export function summarizeAddress(st = {}) {
+  const p1 = [];
+  if (st.rua) p1.push(st.rua);
+  if (st.numero) p1.push(`nº ${st.numero}`);
+  const p2 = [];
+  if (st.bairro) p2.push(st.bairro);
+  if (st.cidade && st.uf) p2.push(`${st.cidade}/${st.uf}`);
   const comp = st.complemento ? ` (${st.complemento})` : "";
-  return `${linha1}${comp}${linha2 ? " – " + linha2 : ""} ${st.cep ? " • CEP " + st.cep : ""}`.trim();
+  const linha1 = p1.join(", ");
+  const linha2 = p2.join(" – ");
+  return [linha1 + comp, linha2].filter(Boolean).join(" – ");
 }
 
-/** Compat helpers já existentes */
-export function listingConsent(state = {}) { return !!state?.consent_checkout; }
-export function isAwaitingConsent(state = {}) { return !listingConsent(state); }
-export const isAwatingConsent = isAwaitingConsent;
-export const isAwaitingCheckout = isAwaitingConsent;
+export function isAwaitingConsent(state = {}) {
+  return state && state.consent_checkout === true;
+}
 
-/** 🔎 NOVO: carimbo da origem, controlado por flags.debug_trace_replies */
-export function tagReply(settings = {}, text = "", origin = "") {
-  const on = settings?.flags?.debug_trace_replies === true;
-  if (!on || !origin) return String(text || "");
-  return `${String(text || "")} (${origin})`;
+/** Carimba a saída com (flow/<tag>) e aplica guardrails leves */
+export function tagReply(settings = {}, text = "", tag = "flow") {
+  const allow = new Set(
+    (settings?.guardrails?.allowed_links || [])
+      .map(String)
+      .filter((u) => /^https?:\/\//i.test(u))
+  );
+  const safe = String(text || "").replace(/https?:\/\/\S+/gi, (u) => (allow.has(u) ? u : "[link removido]"));
+  return `${safe} (${tag})`;
 }

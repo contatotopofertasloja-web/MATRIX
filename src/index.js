@@ -1,6 +1,6 @@
-﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox/Direct + ASR + TTS + LLM + Promo Admin)
-// Core neutro. Filtra JSON do LLM, aplica guardrails de link e suporta áudio end-to-end.
-// + Anti-spam por contato (cooldown) e idempotência simples por mensagem.
+﻿// src/index.js — Matrix IA 2.0 (HTTP + WPP + Outbox/Direct + ASR + TTS + LLM + Proveniência + Confinamento por flow)
+// Core neutro. Filtra JSON do LLM, aplica guardrails de link, controla áudio end-to-end.
+// + Anti-spam, idempotência curta e rastreio leve (trace buffer em memória).
 
 import express from 'express';
 import cors from 'cors';
@@ -35,13 +35,13 @@ try {
   console.warn('[TTS] módulo ausente — respostas por áudio desabilitadas.');
 }
 
-// ===== Promoções (sorteio): dynamic import p/ não quebrar caso ausente
+// ===== Promoções (sorteio): import dinâmico
 let promotions = null;
 try {
   const pmod = await import('./core/promotions.js');
   promotions = pmod?.default || pmod;
 } catch {
-  console.warn('[promotions] módulo ausente — endpoints e enroll seguirão sem erro.');
+  console.warn('[promotions] módulo ausente — endpoints seguirão sem erro.');
 }
 
 // ===== App/ENV
@@ -61,13 +61,12 @@ const envNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 // === ENV principais ===
 const PORT = envNum(process.env.PORT, 8080);
 const HOST = process.env.HOST || '0.0.0.0';
-const ADAPTER_NAME = String(process.env.WPP_ADAPTER || 'baileys');
 const OPS_TOKEN = process.env.OPS_TOKEN || process.env.ADMIN_TOKEN || '';
 
-const ECHO_MODE = envBool(process.env.ECHO_MODE, false);
-let intakeEnabled = envBool(process.env.INTAKE_ENABLED, true);
-let sendEnabled = envBool(process.env.SEND_ENABLED, true);
-let DIRECT_SEND = envBool(process.env.DIRECT_SEND, true);
+const ECHO_MODE     = envBool(process.env.ECHO_MODE, false);
+let intakeEnabled   = envBool(process.env.INTAKE_ENABLED, true);
+let sendEnabled     = envBool(process.env.SEND_ENABLED, true);
+let DIRECT_SEND     = envBool(process.env.DIRECT_SEND, true);
 
 // Anti-spam (ajustável por ENV)
 const MIN_GAP_PER_CONTACT_MS = envNum(process.env.QUEUE_OUTBOX_MIN_GAP_MS, 2500);
@@ -84,12 +83,29 @@ const outbox = await createOutbox({
   redisUrl: REDIS_MAIN_URL,
 });
 
-// ==== Auth de operações admin (promo/export/draw/logs)
-function requireOpsAuth(req, res, next) {
-  const token = req.get('X-Ops-Token') || (req.query?.token ?? '');
-  if (!OPS_TOKEN) return res.status(403).json({ ok: false, error: 'OPS_TOKEN unset' });
-  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok: false, error: 'unauthorized' });
-  next();
+await outbox.start(async (job) => {
+  const { to, kind = 'text', payload = {} } = job || {};
+  await sendViaAdapter(to, kind, payload);
+});
+
+// =================== Flows/Hooks ===================
+const flows = await loadFlows(BOT_ID);
+const hooks = await getBotHooks();
+
+// =================== Proveniência & Trace ===================
+const TRACE_MAX = 800;
+const traceBuf = []; // { ts, from, text_in, source, preview, intent, stage, path }
+function pushTrace(entry) {
+  traceBuf.push({ ts: Date.now(), ...entry });
+  if (traceBuf.length > TRACE_MAX) traceBuf.splice(0, traceBuf.length - TRACE_MAX);
+}
+
+function tag(text, sourceTag) {
+  const s = String(text || '');
+  if (!s.trim()) return s;
+  // Se já tiver carimbo (parenteses no final), preserva:
+  if (/\)\s*$/.test(s) && /\([^)]+?\)\s*$/.test(s)) return s;
+  return `${s} (${sourceTag})`;
 }
 
 // =================== Helpers de envio ===================
@@ -134,71 +150,7 @@ async function enqueueOrDirect({ to, kind = 'text', payload = {} }) {
   }
 }
 
-await outbox.start(async (job) => {
-  const { to, kind = 'text', payload = {} } = job || {};
-  await sendViaAdapter(to, kind, payload);
-});
-
-// =================== Flows/Hooks ===================
-const flows = await loadFlows(BOT_ID);
-const hooks = await getBotHooks();
-
-// Anti-duplicação de mídia de abertura e anti-spam
-const sentOpening = new Set();                 // já mandou mídia de abertura p/ esse JID?
-const lastSentAt  = new Map();                 // timestamp da última resposta por JID
-const lastHash    = new Map();                 // hash curto do último inbound por JID
-const processedIds = new Set();                // idempotência curta (TTL manual)
-
-// GC simples do processedIds
-setInterval(() => {
-  if (processedIds.size > 5000) processedIds.clear();
-}, 60_000).unref();
-
-// =================== ASR helpers ===================
-async function tryGetAudioBuffer(raw) {
-  try {
-    if (typeof adapter?.getAudioBuffer === 'function') return await adapter.getAudioBuffer(raw);
-    if (typeof adapter?.downloadMedia === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
-    return null;
-  } catch (e) {
-    console.warn('[ASR] tryGetAudioBuffer:', e?.message || e);
-    return null;
-  }
-}
-async function transcribeIfPossible(buf, mime = 'audio/ogg') {
-  if (!buf || typeof transcribeAudio !== 'function') return null;
-  try {
-    return await transcribeAudio({
-      buffer: buf,
-      mimeType: mime,
-      provider: settings?.audio?.asrProvider || 'openai',
-      model: settings?.audio?.asrModel || 'whisper-1',
-      language: settings?.audio?.language || 'pt',
-    });
-  } catch (e) {
-    console.warn('[ASR] transcribeIfPossible:', e?.message || e);
-    return null;
-  }
-}
-function isAudioMessage(raw) {
-  try { return !!raw?.message?.audioMessage; } catch { return false; }
-}
-
-// =================== TTS helpers ===================
-async function ttsIfPossible(text) {
-  if (!text || typeof ttsSpeak !== 'function') return null;
-  try {
-    const voice = settings?.audio?.ttsVoice || 'alloy';
-    const lang  = settings?.audio?.language || 'pt';
-    const out = await ttsSpeak({ text, voice, language: lang, format: 'ogg' });
-    if (out?.buffer?.byteLength) return { buffer: out.buffer, mime: out.mime || 'audio/ogg' };
-  } catch (e) {
-    console.warn('[TTS] synth fail:', e?.message || e);
-  }
-  return null;
-}
-
-// =================== Guardrails / JSON filter ===================
+// =================== JSON/links sanitização ===================
 function get(obj, path) {
   return String(path || '')
     .split('.')
@@ -252,7 +204,7 @@ function prepareOutboundText(llmOut) {
   return sanitizeLinks(reply);
 }
 
-// Utilidades anti-spam
+// Utilidades anti-spam/idem
 const hash = (s) => {
   let h = 0; const str = String(s || '');
   for (let i=0;i<str.length;i++) { h = (h*31 + str.charCodeAt(i)) | 0; }
@@ -278,6 +230,45 @@ async function deliverReply({ to, text, wantAudio = false }) {
   await enqueueOrDirect({ to, payload: { text: cleanText } });
 }
 
+// =================== ASR/TTS helpers ===================
+async function tryGetAudioBuffer(raw) {
+  try {
+    if (typeof adapter?.getAudioBuffer === 'function') return await adapter.getAudioBuffer(raw);
+    if (typeof adapter?.downloadMedia === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
+    return null;
+  } catch (e) {
+    console.warn('[ASR] tryGetAudioBuffer:', e?.message || e);
+    return null;
+  }
+}
+async function transcribeIfPossible(buf, mime = 'audio/ogg') {
+  if (!buf || typeof transcribeAudio !== 'function') return null;
+  try {
+    return await transcribeAudio({
+      buffer: buf,
+      mimeType: mime,
+      provider: settings?.audio?.asrProvider || 'openai',
+      model: settings?.audio?.asrModel || 'whisper-1',
+      language: settings?.audio?.language || 'pt',
+    });
+  } catch (e) {
+    console.warn('[ASR] transcribeIfPossible:', e?.message || e);
+    return null;
+  }
+}
+async function ttsIfPossible(text) {
+  if (!text || typeof ttsSpeak !== 'function') return null;
+  try {
+    const voice = settings?.audio?.ttsVoice || 'alloy';
+    const lang  = settings?.audio?.language || 'pt';
+    const out = await ttsSpeak({ text, voice, language: lang, format: 'ogg' });
+    if (out?.buffer?.byteLength) return { buffer: out.buffer, mime: out.mime || 'audio/ogg' };
+  } catch (e) {
+    console.warn('[TTS] synth fail:', e?.message || e);
+  }
+  return null;
+}
+
 // =================== Handler principal ===================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
@@ -289,10 +280,8 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     if (mid) {
       if (processedIds.has(mid)) return '';
       processedIds.add(mid);
-      // TTL curto
       setTimeout(() => processedIds.delete(mid), 3 * 60_000).unref();
     } else {
-      // Sem id → evita duplicados toscos (hash de texto por 3s)
       const h = `${from}:${hash(text)}`;
       if (lastHash.get(from) === h && (now - (lastSentAt.get(from) || 0)) < 3000) return '';
       lastHash.set(from, h);
@@ -301,7 +290,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     // mídia de abertura (1x por contato)
     if (!sentOpening.has(from)) {
       const media = await hooks.openingMedia({ settings });
-      if (media?.url) {
+      if (media?.url && settings?.flags?.send_opening_photo !== false) {
         await enqueueOrDirect({
           to: from,
           kind: 'image',
@@ -313,14 +302,16 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
 
     // echo
     if (ECHO_MODE && text) {
-      await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } });
+      const stamped = tag(`Echo: ${text}`, 'echo');
+      await enqueueOrDirect({ to: from, payload: { text: stamped } });
       lastSentAt.set(from, now);
+      pushTrace({ from, text_in: text, source: 'echo', preview: stamped.slice(0,120), intent: 'echo', stage: 'echo', path: 'direct' });
       return '';
     }
 
     // texto base (ou ASR p/ áudio)
     let msgText = (text || '').trim();
-    const incomingIsAudio = isAudioMessage(raw);
+    const incomingIsAudio = !!raw?.message?.audioMessage;
     if (hasMedia && !msgText && incomingIsAudio) {
       const buf = await tryGetAudioBuffer(raw);
       const asr = buf ? await transcribeIfPossible(buf) : null;
@@ -328,12 +319,9 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) return '';
 
-    // --------- Cooldown por contato (anti-metralhadora) ---------
+    // --------- Cooldown por contato ---------
     const last = lastSentAt.get(from) || 0;
-    if (now - last < MIN_GAP_PER_CONTACT_MS) {
-      // segura silenciosamente se ainda estamos no cool-down
-      return '';
-    }
+    if (now - last < MIN_GAP_PER_CONTACT_MS) return '';
 
     // webhook-like por texto (pós-venda)
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
@@ -343,45 +331,79 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
         send: async (to, t) => enqueueOrDirect({ to, payload: { text: t } }),
       });
       lastSentAt.set(from, Date.now());
+      pushTrace({ from, text_in: msgText, source: 'hook:payment', preview: 'onPaymentConfirmed', intent: 'postsale', stage: 'posvenda', path: 'direct' });
       return '';
     }
 
-    // Orquestrador LLM (primeiro)
+    // --------- Roteamento com confinamento por flow ---------
+    const flowOnly = !!settings?.flags?.flow_only;
+    const wantAudio = incomingIsAudio;
+    const userIntent = intentOf(msgText);
+
+    let used = 'unknown';
     let reply = '';
-    try {
-      const intent = intentOf(msgText) || 'qualify';
-      reply = await orchestrate({ jid: from, text: msgText, stageHint: intent, botSettings: settings });
-    } catch (e) {
-      console.warn('[orchestrator] erro:', e?.message || e);
+
+    // 1) FLOW RUNNER (configs/bots/<bot>/flow/index.js -> handle())
+    const hasFlowRunner = typeof flows?.__handle === 'function' || typeof flows?.handle === 'function';
+    if (hasFlowRunner) {
+      const handleFn = flows.__handle || flows.handle;
+      const out = await handleFn({ jid: from, text: msgText, settings, state: sessionState(from), send: (to, t) => deliverReply({ to, text: t, wantAudio }) });
+      reply = out?.reply || '';
+      used = 'flow/index';
+    } else {
+      // 2) FLOW UNITÁRIO via loader.__route() ou intent→map
+      let flowObj = null;
+      try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText, settings, from); } catch {}
+      if (!flowObj) flowObj = flows?.[userIntent] || flows?.greet;
+
+      if (flowObj?.run) {
+        const send = async (to, t) => deliverReply({ to, text: String(t || ''), wantAudio });
+        await flowObj.run({ jid: from, text: msgText, settings, send, state: sessionState(from) });
+        used = `flow/${flowObj?.name || userIntent}`;
+      }
     }
 
     if (reply && reply.trim()) {
-      await deliverReply({ to: from, text: reply, wantAudio: incomingIsAudio });
+      const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(reply), used.startsWith('flow') ? used.replace('flow','flow') : 'flow') : prepareOutboundText(reply);
+      await deliverReply({ to: from, text: stamped, wantAudio });
       lastSentAt.set(from, Date.now());
+      pushTrace({ from, text_in: msgText, source: used, preview: stamped.slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
       return '';
     }
 
-    // Fallback — flows determinísticos
-    let flowObj = null;
-    try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText, settings, from); } catch {}
-    if (!flowObj) flowObj = flows?.[intentOf(msgText) || 'greet'];
+    // 3) Se não tem flow ou não respondeu e NÃO está em flow_only → Orquestrador LLM
+    if (!flowOnly) {
+      try {
+        const replyLLM = await orchestrate({ jid: from, text: msgText, stageHint: userIntent, botSettings: settings });
+        if (replyLLM && replyLLM.trim()) {
+          const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(replyLLM), 'llm/orchestrator') : prepareOutboundText(replyLLM);
+          await deliverReply({ to: from, text: stamped, wantAudio });
+          lastSentAt.set(from, Date.now());
+          pushTrace({ from, text_in: msgText, source: 'llm/orchestrator', preview: stamped.slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
+          return '';
+        }
+      } catch (e) {
+        console.warn('[orchestrator] erro:', e?.message || e);
+      }
+    }
 
-    if (flowObj?.run) {
-      const send = async (to, t) => deliverReply({ to, text: String(t || ''), wantAudio: incomingIsAudio });
-      await flowObj.run({ jid: from, text: msgText, settings, send });
+    // 4) Fallback final LLM "texto solto" (apenas se NÃO flow_only)
+    if (!flowOnly) {
+      const { system, user } = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
+      const { text: fb } = await callLLM({ stage: 'qualify', system, prompt: user });
+      const stamped = settings?.flags?.debug_trace_replies ? tag(fb || 'Posso te explicar rapidamente como funciona e o valor?', 'llm/freeform') : (fb || 'Posso te explicar rapidamente como funciona e o valor?');
+      await deliverReply({ to: from, text: stamped, wantAudio });
       lastSentAt.set(from, Date.now());
+      pushTrace({ from, text_in: msgText, source: 'llm/freeform', preview: stamped.slice(0,120), intent: userIntent, stage: 'qualificacao', path: DIRECT_SEND ? 'direct' : 'outbox' });
       return '';
     }
 
-    // Fallback final LLM "texto solto"
-    const { system, user } = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
-    const { text: fb } = await callLLM({ stage: 'qualify', system, prompt: user });
-    await deliverReply({
-      to: from,
-      text: fb || 'Posso te explicar rapidamente como funciona e o valor?',
-      wantAudio: incomingIsAudio,
-    });
+    // 5) Sem nada → fallback mínimo
+    const fb = await hooks.fallbackText({ stage: 'error', message: msgText, settings });
+    const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(fb), 'hooks') : prepareOutboundText(fb);
+    await enqueueOrDirect({ to: from, payload: { text: stamped } });
     lastSentAt.set(from, Date.now());
+    pushTrace({ from, text_in: msgText, source: 'hooks', preview: stamped.slice(0,120), intent: userIntent, stage: 'error', path: DIRECT_SEND ? 'direct' : 'outbox' });
     return '';
   } catch (e) {
     console.error('[onMessage]', e);
@@ -391,6 +413,21 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   }
 });
 
+// ======= Estado curto por JID (slots simples em memória)
+const _state = new Map();
+function sessionState(jid) {
+  const s = _state.get(jid) || {};
+  _state.set(jid, s);
+  return s;
+}
+
+// Anti-duplicação de mídia de abertura e anti-spam
+const sentOpening = new Set();
+const lastSentAt  = new Map();
+const lastHash    = new Map();
+const processedIds = new Set();
+setInterval(() => { if (processedIds.size > 5000) processedIds.clear(); }, 60_000).unref();
+
 // =================== Rotas HTTP ===================
 const limiter = rateLimit({
   windowMs: 60_000,
@@ -399,12 +436,18 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
+function requireOpsAuth(req, res, next) {
+  const token = req.get('X-Ops-Token') || (req.query?.token ?? '');
+  if (!OPS_TOKEN) return res.status(403).json({ ok: false, error: 'OPS_TOKEN unset' });
+  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  next();
+}
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'Matrix IA 2.0',
     bot: BOT_ID,
-    adapter: ADAPTER_NAME,
     ready: wppReady(),
     env: process.env.NODE_ENV || 'production',
     ops: { intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND },
@@ -415,7 +458,6 @@ app.get('/wpp/health', (_req, res) => {
   res.json({
     ok: true,
     ready: wppReady(),
-    adapter: ADAPTER_NAME,
     session: process.env.WPP_SESSION || 'default',
     backend: outbox.backend(),
     topic: OUTBOX_TOPIC,
@@ -440,7 +482,7 @@ app.get('/wpp/qr', async (req, res) => {
       res.setHeader('Content-Type', 'image/png');
       return res.send(buf);
     }
-    res.json({ ok: true, qr: dataURL, bot: BOT_ID, adapter: ADAPTER_NAME });
+    res.json({ ok: true, qr: dataURL, bot: BOT_ID });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -473,7 +515,7 @@ app.post('/wpp/send', limiter, async (req, res) => {
   }
 });
 
-// ===== Webhook de pagamento + inscrição em promoções =====
+// ===== Webhook de pagamento + promoções =====
 app.post('/webhook/payment', async (req, res) => {
   try {
     const headerToken = req.get('X-Webhook-Token');
@@ -509,10 +551,17 @@ app.post('/webhook/payment', async (req, res) => {
   }
 });
 
-// ===== Endpoints Admin de Promoções =====
-app.get('/ops/promo/export', requireOpsAuth, (req, res) => {
+// ===== Promo admin =====
+function requireOps(req, res, next) {
+  const token = req.get('X-Ops-Token') || (req.query?.token ?? '');
+  if (!OPS_TOKEN) return res.status(403).json({ ok: false, error: 'OPS_TOKEN unset' });
+  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  next();
+}
+
+app.get('/ops/promo/export', requireOps, (req, res) => {
   try {
-    const month = (req.query?.month || '').toString() || undefined; // YYYY-MM ou mês corrente
+    const month = (req.query?.month || '').toString() || undefined;
     if (!promotions || typeof promotions.exportMonth !== 'function') {
       return res.status(501).json({ ok: false, error: 'promotions module not installed' });
     }
@@ -523,7 +572,7 @@ app.get('/ops/promo/export', requireOpsAuth, (req, res) => {
   }
 });
 
-app.post('/ops/promo/draw', requireOpsAuth, (req, res) => {
+app.post('/ops/promo/draw', requireOps, (req, res) => {
   try {
     const month = (req.body?.month || req.query?.month || '').toString() || undefined;
     const n = Number(req.body?.n || req.query?.n || 3);
@@ -537,7 +586,7 @@ app.post('/ops/promo/draw', requireOpsAuth, (req, res) => {
   }
 });
 
-app.get('/ops/promo/months', requireOpsAuth, (req, res) => {
+app.get('/ops/promo/months', requireOps, (req, res) => {
   try {
     if (!promotions || typeof promotions.monthsAvailable !== 'function') {
       return res.status(501).json({ ok: false, error: 'promotions module not installed' });
@@ -550,7 +599,7 @@ app.get('/ops/promo/months', requireOpsAuth, (req, res) => {
   }
 });
 
-app.get('/ops/promo/logs', requireOpsAuth, (req, res) => {
+app.get('/ops/promo/logs', requireOps, (req, res) => {
   try {
     const n = Number(req.query?.n || 200);
     const grep = (req.query?.grep || '').toString();
@@ -565,22 +614,27 @@ app.get('/ops/promo/logs', requireOpsAuth, (req, res) => {
   }
 });
 
-app.post('/inbound', async (req, res) => {
-  try {
-    const { to, text } = req.body || {};
-    const jid = String(to || '').trim();
-    const msg = String(text || '').trim();
-    if (!jid || !msg) return res.status(400).json({ ok: false, error: 'Informe { to, text }' });
-    await enqueueOrDirect({ to: jid, payload: { text: prepareOutboundText(msg) } });
-    res.json({ ok: true, enqueued: true, path: DIRECT_SEND ? 'direct' : 'outbox' });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
+// ===== Debug/trace leve =====
+app.get('/debug/last', requireOpsAuth, (req, res) => {
+  const limit = Math.max(1, Math.min(500, Number(req.query?.limit || 50)));
+  const from = (req.query?.from || '').toString();
+  const rows = traceBuf
+    .filter(r => !from || r.from === from)
+    .slice(-limit)
+    .reverse();
+  res.json({ ok: true, count: rows.length, rows });
+});
+
+app.get('/debug/metrics', requireOpsAuth, (_req, res) => {
+  const counts = traceBuf.reduce((acc, r) => {
+    acc[r.source] = (acc[r.source] || 0) + 1;
+    return acc;
+  }, {});
+  res.json({ ok: true, sources: counts, total: traceBuf.length });
 });
 
 // ===== Boot do WhatsApp e HTTP =====
 await wppInit({ onQr: () => {} });
-
 const server = app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`);
 });
@@ -588,20 +642,10 @@ const server = app.listen(PORT, HOST, () => {
 // ===== Shutdown limpo (SIGINT/SIGTERM) =====
 async function gracefulClose(signal) {
   console.log(`[shutdown] signal=${signal}`);
-  try {
-    await stopOutboxWorkers();
-  } catch (e) {
-    console.warn('[shutdown] stopOutboxWorkers error:', e?.message || e);
-  }
-
-  try {
-    await new Promise((resolve) => server?.close?.(() => resolve()));
-    console.log('[http] closed');
-  } catch {}
-
+  try { await stopOutboxWorkers(); } catch (e) { console.warn('[shutdown] stopOutboxWorkers:', e?.message || e); }
+  try { await new Promise((resolve) => server?.close?.(() => resolve())); console.log('[http] closed'); } catch {}
   try { adapter?.close?.(); } catch {}
   try { outbox?.stop?.(); } catch {}
-
   setTimeout(() => process.exit(0), 1500).unref();
 }
 process.once('SIGINT',  () => { gracefulClose('SIGINT');  });

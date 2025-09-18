@@ -23,10 +23,10 @@ const RX = {
 function smartFill(state, textRaw) {
   const text = String(textRaw || "").trim();
   if (!text) return;
-  if (!state.telefone) { const m = text.match(RX.telefone); if (m) state.telefone = `(${m.groups.ddd}) ${m.groups.p1}-${m.groups.p2}`; }
-  if (!state.cep)      { const m = text.match(RX.cep);      if (m) state.cep = `${m.groups.cep}-${m.groups.suf}`; }
-  if (!state.numero)   { const m = text.match(RX.numero);   if (m) state.numero = m.groups.num; }
-  if (!state.uf)       { const m = text.toUpperCase().match(RX.uf); if (m) state.uf = m.groups.uf; }
+  if (!state.telefone) { const m = text.match(RX.telefone); if (m?.groups) state.telefone = `(${m.groups.ddd}) ${m.groups.p1}-${m.groups.p2}`; }
+  if (!state.cep)      { const m = text.match(RX.cep);      if (m?.groups) state.cep = `${m.groups.cep}-${m.groups.suf}`; }
+  if (!state.numero)   { const m = text.match(RX.numero);   if (m?.groups) state.numero = m.groups.num; }
+  if (!state.uf)       { const m = text.toUpperCase().match(RX.uf); if (m?.groups) state.uf = m.groups.uf; }
 
   if (!state.rua)       { const r = text.match(/(?:rua|av\.?|avenida|travessa|alameda)\s+([^,|\n]+)/i); if (r) state.rua = r[0].trim(); }
   if (!state.bairro)    { const b = text.match(/\b(bairro|jd\.?|jardim|centro|vila)\b[^,\n]*/i); if (b) state.bairro = b[0].replace(/^(bairro\s*)/i, "").trim(); }
@@ -41,28 +41,25 @@ export default async function close(ctx) {
   const { text = "", state, settings } = ctx;
   state.turns = (state.turns || 0) + 1;
 
-  if (state.__send_link_on_close_once !== true && (state.link_allowed || /link|checkout/i.test(text))) {
+  // Se cliente pedir link novamente, envie 1x no início do fechamento
+  if (state.__send_link_on_close_once !== true && (state.link_allowed || /\b(link|checkout)\b/i.test(text))) {
     state.__send_link_on_close_once = true;
     const link = settings?.product?.checkout_link || "";
-    return { reply: tagReply(settings, `Segue o **link seguro do checkout**: ${link}\nQualquer dúvida, tô aqui 💛`, "flow/close"), next: "fechamento" };
+    return { reply: tagReply(settings, `Prontinho! **Checkout seguro**: ${link}`, "flow/close"), next: "fechamento" };
   }
 
   smartFill(state, text);
 
   const missing = nextMissing(state);
   if (missing) {
-    const now = Date.now();
-    const tag = `__asked_${missing.key}_at`;
-    if (!state[tag] || (now - state[tag]) > 60_000) {
-      state[tag] = now;
-      return { reply: tagReply(settings, missing.q, "flow/close"), next: "fechamento" };
-    }
-    return { reply: tagReply(settings, `Me passa isso rapidinho pra eu confirmar teu pedido 😉`, "flow/close"), next: "fechamento" };
+    return { reply: tagReply(settings, missing.q, "flow/close"), next: "fechamento" };
   }
 
+  // Resumo & consent
   const resumo = summarizeAddress(state);
+  state.consent_checkout = true;
   return {
-    reply: tagReply(settings, `Perfeito, ${callUser(state)}! Confere:\n${resumo}\n\nConfirmo teu pedido COD agora?`, "flow/close"),
-    next: "posvenda",
+    reply: tagReply(settings, `Confere seus dados para o COD:\n${resumo}\nSe estiver ok, me diga "confirmo" que eu finalizo aqui pra você.`, "flow/close"),
+    next: "fechamento",
   };
 }
