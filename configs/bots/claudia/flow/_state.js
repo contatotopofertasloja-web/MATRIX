@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/_state.js
-// Estado curto + helpers: saudação carinhosa, números fixos, resumo de endereço e carimbo (flow/*)
+// Estado curto + helpers + carimbo (flow/*) com whitelist de links.
 
 export function initialState() {
   return {
@@ -9,14 +9,17 @@ export function initialState() {
     hair_type: null,          // liso | ondulado | cacheado | crespo
     had_prog_before: null,    // boolean | null
     goal: null,               // "liso" | "alinhado" | "reduzir frizz"...
+
     // intenções rápidas
     price_allowed: false,
     link_allowed: false,
     consent_checkout: false,
+
     // rastros
     turns: 0,
     stage: "recepcao",
     last_intent: null,
+
     // fechamento
     telefone: null,
     cep: null,
@@ -27,6 +30,7 @@ export function initialState() {
     cidade: null,
     uf: null,
     referencia: null,
+
     // anti-loop
     __sent_opening_photo: false,
     last_offer_at: 0,
@@ -89,13 +93,17 @@ export function isAwaitingConsent(state = {}) {
   return state && state.consent_checkout === true;
 }
 
-/** Carimba a saída com (flow/<tag>) e aplica guardrails leves */
+/** Carimba a saída com (flow/<tag>) e aplica guardrails com whitelist de links */
 export function tagReply(settings = {}, text = "", tag = "flow") {
-  const allow = new Set(
-    (settings?.guardrails?.allowed_links || [])
-      .map(String)
+  const wl = new Set(
+    [
+      settings?.product?.checkout_link,
+      settings?.product?.site_url,
+      ...(settings?.guardrails?.allowed_links || []),
+    ]
+      .map((u) => String(u || ""))
       .filter((u) => /^https?:\/\//i.test(u))
   );
-  const safe = String(text || "").replace(/https?:\/\/\S+/gi, (u) => (allow.has(u) ? u : "[link removido]"));
+  const safe = String(text || "").replace(/https?:\/\/\S+/gi, (u) => (wl.has(u) ? u : "[link removido]"));
   return `${safe} (${tag})`;
 }

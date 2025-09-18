@@ -3,9 +3,11 @@ import { callUser, getFixed, tagReply } from "./_state.js";
 
 function norm(s = "") { return String(s || "").toLowerCase(); }
 
-export function match(text = "", settings = {}) {
+export function match(text = "", _settings = {}) {
   const t = norm(text);
   return (
+    /entrega(s)?|frete|prazo|s[ãa]o paulo|sp\b/.test(t) ||
+    /pix|cart[aã]o|boleto|pagamento|na entrega/.test(t) ||
     /nome do produto|qual\s*é\s*o\s*produto|como\s*se\s*chama\s*o\s*produto/.test(t) ||
     /empresa|voc[eê]s\s*s[ãa]o\s*quem|nome\s*da\s*empresa/.test(t) ||
     /hor[aá]rio|atendem|funciona\s*at[eé]\s*quando|que\s*horas\s*voc[eê]s\s*abrem|fecha/.test(t) ||
@@ -23,6 +25,19 @@ export default async function faq(ctx) {
   state.turns = (state.turns || 0) + 1;
   const fx = getFixed(settings);
   const t = norm(text);
+
+  // Entrega / SP
+  if (/entrega(s)?|frete|prazo|s[ãa]o paulo|sp\b/.test(t)) {
+    const sla = settings?.product?.delivery_sla || {};
+    const msg = `Entregamos em São Paulo e região. Prazo médio: **${sla.capitals_hours ?? 24}h** capitais / **${sla.others_hours ?? 72}h** demais locais.`;
+    return { reply: tagReply(settings, msg, "flow/faq"), next: "oferta" };
+  }
+
+  // Pagamentos (PIX, cartão, COD)
+  if (/pix|cart[aã]o|boleto|pagamento|na entrega/.test(t)) {
+    const msg = `Temos **COD** (paga quando recebe). No site, rola **PIX** e **cartão** também. Quer que eu te envie o **link**?`;
+    return { reply: tagReply(settings, msg, "flow/faq"), next: "fechamento" };
+  }
 
   if (/nome do produto|qual\s*é\s*o\s*produto|como\s*se\s*chama\s*o\s*produto/.test(t)) {
     const nm = settings?.product?.name || "Progressiva Vegetal";
@@ -55,7 +70,7 @@ export default async function faq(ctx) {
     return { reply: tagReply(settings, `O frasco tem **${ml} ml**.`, "flow/faq"), next: "oferta" };
   }
   if (/parcel|divid/.test(t)) {
-    return { reply: tagReply(settings, `Dá pra fazer **parcelado** no site, e também temos **COD** (paga só quando recebe). Quer que eu te envie o link seguro?`, "flow/faq"), next: "fechamento" };
+    return { reply: tagReply(settings, `Dá pra fazer **parcelado** no site, e também temos **COD** (paga só quando recebe). Quer o **link seguro**?`, "flow/faq"), next: "fechamento" };
   }
   if (/audio|áudio|mandar\s*voz/.test(t)) {
     return { reply: tagReply(settings, `Se preferir, te mando um **áudio** com o resumo rapidinho. Quer?`, "flow/faq"), next: "oferta" };
