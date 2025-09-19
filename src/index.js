@@ -227,7 +227,7 @@ async function deliverReply({ to, text, wantAudio = false }) {
       });
     }
   }
-  await enqueueOrDirect({ to, payload: { text: cleanText } });
+  await enqueueOrDirect({ to: from, payload: { text: cleanText } });
 }
 
 // =================== ASR/TTS helpers ===================

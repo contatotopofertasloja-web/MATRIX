@@ -1,81 +1,79 @@
-version: 1.0
-kind: conexus_flow
-bot_id: "maria"
-flow_id: "default"
-title: "Funil Padrão - Maria"
-currency: "BRL"
-price_target: "{{settings.product.price_target}}"
-checkout_link: "{{settings.product.checkout_link}}"
-site_url: "{{settings.product.site_url}}"
+# configs/bots/claudia/claudia.flow.yml
+# Funil determinístico com carimbos (flow/...) e rotas claras.
+
+version: 1
+bot_id: claudia
 
 stages:
-  - stage_id: recepcao
-    intents_in: ["greet", "recepcao", "start", "hello", "oi", "bom dia", "boa tarde", "boa noite"]
-    goals:
-      - "Identificar tipo de cabelo (liso/ondulado/cacheado/crespo)"
-      - "Coletar 1 dor principal (frizz/volume)"
-    required_actions: ["ask_hair_type"]
-    guardrails: { allowed_links: [] }
-    kpis:
-      - { id: "tffr", metric: "time_to_first_reply", target: 5 }
-      - { id: "stage_completion", metric: "stage_completion_rate", target: 85 }
-    exit_conditions: ["Tipo de cabelo identificado"]
-    sla_sec: 60
+  greet:
+    entry:
+      - kind: call
+        fn: "greet"          # configs/bots/claudia/flow/greet.js
+    on_intent:
+      offer:        "offer"
+      close:        "close"
+      postsale:     "postsale"
+      default:      "qualify"
 
-  - stage_id: qualificacao
-    intents_in: ["qualificacao", "qualify"]
-    goals: ["Histórico e resultado desejado"]
-    required_actions: []
-    guardrails: {}
-    kpis:
-      - { id: "msgs_to_offer", metric: "messages_to_offer", target: 4 }
-    exit_conditions: ["Pronto para apresentar preço"]
-    sla_sec: 120
+  qualify:
+    entry:
+      - kind: call
+        fn: "qualify"        # configs/bots/claudia/flow/qualify.js (anti-loop + 'pular')
+    on_intent:
+      offer:        "offer"   # "quanto custa" → oferta
+      close:        "close"   # "link/checkout" → fechamento
+      jump:         "offer"   # "pular" → avança
+      objection:    "offer"   # trata e leva para oferta
+      delivery:     "offer"   # responde via FAQ interno e empurra oferta
+      payment:      "offer"
+      features:     "offer"
+      default:      "qualify"
 
-  - stage_id: oferta
-    intents_in: ["oferta", "offer", "preco", "preço", "qual o preço", "valor", "quanto custa"]
-    goals: ["Informar preço-alvo e oferecer link de checkout"]
-    required_actions: ["send_price", "send_link"]
-    guardrails:
-      price_min: 149
-      price_max: 249
-      allowed_links:
-        - "{{settings.product.checkout_link}}"
-        - "{{settings.product.site_url}}"
-    kpis:
-      - { id: "price_rate", metric: "price_disclosed_rate", target: 95 }
-      - { id: "link_rate",  metric: "link_sent_rate",      target: 85 }
-    exit_conditions: ["Link enviado ao cliente"]
-    sla_sec: 90
+  offer:
+    entry:
+      - kind: call
+        fn: "offer"          # configs/bots/claudia/flow/offer.js (preço + CTA link)
+    on_intent:
+      close:        "close"
+      postsale:     "postsale"
+      default:      "close"
 
-  - stage_id: objecoes
-    intents_in: ["objecoes", "objeções", "tem formol", "cheiro forte", "entrega", "prazo", "seguro", "composição"]
-    goals: ["Sanar objeção e manter oferta viva"]
-    required_actions: ["handle_objection"]
-    guardrails: {}
-    kpis:
-      - { id: "objection_ok", metric: "objection_resolution_rate", target: 70 }
-    exit_conditions: ["Cliente retorna ao fluxo de oferta/fechamento"]
-    sla_sec: 120
+  close:
+    entry:
+      - kind: call
+        fn: "close"          # configs/bots/claudia/flow/close.js (stickiness)
+    on_intent:
+      confirm:      "postsale" # “confirmo” → confirmação
+      postsale:     "postsale"
+      # stickiness: permanecer em close salvo cancelamento explícito
+      default:      "close"
 
-  - stage_id: fechamento
-    intents_in: ["fechamento", "checkout", "comprar", "finalizar", "fechar pedido"]
-    goals: ["Confirmar COD e link seguro"]
-    required_actions: ["confirm_cod"]
-    guardrails:
-      allowed_links:
-        - "{{settings.product.checkout_link}}"
-    kpis:
-      - { id: "link_rate_close", metric: "link_sent_rate", target: 95 }
-    exit_conditions: ["Cliente recebe link e confirma intenção de compra"]
-    sla_sec: 120
+  postsale:
+    entry:
+      - kind: call
+        fn: "postsale"       # configs/bots/claudia/flow/postsale.js
+    on_intent:
+      default:      "postsale"
 
-  - stage_id: posvenda
-    intents_in: ["posvenda", "pós-venda", "payment_ok"]
-    goals: ["Agradecer pagamento e confirmar envio"]
-    required_actions: ["confirm_payment"]
-    guardrails: {}
-    kpis:
-      - { id: "stage_completion_pos", metric: "stage_completion_rate", target: 95 }
-    exit_conditions: ["Mensagem de confirmação enviada"]
-    sla_sec: 300
+carimbos:
+  enabled: true
+  pattern: "(flow/{{stage}})"   # todos os flows já retornam reply com carimbo
+
+guardrails:
+  links:
+    whitelist:
+      - "{{product.site_url}}"
+      - "{{product.checkout_link}}"
+  price:
+    min: 100
+    max: 300
+    show_only_when_intent: ["offer"]
+
+media:
+  opening_photo:
+    enabled: true
+    source: "{{media.opening_photo_url}}"
+    stage: "greet"             # disparo 1x por sessão
+
+notes:
+  - "Este YAML só roteia. O conteúdo das respostas fica nos flows JS e no funnel.js."

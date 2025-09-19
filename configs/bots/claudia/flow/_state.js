@@ -31,8 +31,9 @@ export function initialState() {
     uf: null,
     referencia: null,
 
-    // anti-loop
+    // anti-loop / mídia
     __sent_opening_photo: false,
+    __qualify_hits: 0,
     last_offer_at: 0,
     last_link_at: 0,
   };

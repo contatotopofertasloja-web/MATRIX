@@ -8,8 +8,7 @@ export async function init(opts = {}) {
   const { onQr } = opts || {};
   await baileys.init({
     onReady: () => { _ready = true; },
-    onQr: async (/*dataUrlFromAdapter*/) => {
-      // O adapter expõe getQrDataURL(); aqui apenas lemos quando preciso
+    onQr: async () => {
       const du = await baileys.getQrDataURL();
       _lastQrDataURL = du || null;
       if (typeof onQr === 'function') onQr(_lastQrDataURL);
