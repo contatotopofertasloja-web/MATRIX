@@ -1,6 +1,8 @@
 ﻿bot_id: claudia
-persona_name: "Cláudia"
-language: "pt-BR"
+flags:
+  flow_only: true
+  debug_trace_replies: true
+  has_cod: true
 
 company:
   name: "TopOfertas"
@@ -8,83 +10,37 @@ company:
 
 product:
   name: "Progressiva Vegetal"
-  volume_ml: 500
   price_original: 197
   price_target: 170
   applications_up_to: 10
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
-  site_url: "https://tpofertas.com/collections/cod-todos"
-  coupon_code: "TOP-AGO2025-PROGRVG-150"
-  coupon_post_payment_only: true
+  duration_avg: "de 2 a 3 meses"
+  volume_ml: 500
+  site_url: "https://seusite.com"
+  checkout_link: "https://seusite.com/checkout"
+  refund_days_after_delivery: 7
+  how_to_use: "Lave os cabelos, seque 80%, aplique mecha a mecha, pause 40–50min, enxágue, escove e pranche."
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
-  how_to_use: >
-    Lave os cabelos, aplique e deixe agir 40 min. Para maior durabilidade,
-    finalize com prancha. Um frasco rende até {{product.applications_up_to}} aplicações.
+  coupon_post_payment_only: false
+  coupon_code: ""
 
 media:
-  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
-
-flags:
-  # Debug/roteamento
-  debug_log_router: true
-  debug_trace_replies: true
-
-  # Confinamento ao flow
-  flow_only: true
-  disable_prompt_tools: true
-
-  # Operação
-  has_cod: true
-  send_opening_photo: true
-  guardrails_strict: true
-  use_telemetry: true
-  use_thompson: true
-  allow_audio_in: true
-  allow_audio_out: false
-  small_talk_soften: true
-  useModelsByStage: true
-  fallbackToGlobal: true
-
-marketing:
-  sold_count: 40000
-
-models_by_stage:
-  recepcao:     "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5-mini"
-  objecoes:     "gpt-5"
-  fechamento:   "gpt-5"
-  posvenda:     "gpt-5-nano"
-
-global_models:
-  recepcao:     "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta:       "gpt-5-mini"
-  objecoes:     "gpt-5"
-  fechamento:   "gpt-5"
-  posvenda:     "gpt-5-nano"
-
-typing:
-  ms_per_char: 35
-  min_ms: 800
-  max_ms: 5000
-
-messages:
-  opening:
-    - "Oi, amor! 💖 Eu sou a Cláudia. Antes de tudo, deixa eu te mostrar a *Progressiva Vegetal* que eu amo — e já te explico rapidinho 😉"
-  qualify_followups:
-    - "Você já fez progressiva antes?"
-    - "Prefere resultado bem liso ou só alinhado?"
-  offer_templates:
-    - "É *Progressiva Vegetal* por **R${{price_target}}**. Rende até **{{product.applications_up_to}} aplicações**. Quer que eu te envie o link do checkout?"
-  objection_handles:
-    - "Super entendo! Já são mais de {{marketing.sold_count}} unidades vendidas ✅. Posso te resumir o modo de uso em 10s."
-  closing:
-    - "Perfeito! Te envio o link seguro do checkout. Pagamento na entrega (COD)."
+  opening_photo_url: "https://cdn.seusite.com/arte-abertura.jpg"
 
 guardrails:
   allowed_links:
-    - "{{product.checkout_link}}"
-    - "{{product.site_url}}"
+    - "https://seusite.com"
+    - "https://seusite.com/checkout"
+
+messages:
+  opening:
+    - "Oi, amor! 💖 Eu sou a Cláudia. Posso te explicar rapidinho sobre a *Progressiva Vegetal*?"
+  postsale_pre_coupon:
+    - "Pedido confirmado! Vou te enviar por aqui o status e o passo a passo de uso."
+  postsale_after_payment_with_coupon:
+    - "Obrigada pela compra! Usa o cupom **{{coupon_code}}** na próxima."
+  delivery_info:
+    - "Entregamos rápido: **{{delivery_sla.capitals_hours}}h** capitais / **{{delivery_sla.others_hours}}h** demais locais."
+  features_intro:
+    - "Como usar (resumo):"
