@@ -1,144 +1,150 @@
 // src/core/orchestrator.js
-import { callLLM } from "./llm.js";
-import { settings } from "../../configs/src/core/settings.js";
-import * as tools from "./tools.js";
-import * as memory from "./memory.js";
-import { buildSystem, buildPlannerUser, buildRefineUser } from "./prompts/base.js";
-import { sanitizeOutbound } from "../utils/polish.js";
+// Orquestrador determinístico: SEM LLM.
+// Só fala usando frases definidas em configs/bots/<bot_id>/prompts/funnel.js.
+// Reintroduz envio automático da imagem de abertura (media.opening_photo_url).
+// Mantém funil, atalhos (preço/link), anti-loop e stickiness no fechamento.
 
-const nowMs = () => Date.now();
-const COOLDOWN_MS = 90_000;
+import {
+  getSession, saveSession, applySlotFilling,
+  setStage, advanceStage, forceStage,
+  normalizeStage, shouldStickToClose, canAsk, markAsked
+} from "./fsm.js";
 
-const STAGES_NO_PRICE = new Set(["greet","qualify","faq","recepcao","qualificacao"]);
+import settings from "./settings.js"; // assume que expõe { bot_id, product, media, guardrails, ... }
+const BOT_ID = process.env.BOT_ID || settings?.bot_id || "claudia";
+
+// --------- Guardrails (links & preços) ---------
+const STAGES_NO_PRICE = new Set(["greet","qualify"]);
 const RX_PRICE_ANY = /\bR\$\s?\d{1,3}(?:\.\d{3})*(?:,\d{2})?\b/g;
 const RX_ASK_PRICE = /\b(preç|valor|quanto|cust)/i;
-const RX_ASK_LINK  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho)\b/i;
+const RX_ASK_LINK  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho|pagamento)\b/i;
 
-function cooldownOk(lastTs, ms=COOLDOWN_MS) {
-  return !lastTs || (nowMs() - lastTs) > ms;
-}
-
-function clampPrice(price, s=settings) {
-  const min = s?.guardrails?.price_min ?? 0;
-  const max = s?.guardrails?.price_max ?? Number.MAX_SAFE_INTEGER;
+function clampPrice(price) {
+  const min = settings?.guardrails?.price_min ?? 0;
+  const max = settings?.guardrails?.price_max ?? Number.MAX_SAFE_INTEGER;
   return Math.max(min, Math.min(max, Number(price)||0));
 }
 
-function enforceLinks(text, s=settings) {
-  if (!s?.guardrails?.allow_links_only_from_list) return text;
-  const allowList = (s.guardrails.allowed_links || []).map(t =>
-    String(t||"")
-      .replace(/\{\{\s*product\.checkout_link\s*\}\}/g, s?.product?.checkout_link || "")
-      .replace(/\{\{\s*product\.site_url\s*\}\}/g, s?.product?.site_url || "")
-      .trim()
-  ).filter(Boolean);
-
+function enforceLinks(text) {
+  const allowOnly = !!settings?.guardrails?.allow_links_only_from_list;
+  if (!allowOnly) return text;
+  const allowList = (settings?.guardrails?.allowed_links || [])
+    .map(u => String(u || "")
+      .replace(/\{\{\s*product\.checkout_link\s*\}\}/g, settings?.product?.checkout_link || "")
+      .replace(/\{\{\s*product\.site_url\s*\}\}/g, settings?.product?.site_url || "")
+      .trim())
+    .filter(Boolean);
   return String(text||"").replace(/\bhttps?:\/\/[^\s]+/gi, (u) => {
-    const ok = allowList.some(allowed => u.startsWith(allowed));
+    const ok = allowList.some(a => u.startsWith(a));
     return ok ? u : "[link removido]";
   });
 }
 
-// Além de números, limita menções de preço em estágios bloqueados
 function enforcePrice(text, { allow=false, stage="" } = {}) {
   let out = String(text||"");
   if (!allow || STAGES_NO_PRICE.has(String(stage||"").toLowerCase())) {
     out = out.replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
-    out = out
-      .replace(/\b(preço|preco)\s*(é|esta|fica)\s*\[preço disponível sob pedido\]/gi, "posso te informar o valor quando quiser")
-      .replace(/\bcusta\s*\[preço disponível sob pedido\]/gi, "tem um valor que posso te informar quando quiser");
   }
   return out;
 }
 
-export async function orchestrate({ jid, text, stageHint, botSettings = settings }) {
-  const mem = await memory.get(jid) || {};
-  const sys = buildSystem({ settings: botSettings });
-
-  const user1 = buildPlannerUser({ message: text, stageHint, settings: botSettings, memory: mem });
-
-  let plan;
+// --------- Carregamento da copy (funnel.js) ---------
+async function loadFunnel(botId = BOT_ID) {
   try {
-    const { text: planStr } = await callLLM({ stage: "planner", system: sys, prompt: user1, maxTokens: 512 });
-    plan = JSON.parse(planStr || "{}");
+    const mod = await import(`../../configs/bots/${botId}/prompts/funnel.js`);
+    return (mod?.default || {});
   } catch {
-    plan = { next: "reply", stage: stageHint || "qualify", tool_calls: [], slots: {}, reply: null, confidence: 0.2 };
+    return {};
+  }
+}
+function pickCopy(funnel, stage, variantSeed = 0) {
+  const arr = Array.isArray(funnel?.[stage]) ? funnel[stage] : [];
+  if (!arr.length) return "";
+  const idx = Math.abs(variantSeed) % arr.length;
+  return String(arr[idx] || "");
+}
+
+// --------- Orquestração principal ---------
+/**
+ * Retorna uma lista de "ações" para a camada de envio (mantém compat com dispatcher):
+ * [{ kind:'image', url, caption }, { kind:'text', text }]
+ */
+export async function orchestrate({ jid, text }) {
+  const session = await getSession({ botId: BOT_ID, userId: jid, createIfMissing: true });
+  const funnel  = await loadFunnel(BOT_ID);
+
+  const msg = String(text || "");
+  applySlotFilling(session, msg);
+
+  let stage = normalizeStage(session.stage);
+
+  // Stickiness do fechamento
+  if (shouldStickToClose(session, msg)) stage = "close";
+
+  // Atalhos
+  const askedPrice = RX_ASK_PRICE.test(msg);
+  const askedLink  = RX_ASK_LINK .test(msg);
+  if (askedLink)  { forceStage(session, "close");  stage = "close"; }
+  else if (askedPrice) { forceStage(session, "offer"); stage = "offer"; }
+
+  // Avanço automático por preenchimento de slots
+  if (stage === "greet") {
+    // logo após a saudação, próxima interação já é qualify
+    setStage(session, "qualify");
+  } else if (stage === "qualify") {
+    const { hair_type, had_prog_before, goal } = session.slots || {};
+    if (hair_type && (had_prog_before !== null && had_prog_before !== undefined) && goal) {
+      setStage(session, "offer");
+      stage = "offer";
+    }
+  } else if (stage === "offer") {
+    // depois de oferecer, tendência é fechar
+    setStage(session, "close");
   }
 
-  const slots = { ...(mem.slots || {}), ...(plan.slots || {}) };
-  await memory.merge(jid, { slots });
+  const variantSeed = (session.userId || "").split("").reduce((a,c)=>a+c.charCodeAt(0),0);
+  let copy = pickCopy(funnel, stage, variantSeed);
 
-  const askedPrice = RX_ASK_PRICE.test(text || "");
-  const askedLink  = RX_ASK_LINK .test(text || "");
+  // Substituições simples
+  const frozenPrice = clampPrice(
+    settings?.product?.price_target ?? settings?.product?.price_original
+  );
+  copy = copy
+    .replace(/\{\{price_target\}\}/g, String(frozenPrice))
+    .replace(/\{\{checkout_link\}\}/g, String(settings?.product?.checkout_link || ""));
 
-  const canPrice = askedPrice || cooldownOk(mem.lastOfferAt);
-  const canLink  = askedLink  || cooldownOk(mem.lastLinkAt);
+  // Guardrails
+  const allowPrice = askedPrice && !STAGES_NO_PRICE.has(stage);
+  copy = enforceLinks(copy);
+  copy = enforcePrice(copy, { allow: allowPrice, stage });
 
-  const execResults = {};
-  const stage = String(plan?.stage || stageHint || "qualify").toLowerCase();
+  // -------- ENVELOPE DE AÇÕES (texto + imagem de abertura) --------
+  const actions = [];
 
-  const safeToolCalls = Array.isArray(plan?.tool_calls) ? plan.tool_calls.filter(tc => {
-    const name = String(tc?.name || "").trim();
-    if (/getPrice/i.test(name))        return canPrice && !STAGES_NO_PRICE.has(stage);
-    if (/getCheckoutLink/i.test(name)) return canLink;
-    return true;
-  }) : [];
+  // 1) Imagem de abertura automática — NÃO repetir
+  const openingUrl = settings?.media?.opening_photo_url;
+  if (stage === "greet" && openingUrl && !session?.flags?.opening_photo_sent) {
+    actions.push({ kind: "image", url: openingUrl, caption: "" });
+    session.flags.opening_photo_sent = true; // não dispara de novo
+  }
 
-  for (const call of safeToolCalls) {
-    const name = String(call?.name || "").trim();
-    const args = call?.args || {};
-    try {
-      if (typeof tools[name] === "function") {
-        execResults[name] = await tools[name]({ jid, args, settings: botSettings, memory: { get: () => memory.get(jid) } });
-      }
-    } catch (e) {
-      execResults[name] = { error: String(e?.message || e) };
+  // 2) Anti-loop: em qualify, só repete pergunta se cooldown liberar
+  if (stage === "qualify") {
+    const askId = "qualify_probe";
+    if (!canAsk(session, askId)) {
+      // Evita “Me dá só essa info…” em loop -> usa uma variante de reforço curta
+      copy = "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? 🙏";
+    } else {
+      markAsked(session, askId);
     }
   }
 
-  const frozenPrice = clampPrice(
-    botSettings?.product?.price_target ?? botSettings?.product?.price_original,
-    botSettings
-  );
-
-  const user2 = buildRefineUser({
-    message: text,
-    stage,
-    plan,
-    tools: execResults, // agora é um objeto e o base.js trata corretamente
-    settings: botSettings,
-    slots,
-    guards: {
-      price: frozenPrice,
-      price_allowed: canPrice && !STAGES_NO_PRICE.has(stage),
-      checkout_allowed: canLink,
-      cod_text: botSettings?.messages?.cod_short || "Pagamento na entrega (COD).",
-    },
-  });
-
-  let finalText = "";
-  try {
-    const { text: refined } = await callLLM({ stage, system: sys, prompt: user2, maxTokens: 512 });
-    finalText = refined;
-  } catch {
-    finalText = "Posso te explicar como funciona, prazos e pagamento, ou prefere saber do valor?";
+  if (copy.trim()) {
+    actions.push({ kind: "text", text: copy });
   }
 
-  // Primeira barreira (allowlist de link + neutralização de números)
-  finalText = enforceLinks(finalText, botSettings);
-  finalText = enforcePrice(finalText, { allow: canPrice, stage });
-
-  // Segunda barreira (sanitizador final, inclusive MENÇÕES sem número)
-  finalText = sanitizeOutbound(finalText, {
-    allowPrice: canPrice && !STAGES_NO_PRICE.has(stage),
-    allowLink: canLink,
-  });
-
-  // memória anti-spam
-  if (/\bhttps?:\/\/[^\s]+/i.test(finalText)) await memory.merge(jid, { lastLinkAt: nowMs() });
-  if (RX_PRICE_ANY.test(finalText) || askedPrice) await memory.merge(jid, { lastOfferAt: nowMs() });
-
-  return String(finalText || "").trim();
+  await saveSession(session);
+  return actions;
 }
 
 export default { orchestrate };

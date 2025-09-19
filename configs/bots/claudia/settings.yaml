@@ -1,8 +1,10 @@
 ﻿bot_id: claudia
+
 flags:
-  flow_only: true
-  debug_trace_replies: true
+  flow_only: true              # respostas só dos flows/orquestrador
+  debug_trace_replies: true    # carimbo (flow/...)
   has_cod: true
+  force_funnel: true           # dica pro app: priorizar o funil determinístico
 
 company:
   name: "TopOfertas"
@@ -26,12 +28,18 @@ product:
   coupon_code: ""
 
 media:
+  # Usada pelo orquestrador para enviar AUTOMATICAMENTE 1x na etapa greet
   opening_photo_url: "https://cdn.seusite.com/arte-abertura.jpg"
 
 guardrails:
+  # O orquestrador só deixa links da lista abaixo passarem “integros”
+  allow_links_only_from_list: true
   allowed_links:
-    - "https://seusite.com"
-    - "https://seusite.com/checkout"
+    - "{{product.site_url}}"
+    - "{{product.checkout_link}}"
+  # Limites de preço pra prevenir vazamento de valores errados
+  price_min: 100
+  price_max: 300
 
 messages:
   opening:
@@ -44,3 +52,9 @@ messages:
     - "Entregamos rápido: **{{delivery_sla.capitals_hours}}h** capitais / **{{delivery_sla.others_hours}}h** demais locais."
   features_intro:
     - "Como usar (resumo):"
+
+# (Opcional) promoções — você pode ligar isso quando quiser
+promotions:
+  raffle:
+    enabled: false
+    teaser: "Comprando este mês você participa do nosso sorteio. Quer saber como funciona?"

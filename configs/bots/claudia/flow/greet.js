@@ -16,5 +16,6 @@ export default async function greet(ctx) {
     settings?.messages?.opening?.[0] ||
     `Oi, ${name}! 💖 Eu sou a Cláudia. Posso te explicar rapidinho sobre a *Progressiva Vegetal*?`;
 
+  // Já direciona a jornada para qualificação
   return { reply: tagReply(settings, opening, "flow/greet"), next: "qualificacao" };
 }
