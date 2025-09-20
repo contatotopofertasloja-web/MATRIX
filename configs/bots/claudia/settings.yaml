@@ -1,10 +1,13 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml
+bot_id: claudia
 
 flags:
   flow_only: true              # respostas só dos flows/orquestrador
   debug_trace_replies: true    # carimbo (flow/...)
   has_cod: true
-  force_funnel: true           # dica pro app: priorizar o funil determinístico
+  force_funnel: true           # prioriza o funil determinístico
+  useModelsByStage: true       # <- adicionado (core/usará por etapa)
+  fallbackToGlobal: true       # <- adicionado (fallback global)
 
 company:
   name: "TopOfertas"
@@ -20,7 +23,9 @@ product:
   site_url: "https://seusite.com"
   checkout_link: "https://seusite.com/checkout"
   refund_days_after_delivery: 7
-  how_to_use: "Lave os cabelos, seque 80%, aplique mecha a mecha, pause 40–50min, enxágue, escove e pranche."
+  how_to_use: >
+    Lave os cabelos, seque 80%, aplique mecha a mecha, pause 40–50min,
+    enxágue, escove e pranche.
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
@@ -28,19 +33,24 @@ product:
   coupon_code: ""
 
 media:
-  # Usada pelo orquestrador para enviar AUTOMATICAMENTE 1x na etapa greet
+  # enviada automaticamente 1x na etapa greet pelo orquestrador
   opening_photo_url: "https://cdn.seusite.com/arte-abertura.jpg"
 
 guardrails:
-  # O orquestrador só deixa links da lista abaixo passarem “integros”
+  # o orquestrador só deixa links da lista abaixo passarem “integros”
   allow_links_only_from_list: true
   allowed_links:
-    - "{{product.site_url}}"
-    - "{{product.checkout_link}}"
-  # Limites de preço pra prevenir vazamento de valores errados
+    - "{{site_url}}"        # <- alinhado ao orquestrador
+    - "{{checkout_link}}"   # <- alinhado ao orquestrador
+  # limites de preço pra prevenir vazamento de valores errados
   price_min: 100
   price_max: 300
+  freeze_fields:
+    - "price_target"
+    - "checkout_link"
+    - "coupon_code"
 
+# mensagens curtas, amigáveis, mantendo o tom atual
 messages:
   opening:
     - "Oi, amor! 💖 Eu sou a Cláudia. Posso te explicar rapidinho sobre a *Progressiva Vegetal*?"
@@ -53,7 +63,38 @@ messages:
   features_intro:
     - "Como usar (resumo):"
 
-# (Opcional) promoções — você pode ligar isso quando quiser
+# Modelos por etapa — pode deixar gpt-5-* (o core traduz p/ 4o/4o-mini se precisar)
+models_by_stage:
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
+
+# Fallbacks globais por etapa
+global_models:
+  recepcao:     "gpt-5-nano"
+  qualificacao: "gpt-5-nano"
+  oferta:       "gpt-5-mini"
+  objecoes:     "gpt-5"
+  fechamento:   "gpt-5"
+  posvenda:     "gpt-5-nano"
+
+# Digitação “humana” (bate com seus envs)
+typing:
+  ms_per_char: 35
+  min_ms: 800
+  max_ms: 4000
+
+# Áudio (mantém compat com o core/ASR)
+audio:
+  asr_provider: "openai"
+  asr_model: "whisper-1"
+  tts_provider: "none"
+  tts_voice: "alloy"
+
+# (Opcional) promoções — pode ligar quando quiser
 promotions:
   raffle:
     enabled: false

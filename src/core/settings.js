@@ -13,8 +13,9 @@ function env(name, def) {
   return v === undefined || v === null || v === '' ? def : v;
 }
 
+// BOT / PATHS
 export const BOT_ID = env('BOT_ID', 'claudia');
-const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml'); // sem "configs/configs"
+const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
 // Aliases → chave canônica
 const STAGE_KEY_ALIASES = new Map([
@@ -39,7 +40,7 @@ function normalizeModelsByStage(map) {
   return out;
 }
 
-// Defaults globais
+// Defaults globais (ENV)
 const GLOBAL_MODELS = {
   recepcao:     env('LLM_MODEL_RECEPCAO',     'gpt-5-nano'),
   qualificacao: env('LLM_MODEL_QUALIFICACAO', 'gpt-5-nano'),
@@ -74,6 +75,7 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
+// Defaults caso YAML ausente
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -82,29 +84,28 @@ let fileSettings = {
   flags: { has_cod: true, send_opening_photo: true },
 };
 
+// Carrega settings.yaml da bot
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
     const parsed = YAML.parse(text) || {};
     if (parsed.models_by_stage) parsed.models_by_stage = normalizeModelsByStage(parsed.models_by_stage);
-    if (parsed.global_models)   parsed.global_models   = normalizeModelsByStage(parsed.global_models);
     fileSettings = { ...fileSettings, ...parsed };
     console.log(`[SETTINGS] Carregado: ${BOT_SETTINGS_PATH}`);
   } else {
     console.warn(`[SETTINGS] Arquivo não encontrado: ${BOT_SETTINGS_PATH}`);
   }
 } catch (e) {
-  console.warn('[SETTINGS] Falha ao ler settings:', e?.message || e);
+  console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
+// Exporta unificado
 export const settings = {
+  botId: BOT_ID,
   ...fileSettings,
-  audio: { ...(fileSettings.audio || {}), ...AUDIO },
-  flags: { ...FLAGS, ...(fileSettings.flags || {}) },
-  models_by_stage: fileSettings.models_by_stage || {},
-  global_models: fileSettings.global_models || GLOBAL_MODELS,
-  llm: { ...LLM_DEFAULTS, ...(fileSettings.llm || {}) },
-  guardrails: fileSettings.guardrails || { allowed_links: [] },
-  product: fileSettings.product || {},
-  sweepstakes: fileSettings.sweepstakes || {},
+  llm: LLM_DEFAULTS,
+  flags: { ...fileSettings.flags, ...FLAGS },
+  audio: AUDIO,
+  global_models: GLOBAL_MODELS,
 };
+export default settings;
