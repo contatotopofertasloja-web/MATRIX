@@ -81,20 +81,20 @@ global_models:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-# Digitação “humana” (bate com seus envs)
+# Digitação “humana”
 typing:
   ms_per_char: 35
   min_ms: 800
   max_ms: 4000
 
-# Áudio (mantém compat com o core/ASR)
+# Áudio (compat core/ASR)
 audio:
   asr_provider: "openai"
   asr_model: "whisper-1"
   tts_provider: "none"
   tts_voice: "alloy"
 
-# (Opcional) promoções — pode ligar quando quiser
+# (Opcional) promoções
 promotions:
   raffle:
     enabled: false
