@@ -17,6 +17,10 @@ import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 import { orchestrate } from './core/orchestrator.js';
 
+// ===== MÉTRICAS (novos)
+import { attachMetricsRoutes } from './core/metrics/receiver.js';
+import { flushMetricsNow } from './core/metrics/middleware.js';
+
 // ===== ASR (whisper/…)
 let transcribeAudio = null;
 try {
@@ -103,7 +107,7 @@ function pushTrace(entry) {
 function tag(text, sourceTag) {
   const s = String(text || '');
   if (!s.trim()) return s;
-  // Se já tiver carimbo (parenteses no final), preserva:
+  // Se já tiver carimbo (parênteses no final), preserva:
   if (/\)\s*$/.test(s) && /\([^)]+?\)\s*$/.test(s)) return s;
   return `${s} (${sourceTag})`;
 }
@@ -215,6 +219,7 @@ const getMsgId = (raw) => {
 };
 
 // =================== Entrega unificada (texto + opcional áudio) ===================
+// BUG CORRIGIDO: usava `from` fora de escopo. Agora usa o `to` recebido.
 async function deliverReply({ to, text, wantAudio = false }) {
   const cleanText = prepareOutboundText(text);
   if (wantAudio && settings?.flags?.allow_audio_out !== false) {
@@ -227,7 +232,7 @@ async function deliverReply({ to, text, wantAudio = false }) {
       });
     }
   }
-  await enqueueOrDirect({ to: from, payload: { text: cleanText } });
+  await enqueueOrDirect({ to, payload: { text: cleanText } });
 }
 
 // =================== ASR/TTS helpers ===================
@@ -267,6 +272,22 @@ async function ttsIfPossible(text) {
     console.warn('[TTS] synth fail:', e?.message || e);
   }
   return null;
+}
+
+// ======== Helpers para enviar actions[] do orquestrador ========
+async function sendActions(to, actions = []) {
+  if (!Array.isArray(actions) || !actions.length) return false;
+  for (const a of actions) {
+    if (!a || typeof a !== 'object') continue;
+    if (a.kind === 'image' && a.url) {
+      await enqueueOrDirect({ to, kind: 'image', payload: { url: a.url, caption: a.caption || '' } });
+    } else if (a.kind === 'audio' && a.buffer) {
+      await enqueueOrDirect({ to, kind: 'audio', payload: { buffer: a.buffer, mime: a.mime || 'audio/ogg' } });
+    } else if (a.kind === 'text' && a.text) {
+      await enqueueOrDirect({ to, payload: { text: prepareOutboundText(a.text) } });
+    }
+  }
+  return true;
 }
 
 // =================== Handler principal ===================
@@ -363,6 +384,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       }
     }
 
+    // Se o flow devolveu reply textual direta
     if (reply && reply.trim()) {
       const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(reply), used.startsWith('flow') ? used.replace('flow','flow') : 'flow') : prepareOutboundText(reply);
       await deliverReply({ to: from, text: stamped, wantAudio });
@@ -371,12 +393,21 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // 3) Se não tem flow ou não respondeu e NÃO está em flow_only → Orquestrador LLM
+    // 3) LLM Orquestrador — AGORA compatível com actions[] ou string
     if (!flowOnly) {
       try {
-        const replyLLM = await orchestrate({ jid: from, text: msgText, stageHint: userIntent, botSettings: settings });
-        if (replyLLM && replyLLM.trim()) {
-          const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(replyLLM), 'llm/orchestrator') : prepareOutboundText(replyLLM);
+        const out = await orchestrate({ jid: from, text: msgText, stageHint: userIntent, botSettings: settings });
+
+        // a) Se for array de actions (novo orquestrador)
+        if (Array.isArray(out) && out.length) {
+          await sendActions(from, out);
+          lastSentAt.set(from, Date.now());
+          pushTrace({ from, text_in: msgText, source: 'llm/orchestrator', preview: JSON.stringify(out).slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
+          return '';
+        }
+        // b) Se for string (compat legado)
+        if (out && String(out).trim()) {
+          const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(out), 'llm/orchestrator') : prepareOutboundText(out);
           await deliverReply({ to: from, text: stamped, wantAudio });
           lastSentAt.set(from, Date.now());
           pushTrace({ from, text_in: msgText, source: 'llm/orchestrator', preview: stamped.slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
@@ -633,6 +664,9 @@ app.get('/debug/metrics', requireOpsAuth, (_req, res) => {
   res.json({ ok: true, sources: counts, total: traceBuf.length });
 });
 
+// ====== NOVO: rotas de métricas (/metrics/webhook e /metrics/health)
+attachMetricsRoutes(app, '/');
+
 // ===== Boot do WhatsApp e HTTP =====
 await wppInit({ onQr: () => {} });
 const server = app.listen(PORT, HOST, () => {
@@ -643,6 +677,7 @@ const server = app.listen(PORT, HOST, () => {
 async function gracefulClose(signal) {
   console.log(`[shutdown] signal=${signal}`);
   try { await stopOutboxWorkers(); } catch (e) { console.warn('[shutdown] stopOutboxWorkers:', e?.message || e); }
+  try { await flushMetricsNow(); } catch (e) { console.warn('[shutdown] flushMetricsNow:', e?.message || e); }
   try { await new Promise((resolve) => server?.close?.(() => resolve())); console.log('[http] closed'); } catch {}
   try { adapter?.close?.(); } catch {}
   try { outbox?.stop?.(); } catch {}

@@ -123,7 +123,7 @@ function markReply(session, replyText) {
 }
 
 /**
- * Saída: [{ kind:'image', url, caption }, { kind:'text', text, meta:{variant} }]
+ * Saída: [{ kind:'image', url, caption }, { kind:'text', text, meta:{variant,stage} }]
  */
 export async function orchestrate({ jid, text }) {
   if (!tryAcquireLock(jid)) {
@@ -131,6 +131,7 @@ export async function orchestrate({ jid, text }) {
     return [];
   }
   try {
+    const actions = []; // ← centraliza todas as saídas
     const session = await getSession({ botId: BOT_ID, userId: jid, createIfMissing: true });
     const { funnel, variant } = await loadFunnel(BOT_ID, jid);
 
@@ -155,18 +156,15 @@ export async function orchestrate({ jid, text }) {
     if (stage === "greet") {
       // envia imagem de abertura 1x
       const openingUrl = settings?.media?.opening_photo_url;
-      const actions = [];
       if (openingUrl && !session?.flags?.opening_photo_sent) {
-        actions.push({ kind: "image", url: openingUrl, caption: "", meta: { variant } });
+        actions.push({ kind: "image", url: openingUrl, caption: "", meta: { variant, stage: "greet" } });
         session.flags.opening_photo_sent = true;
       }
       // segue pro qualify
       session.stage = "qualify";
       stage = "qualify";
       await saveSession(session);
-      // continua pela lógica abaixo para também enviar o texto da etapa "qualify"
-      // (não retorna ainda)
-      // Nota: se quiser só imagem, remova este comentário e ajuste.
+      // continua para também enviar o texto da etapa "qualify"
     }
 
     // Semente estável por usuário
@@ -217,8 +215,26 @@ export async function orchestrate({ jid, text }) {
       session.stage = "close";
     }
 
+    // empilha a resposta de texto já com meta.variant e meta.stage
+    actions.push({ kind: "text", text: copy, meta: { variant, stage: session.stage } });
+
+    // ======= SALVA E CAPTURA MÉTRICAS (tua linha proposta) =======
     await saveSession(session);
-    return [{ kind: "text", text: copy, meta: { variant, stage: session.stage } }];
+    try {
+      const { captureFromActions } = await import("./metrics/middleware.js");
+      // askedPrice/askedLink já calculados acima
+      await captureFromActions(actions, {
+        botId: BOT_ID,
+        jid,
+        stage: session.stage,
+        variant: (actions.find(a => a?.meta?.variant)?.meta?.variant) || null,
+        askedPrice,
+        askedLink,
+      });
+    } catch (e) { console.warn("[metrics] skip:", e?.message || e); }
+    // =============================================================
+
+    return actions;
   } finally {
     releaseLock(jid);
   }
