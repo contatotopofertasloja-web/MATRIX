@@ -1,17 +1,18 @@
 ﻿# configs/bots/claudia/settings.yaml
 bot_id: claudia
 
-flags:
-  flow_only: true              # respostas só dos flows/orquestrador
-  debug_trace_replies: true    # carimbo (flow/...)
-  has_cod: true
-  force_funnel: true           # prioriza o funil determinístico
-  useModelsByStage: true       # <- adicionado (core/usará por etapa)
-  fallbackToGlobal: true       # <- adicionado (fallback global)
-
 company:
   name: "TopOfertas"
   hours: "06:00–21:00"
+
+flags:
+  flow_only: true
+  debug_trace_replies: true         # carimbo (flow/...)
+  has_cod: true
+  force_funnel: true
+  useModelsByStage: true
+  fallbackToGlobal: true
+  send_opening_photo: true          # <- garante a foto no primeiro contato
 
 product:
   name: "Progressiva Vegetal"
@@ -24,7 +25,7 @@ product:
   checkout_link: "https://seusite.com/checkout"
   refund_days_after_delivery: 7
   how_to_use: >
-    Lave os cabelos, seque 80%, aplique mecha a mecha, pause 40–50min,
+    Lave os cabelos, seque ~80%, aplique mecha a mecha, pause 40–50min,
     enxágue, escove e pranche.
   delivery_sla:
     capitals_hours: 24
@@ -33,16 +34,13 @@ product:
   coupon_code: ""
 
 media:
-  # enviada automaticamente 1x na etapa greet pelo orquestrador
   opening_photo_url: "https://cdn.seusite.com/arte-abertura.jpg"
 
 guardrails:
-  # o orquestrador só deixa links da lista abaixo passarem “integros”
   allow_links_only_from_list: true
   allowed_links:
-    - "{{site_url}}"        # <- alinhado ao orquestrador
-    - "{{checkout_link}}"   # <- alinhado ao orquestrador
-  # limites de preço pra prevenir vazamento de valores errados
+    - "{{site_url}}"
+    - "{{checkout_link}}"
   price_min: 100
   price_max: 300
   freeze_fields:
@@ -50,20 +48,28 @@ guardrails:
     - "checkout_link"
     - "coupon_code"
 
-# mensagens curtas, amigáveis, mantendo o tom atual
+# Mensagens para o greet (AB test)
+abtest:
+  greet:
+    enabled: true
+    weights:
+      A: 1
+      B: 1
+
 messages:
-  opening:
-    - "Oi, amor! 💖 Eu sou a Cláudia. Posso te explicar rapidinho sobre a *Progressiva Vegetal*?"
-  postsale_pre_coupon:
-    - "Pedido confirmado! Vou te enviar por aqui o status e o passo a passo de uso."
-  postsale_after_payment_with_coupon:
-    - "Obrigada pela compra! Usa o cupom **{{coupon_code}}** na próxima."
+  # Variante A: profissional/credibilidade
+  opening_A:
+    - "Oi, eu sou a Cláudia da *TopOfertas* ✨ especialista na Progressiva Vegetal. Qual o seu nome? Posso te explicar como funciona o tratamento?"
+  # Variante B: leve/acolhedora
+  opening_B:
+    - "Oi! Eu sou a Cláudia, prazer falar com você 😊 Como posso te chamar? Quer que eu te explique rapidinho sobre a Progressiva Vegetal?"
+
   delivery_info:
     - "Entregamos rápido: **{{delivery_sla.capitals_hours}}h** capitais / **{{delivery_sla.others_hours}}h** demais locais."
   features_intro:
     - "Como usar (resumo):"
 
-# Modelos por etapa — pode deixar gpt-5-* (o core traduz p/ 4o/4o-mini se precisar)
+# Modelos por etapa (compat 5.x↔4.x pelo core)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -72,7 +78,6 @@ models_by_stage:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-# Fallbacks globais por etapa
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -81,21 +86,13 @@ global_models:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-# Digitação “humana”
 typing:
   ms_per_char: 35
   min_ms: 800
   max_ms: 4000
 
-# Áudio (compat core/ASR)
 audio:
   asr_provider: "openai"
   asr_model: "whisper-1"
   tts_provider: "none"
   tts_voice: "alloy"
-
-# (Opcional) promoções
-promotions:
-  raffle:
-    enabled: false
-    teaser: "Comprando este mês você participa do nosso sorteio. Quer saber como funciona?"
