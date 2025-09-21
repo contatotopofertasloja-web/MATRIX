@@ -1,7 +1,7 @@
 // src/core/orchestrator.js
 // Orquestrador determinístico: SEM LLM.
-// Agora com A/B de funil (Copy A vs Copy B) sticky por usuário.
-// Mantém: LOCK por JID, anti-rajada/persistência, debounce inbound, guardrails.
+// A/B sticky por usuário, guardrails, anti-rajada/debounce e *fallback* dos hooks
+// apenas quando não houver ações de flow.
 
 import {
   getSession, saveSession, applySlotFilling,
@@ -66,7 +66,7 @@ function enforcePrice(text, { allow=false, stage="" } = {}) {
   return out;
 }
 
-// Carregamento do funil (A/B ou padrão)
+// Carrega funil (A/B ou padrão)
 async function loadFunnel(botId, jid) {
   const ab = await chooseVariant({ botId, userId: jid }).catch(() => null);
   if (!ab?.variant) {
@@ -75,7 +75,6 @@ async function loadFunnel(botId, jid) {
   const f = await loadFunnelForVariant(botId, ab.variant);
   return { funnel: f, variant: ab.variant };
 }
-
 function pickCopy(funnel, stage, variantSeed = 0) {
   const arr = Array.isArray(funnel?.[stage]) ? funnel[stage] : [];
   if (!arr.length) return "";
@@ -83,7 +82,7 @@ function pickCopy(funnel, stage, variantSeed = 0) {
   return String(arr[idx] || "");
 }
 
-// Fallback randômico
+// Fallback local (apenas como último dos últimos)
 const FALLBACKS = [
   "Consegue me contar rapidinho sobre seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)",
   "Pra te indicar certinho, me fala seu tipo de cabelo 💇‍♀️ (liso, ondulado, cacheado ou crespo)",
@@ -94,7 +93,7 @@ function fallbackReply(seed = 0) {
   return FALLBACKS[idx];
 }
 
-// Persistência de inbound/outbound p/ anti-rajada
+// Persistência anti-rajada
 function shouldDebounceInbound(session, msg) {
   const now = Date.now();
   const lastTxt = session?.flags?.last_user_text || "";
@@ -123,7 +122,7 @@ function markReply(session, replyText) {
 }
 
 /**
- * Saída: [{ kind:'image', url, caption }, { kind:'text', text, meta:{variant,stage} }]
+ * Saída: [{ kind:'image', url, caption }, { kind:'text', text, meta:{variant,stage,source?} }]
  */
 export async function orchestrate({ jid, text }) {
   if (!tryAcquireLock(jid)) {
@@ -131,9 +130,18 @@ export async function orchestrate({ jid, text }) {
     return [];
   }
   try {
-    const actions = []; // ← centraliza todas as saídas
+    const actions = [];
     const session = await getSession({ botId: BOT_ID, userId: jid, createIfMissing: true });
     const { funnel, variant } = await loadFunnel(BOT_ID, jid);
+
+    // carrega hooks da bot (dinâmico)
+    let botHooks = null;
+    try {
+      const mod = await import(`../../configs/bots/${BOT_ID}/hooks.js`);
+      botHooks = mod?.hooks || mod?.default?.hooks || null;
+    } catch (e) {
+      // sem hooks específicos, segue o jogo
+    }
 
     const msg = String(text || "");
 
@@ -153,18 +161,17 @@ export async function orchestrate({ jid, text }) {
     if (askedLink)  { forceStage(session, "close");  stage = "close"; }
     else if (askedPrice) { forceStage(session, "offer"); stage = "offer"; }
 
+    // GREET: envia imagem 1x e já avança para "qualify" (texto sai do funil)
     if (stage === "greet") {
-      // envia imagem de abertura 1x
       const openingUrl = settings?.media?.opening_photo_url;
       if (openingUrl && !session?.flags?.opening_photo_sent) {
         actions.push({ kind: "image", url: openingUrl, caption: "", meta: { variant, stage: "greet" } });
         session.flags.opening_photo_sent = true;
       }
-      // segue pro qualify
       session.stage = "qualify";
       stage = "qualify";
       await saveSession(session);
-      // continua para também enviar o texto da etapa "qualify"
+      // segue para também enviar o texto de qualify
     }
 
     // Semente estável por usuário
@@ -193,15 +200,25 @@ export async function orchestrate({ jid, text }) {
       }
     }
 
+    // Se o funil não trouxe texto, tenta *fallback* dos HOOKS (exceto greet)
     if (!copy || !copy.trim()) {
-      copy = fallbackReply(variantSeed);
-      console.log("[orchestrator] fallback acionado", { stage, jid });
+      let hookFallback = null;
+      if (botHooks?.fallbackText) {
+        hookFallback = await botHooks.fallbackText({ stage, settings });
+      }
+      if (hookFallback && hookFallback.trim()) {
+        copy = hookFallback.trim(); // geralmente já vem com carimbo "(hooks)"
+        console.log("[orchestrator] fallback via hooks", { stage, jid });
+      } else {
+        copy = fallbackReply(variantSeed); // fallback local (sem carimbo)
+        console.log("[orchestrator] fallback local", { stage, jid });
+      }
     }
 
     if (shouldBlockSameReply(session, copy)) {
       console.log("[orchestrator] reply bloqueada por flood", { jid });
       await saveSession(session);
-      return []; // preserva silêncio p/ evitar rajada
+      return [];
     }
     markReply(session, copy);
 
@@ -215,14 +232,13 @@ export async function orchestrate({ jid, text }) {
       session.stage = "close";
     }
 
-    // empilha a resposta de texto já com meta.variant e meta.stage
+    // Empilha a resposta de texto com meta (stage/variant)
     actions.push({ kind: "text", text: copy, meta: { variant, stage: session.stage } });
 
-    // ======= SALVA E CAPTURA MÉTRICAS (tua linha proposta) =======
+    // ======= Persiste + Métricas =======
     await saveSession(session);
     try {
       const { captureFromActions } = await import("./metrics/middleware.js");
-      // askedPrice/askedLink já calculados acima
       await captureFromActions(actions, {
         botId: BOT_ID,
         jid,
@@ -232,7 +248,7 @@ export async function orchestrate({ jid, text }) {
         askedLink,
       });
     } catch (e) { console.warn("[metrics] skip:", e?.message || e); }
-    // =============================================================
+    // ===================================
 
     return actions;
   } finally {
