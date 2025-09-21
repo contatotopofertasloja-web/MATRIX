@@ -5,19 +5,17 @@ company:
   name: "TopOfertas"
   hours: "06:00–21:00"
 
-# Flags operacionais (usados pelos flows)
 flags:
   flow_only: true
-  debug_trace_replies: true          # carimbo (flow/...)
+  debug_trace_replies: true
   has_cod: true
   force_funnel: true
   useModelsByStage: true
   fallbackToGlobal: true
-  send_opening_photo: true           # envia a foto no primeiro contato
+  send_opening_photo: true
   small_talk_soften: true
   guardrails_strict: true
 
-# Produto (dados usados nos textos e guardrails)
 product:
   name: "Progressiva Vegetal"
   price_original: 197
@@ -34,14 +32,12 @@ product:
   coupon_post_payment_only: false
   coupon_code: ""
 
-# Mídia usada no microprocesso de abertura
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 marketing:
   sold_count: 40000
 
-# Modelos por etapa — pode usar gpt-5-* (o core traduz p/ compat se preciso)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -50,7 +46,6 @@ models_by_stage:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
-# Fallbacks globais (mantém compat)
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -70,12 +65,13 @@ audio:
   tts_provider: "none"
   tts_voice: "alloy"
 
-# Guardrails (não deixar o bot alterar preço/link)
 guardrails:
   allow_links_only_from_list: true
   allowed_links:
     - "{{checkout_link}}"
     - "{{site_url}}"
+    - "https://entrega.logzz.com.br/pay/"   # garante que o domínio do checkout nunca será removido
+    - "https://entrega.logzz.com.br"
   price_min: 149
   price_max: 249
   freeze_fields:
@@ -84,7 +80,6 @@ guardrails:
     - "sold_count"
 
 messages:
-  # textos prontos que outros flows podem reutilizar
   opening:
     - "Oi! Eu sou a Cláudia. Consigo te orientar certinho. Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)?"
     - "Oi! Sou a Cláudia. Pra te ajudar melhor: seu cabelo é liso, ondulado, cacheado ou crespo?"

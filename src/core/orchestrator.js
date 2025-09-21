@@ -1,99 +1,30 @@
 // src/core/orchestrator.js
-// Orquestrador determinístico: SEM LLM.
-// A/B sticky por usuário, guardrails, anti-rajada/debounce e *fallback* dos hooks
-// apenas quando não houver ações de flow.
+// Orquestrador "flows-first": prioriza flows; hooks/fallback só se não houver ação.
+// Mantém lock anti-rajada, persistência e telemetria. NÃO mexe no texto dos flows.
 
 import {
-  getSession, saveSession, applySlotFilling,
-  setStage, forceStage,
-  normalizeStage, shouldStickToClose, canAsk, markAsked
+  getSession, saveSession,
+  normalizeStage
 } from "./fsm.js";
 import settings from "./settings.js";
-import { chooseVariant, loadFunnelForVariant, loadDefaultFunnel } from "./abrouter.js";
 
 const BOT_ID = process.env.BOT_ID || settings?.bot_id || "claudia";
 
-// Proteções
-const FLOOD_MS_SAME_REPLY = 8000;
+// ---------- Concurrency / anti-rajada ----------
+const LOCK_MS = 8000;
 const DEBOUNCE_MS_INBOUND = 3500;
-const PROCESSING_LOCK_MS  = 10000;
+const SAME_REPLY_MS = 8000;
 
-const processingLocks = new Map();
-function tryAcquireLock(jid) {
+const locks = new Map();
+function tryLock(key) {
   const now = Date.now();
-  const ts = processingLocks.get(jid);
-  if (ts && (now - ts) < PROCESSING_LOCK_MS) return false;
-  processingLocks.set(jid, now);
+  const last = locks.get(key) || 0;
+  if (now - last < LOCK_MS) return false;
+  locks.set(key, now);
   return true;
 }
-function releaseLock(jid) { processingLocks.delete(jid); }
+function release(key) { locks.delete(key); }
 
-// Guardrails
-const STAGES_NO_PRICE = new Set(["greet","qualify"]);
-const RX_PRICE_ANY = /\bR\$\s?\d{1,3}(?:\.\d{3})*(?:,\d{2})?\b/g;
-const RX_ASK_PRICE = /\b(preç|valor|quanto|cust)/i;
-const RX_ASK_LINK  = /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho|pagamento)\b/i;
-
-function clampPrice(price) {
-  const min = settings?.guardrails?.price_min ?? 0;
-  const max = settings?.guardrails?.price_max ?? Number.MAX_SAFE_INTEGER;
-  return Math.max(min, Math.min(max, Number(price)||0));
-}
-function expandAllowedLinks(list = []) {
-  return list
-    .map(u => String(u || "")
-      .replace(/\{\{\s*checkout_link\s*\}\}/g, settings?.product?.checkout_link || "")
-      .replace(/\{\{\s*site_url\s*\}\}/g, settings?.product?.site_url || "")
-      .replace(/\{\{\s*product\.checkout_link\s*\}\}/g, settings?.product?.checkout_link || "")
-      .replace(/\{\{\s*product\.site_url\s*\}\}/g, settings?.product?.site_url || "")
-      .trim())
-    .filter(Boolean);
-}
-function enforceLinks(text) {
-  const allowOnly = !!settings?.guardrails?.allow_links_only_from_list;
-  if (!allowOnly) return text;
-  const allowList = expandAllowedLinks(settings?.guardrails?.allowed_links || []);
-  return String(text||"").replace(/\bhttps?:\/\/[^\s]+/gi, (u) => {
-    const ok = allowList.some(a => u.startsWith(a));
-    return ok ? u : "[link removido]";
-  });
-}
-function enforcePrice(text, { allow=false, stage="" } = {}) {
-  let out = String(text||"");
-  if (!allow || STAGES_NO_PRICE.has(String(stage||"").toLowerCase())) {
-    out = out.replace(RX_PRICE_ANY, "[preço disponível sob pedido]");
-  }
-  return out;
-}
-
-// Carrega funil (A/B ou padrão)
-async function loadFunnel(botId, jid) {
-  const ab = await chooseVariant({ botId, userId: jid }).catch(() => null);
-  if (!ab?.variant) {
-    return { funnel: await loadDefaultFunnel(botId), variant: null };
-  }
-  const f = await loadFunnelForVariant(botId, ab.variant);
-  return { funnel: f, variant: ab.variant };
-}
-function pickCopy(funnel, stage, variantSeed = 0) {
-  const arr = Array.isArray(funnel?.[stage]) ? funnel[stage] : [];
-  if (!arr.length) return "";
-  const idx = Math.abs(variantSeed) % arr.length;
-  return String(arr[idx] || "");
-}
-
-// Fallback local (apenas como último dos últimos)
-const FALLBACKS = [
-  "Consegue me contar rapidinho sobre seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)",
-  "Pra te indicar certinho, me fala seu tipo de cabelo 💇‍♀️ (liso, ondulado, cacheado ou crespo)",
-  "Só pra confirmar, qual é o tipo do seu cabelo? 💕 (liso, ondulado, cacheado ou crespo)"
-];
-function fallbackReply(seed = 0) {
-  const idx = Math.abs(seed) % FALLBACKS.length;
-  return FALLBACKS[idx];
-}
-
-// Persistência anti-rajada
 function shouldDebounceInbound(session, msg) {
   const now = Date.now();
   const lastTxt = session?.flags?.last_user_text || "";
@@ -112,7 +43,7 @@ function shouldBlockSameReply(session, replyText) {
   const last = session?.flags?.last_reply_text || "";
   const lastTs = session?.flags?.last_reply_ts || 0;
   const same = last === replyText;
-  const close = (now - lastTs) < FLOOD_MS_SAME_REPLY;
+  const close = (now - lastTs) < SAME_REPLY_MS;
   return same && close;
 }
 function markReply(session, replyText) {
@@ -121,138 +52,144 @@ function markReply(session, replyText) {
   session.flags.last_reply_ts   = Date.now();
 }
 
-/**
- * Saída: [{ kind:'image', url, caption }, { kind:'text', text, meta:{variant,stage,source?} }]
- */
-export async function orchestrate({ jid, text }) {
-  if (!tryAcquireLock(jid)) {
-    console.log("[orchestrator] lock negado (concurrency)", { jid });
-    return [];
-  }
-  try {
-    const actions = [];
-    const session = await getSession({ botId: BOT_ID, userId: jid, createIfMissing: true });
-    const { funnel, variant } = await loadFunnel(BOT_ID, jid);
+// ---------- Helpers ----------
+function mapStageName(s) {
+  const k = String(s || "greet").toLowerCase();
+  if (k === "qualify") return "qualificacao";
+  if (k === "offer") return "offer";
+  if (k === "close" || k === "fechamento") return "close";
+  if (k === "postsale" || k === "posvenda") return "postsale";
+  if (k === "oferta") return "offer";
+  if (k === "qualificacao") return "qualificacao";
+  return "greet";
+}
 
-    // carrega hooks da bot (dinâmico)
-    let botHooks = null;
-    try {
-      const mod = await import(`../../configs/bots/${BOT_ID}/hooks.js`);
-      botHooks = mod?.hooks || mod?.default?.hooks || null;
-    } catch (e) {
-      // sem hooks específicos, segue o jogo
+function buildOutbox(actions, stage, variant=null) {
+  return {
+    publish: async (msg) => {
+      if (!msg) return;
+      // normaliza image
+      if (msg.kind === "image" || msg.type === "image") {
+        const url = msg.payload?.url || msg.url;
+        const caption = msg.payload?.caption || msg.caption || "";
+        if (url) actions.push({ kind: "image", url, caption, meta: { stage, variant, source: `flow/${stage}` } });
+        return;
+      }
+      // normaliza text
+      if (msg.kind === "text" || typeof msg === "string") {
+        const text = typeof msg === "string" ? msg : (msg.payload?.text || msg.text || "");
+        if (text) actions.push({ kind: "text", text, meta: { stage, variant, source: `flow/${stage}` } });
+        return;
+      }
     }
+  };
+}
+
+async function runFlow(botId, stage, ctxBase, actions) {
+  const file =
+    stage === "qualificacao" ? "qualify" :
+    stage === "offer"        ? "offer"   :
+    stage === "close"        ? "close"   :
+    stage === "postsale"     ? "postsale": "greet";
+
+  let fn = null;
+  try {
+    const mod = await import(`../../configs/bots/${botId}/flow/${file}.js`);
+    fn = mod?.default || mod?.[file] || null;
+  } catch { fn = null; }
+  if (!fn) return null;
+
+  const ctx = {
+    ...ctxBase,
+    meta: { variant: null }
+  };
+
+  const res = await fn(ctx);
+  if (!res) return null;
+
+  // se o flow devolveu reply como string, empilha
+  if (res.reply) {
+    actions.push({
+      kind: "text",
+      text: String(res.reply || ""),
+      meta: { stage: file, variant: null, source: `flow/${file}` }
+    });
+  }
+  return { res, file };
+}
+
+export async function orchestrate({ jid, text }) {
+  if (!tryLock(jid)) return [];
+  const actions = [];
+  try {
+    const session = await getSession({ botId: BOT_ID, userId: jid, createIfMissing: true });
+    session.flags = session.flags || {};
+    session.flow  = session.flow  || {};
 
     const msg = String(text || "");
 
-    if (shouldDebounceInbound(session, msg)) {
-      console.log("[orchestrator] inbound debounced", { jid, msg });
-      return [];
-    }
+    // debounce do mesmo input
+    if (shouldDebounceInbound(session, msg)) return [];
     markInbound(session, msg);
 
-    applySlotFilling(session, msg);
+    // 1) resolve estágio
+    let stage = mapStageName(normalizeStage(session.stage));
 
-    let stage = normalizeStage(session.stage);
-    if (shouldStickToClose(session, msg)) stage = "close";
+    // 2) executa FLOW do estágio atual (greet já envia foto 1x dentro do próprio flow)
+    const outbox = buildOutbox(actions, stage, null);
+    const flowRun = await runFlow(BOT_ID, stage, { settings, outbox, jid, state: session.flow, text: msg }, actions);
 
-    const askedPrice = RX_ASK_PRICE.test(msg);
-    const askedLink  = RX_ASK_LINK .test(msg);
-    if (askedLink)  { forceStage(session, "close");  stage = "close"; }
-    else if (askedPrice) { forceStage(session, "offer"); stage = "offer"; }
-
-    // GREET: envia imagem 1x e já avança para "qualify" (texto sai do funil)
-    if (stage === "greet") {
-      const openingUrl = settings?.media?.opening_photo_url;
-      if (openingUrl && !session?.flags?.opening_photo_sent) {
-        actions.push({ kind: "image", url: openingUrl, caption: "", meta: { variant, stage: "greet" } });
-        session.flags.opening_photo_sent = true;
-      }
-      session.stage = "qualify";
-      stage = "qualify";
-      await saveSession(session);
-      // segue para também enviar o texto de qualify
+    // 3) se o flow não produziu nenhuma ação → fallback via hooks (exceto greet)
+    if (!actions.length) {
+      try {
+        const mod = await import(`../../configs/bots/${BOT_ID}/hooks.js`);
+        const botHooks = mod?.hooks || mod?.default?.hooks || null;
+        if (botHooks?.fallbackText && stage !== "greet") {
+          const fb = await botHooks.fallbackText({ stage, settings });
+          if (fb && fb.trim()) {
+            actions.push({ kind: "text", text: fb.trim(), meta: { stage, source: "hooks" } });
+          }
+        }
+      } catch { /* sem hooks, segue */ }
     }
 
-    // Semente estável por usuário
-    const variantSeed = (session.userId || "").split("").reduce((a,c)=>a+c.charCodeAt(0),0);
-
-    let copy = pickCopy(funnel, stage, variantSeed);
-
-    // Placeholders/guardrails
-    const frozenPrice = clampPrice(settings?.product?.price_target ?? settings?.product?.price_original);
-    copy = String(copy || "")
-      .replace(/\{\{price_target\}\}/g, String(frozenPrice))
-      .replace(/\{\{checkout_link\}\}/g, String(settings?.product?.checkout_link || ""))
-      .replace(/\{\{\s*product\.checkout_link\s*\}\}/g, String(settings?.product?.checkout_link || ""));
-
-    const allowPrice = askedPrice && !STAGES_NO_PRICE.has(stage);
-    copy = enforceLinks(copy);
-    copy = enforcePrice(copy, { allow: allowPrice, stage });
-
-    // Anti-loop em "qualify"
-    if (stage === "qualify") {
-      const askId = "qualify_probe";
-      if (!canAsk(session, askId)) {
-        copy = "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? 🙏";
-      } else {
-        markAsked(session, askId);
-      }
+    // 4) fallback local se ainda vazio
+    if (!actions.length) {
+      actions.push({
+        kind: "text",
+        text: "Consegue me contar rapidinho sobre seu cabelo? (liso, ondulado, cacheado ou crespo) 💛",
+        meta: { stage, source: "fallback" }
+      });
     }
 
-    // Se o funil não trouxe texto, tenta *fallback* dos HOOKS (exceto greet)
-    if (!copy || !copy.trim()) {
-      let hookFallback = null;
-      if (botHooks?.fallbackText) {
-        hookFallback = await botHooks.fallbackText({ stage, settings });
-      }
-      if (hookFallback && hookFallback.trim()) {
-        copy = hookFallback.trim(); // geralmente já vem com carimbo "(hooks)"
-        console.log("[orchestrator] fallback via hooks", { stage, jid });
-      } else {
-        copy = fallbackReply(variantSeed); // fallback local (sem carimbo)
-        console.log("[orchestrator] fallback local", { stage, jid });
-      }
+    // 5) avanço de estágio (respeita `next` do flow; senão, padrão do funil)
+    if (flowRun?.res?.next) {
+      session.stage = mapStageName(flowRun.res.next);
+    } else {
+      const f = flowRun?.file;
+      if (f === "greet")       session.stage = "qualificacao";
+      else if (f === "qualify") session.stage = "offer";
+      else if (f === "offer")   session.stage = "close";
+      else if (f === "close")   session.stage = "postsale";
     }
 
-    if (shouldBlockSameReply(session, copy)) {
-      console.log("[orchestrator] reply bloqueada por flood", { jid });
-      await saveSession(session);
-      return [];
-    }
-    markReply(session, copy);
+    // 6) anti-flood de mesma resposta
+    const lastText = actions.find(a => a.kind === "text")?.text || "";
+    if (lastText && shouldBlockSameReply(session, lastText)) return [];
+    if (lastText) markReply(session, lastText);
 
-    // Avanço natural de estágios (qualify→offer→close)
-    if (stage === "qualify") {
-      const { hair_type, had_prog_before, goal } = session.slots || {};
-      if (hair_type && (had_prog_before !== null && had_prog_before !== undefined) && goal) {
-        session.stage = "offer";
-      }
-    } else if (stage === "offer") {
-      session.stage = "close";
-    }
-
-    // Empilha a resposta de texto com meta (stage/variant)
-    actions.push({ kind: "text", text: copy, meta: { variant, stage: session.stage } });
-
-    // ======= Persiste + Métricas =======
+    // 7) persistência + métricas
     await saveSession(session);
     try {
       const { captureFromActions } = await import("./metrics/middleware.js");
       await captureFromActions(actions, {
-        botId: BOT_ID,
-        jid,
-        stage: session.stage,
-        variant: (actions.find(a => a?.meta?.variant)?.meta?.variant) || null,
-        askedPrice,
-        askedLink,
+        botId: BOT_ID, jid, stage: session.stage, variant: null
       });
-    } catch (e) { console.warn("[metrics] skip:", e?.message || e); }
-    // ===================================
+    } catch { /* métricas são best effort */ }
 
     return actions;
   } finally {
-    releaseLock(jid);
+    release(jid);
   }
 }
 
