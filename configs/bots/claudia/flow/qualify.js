@@ -118,4 +118,18 @@ export default async function qualify(ctx) {
 
     // cooldown ainda ativo → não repetir igual; dar escape + CTA
     const softNudge = pending.key === "hair_type"
-      ? "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? 🙏 Se preferir, diga **pular** que eu já te
+      ? "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? 🙏 Se preferir, diga **pular** que eu já te passo o valor."
+      : "Me diz isso e já te mostro o valor/link ✨ (ou diga **pular** que eu te recomendo direto).";
+
+    // Evitar ficar presa pra sempre: após X toques, escala mesmo sem resposta perfeita
+    if (state.__qualify_hits >= MAX_TOUCHES_BEFORE_ESCALATE) {
+      return { reply: tagReply(settings, "Com o que já tenho, consigo te passar a condição 👇", "flow/qualify"), next: "oferta" };
+    }
+
+    return { reply: tagReply(settings, softNudge, "flow/qualify"), next: "qualificacao" };
+  }
+
+  // 5) Fallback: recomenda e segue
+  const ok = maybePrefixWithName(state, "Perfeito! Já consigo te recomendar certinho.");
+  return { reply: tagReply(settings, ok, "flow/qualify"), next: "oferta" };
+}
