@@ -1,94 +1,128 @@
 // src/core/abrouter.js
-// Core neutro: roteador A/B simples e determinístico (sticky) por identidade.
-// Mantém o core plugável (girls só nas pastas configs/bots/<bot_id>).
+// -----------------------------------------------------------------------------
+// AbRouter neutro do core: decide variante A/B e carrega funis por bot.
+// - NÃO tem cheiro de bot (Cláudia/Maria). Só pluga dinamicamente.
+// - Estratégia padrão: sticky-hash por userId quando settings.abtest.enabled=true.
+// - Carregamento do funil: tenta múltiplos caminhos e cai em default se não achar.
+// -----------------------------------------------------------------------------
 
-// Hashzinho determinístico (rápido) p/ stickiness por identidade
-function hash32(str = "") {
-  let h = 2166136261 >>> 0; // FNV-1a seed
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+import settings from "./settings.js";
+
+// Util
+const normBotId = (id) => String(id || settings?.bot_id || "default").trim();
+const hash = (s) => String(s || "")
+  .split("")
+  .reduce((a, c) => ((a << 5) - a) + c.charCodeAt(0) | 0, 0);
+
+/**
+ * Decide a variante para um userId.
+ * Retorno: { variant: 'A'|'B'|string|null, meta: {...} }
+ */
+export async function chooseVariant({ botId, userId }) {
+  const cfg = settings?.abtest || {};
+  const enabled = !!cfg.enabled;
+  const variants = Array.isArray(cfg.variants) && cfg.variants.length
+    ? cfg.variants.map(v => String(v))
+    : ["A", "B"]; // padrão
+
+  if (!enabled) return { variant: null, meta: { strategy: "disabled" } };
+
+  const strategy = String(cfg.strategy || "sticky-hash");
+  if (strategy === "sticky-hash") {
+    const h = Math.abs(hash(`${normBotId(botId)}::${String(userId || "")}`));
+    const idx = h % variants.length;
+    return { variant: variants[idx], meta: { strategy, idx, total: variants.length } };
   }
-  // espalha mais um pouco
-  h += h << 13; h ^= h >>> 7; h += h << 3; h ^= h >>> 17; h += h << 5;
-  return h >>> 0;
+
+  // Reserva para outras estratégias (ex.: thompson)
+  // Hoje volta sticky-hash como fallback.
+  const h = Math.abs(hash(`${normBotId(botId)}::${String(userId || "")}`));
+  const idx = h % variants.length;
+  return { variant: variants[idx], meta: { strategy: "sticky-hash", idx, total: variants.length } };
 }
 
 /**
- * Normaliza buckets [{ id: 'A', weight: 1 }, { id: 'B', weight: 1 }]
+ * Carrega o funil "default" do bot.
+ * Convenções tentadas (em ordem):
+ *  - configs/bots/<botId>/flow/funnel.js     (export default {greet,qualify,offer,close})
+ *  - configs/bots/<botId>/flow/default.js
+ *  - configs/bots/<botId>/flow/index.js
+ *  - Compose a partir de greet.js/qualify.js/offer.js/close.js
  */
-function normalizeBuckets(buckets) {
-  const arr = Array.isArray(buckets) && buckets.length ? buckets : [
-    { id: "A", weight: 1 },
-    { id: "B", weight: 1 },
+export async function loadDefaultFunnel(botId) {
+  const base = `/app/configs/bots/${normBotId(botId)}/flow`;
+
+  const tryFiles = [
+    `${base}/funnel.js`,
+    `${base}/default.js`,
+    `${base}/index.js`,
   ];
-  return arr
-    .map(b => ({ id: String(b.id || "").trim() || "A", weight: Math.max(0, Number(b.weight) || 0) }))
-    .filter(b => b.weight > 0);
-}
-
-/**
- * Seleciona variante de forma determinística por identidade (sticky).
- * @param {string} identity  ex.: phone/jid/userId/sessionId
- * @param {{id:string, weight:number}[]} buckets
- * @returns {string} id da variante (ex.: "A" | "B" | ...)
- */
-export function pickVariant(identity = "", buckets = null) {
-  const list = normalizeBuckets(buckets);
-  if (!list.length) return "A";
-  const total = list.reduce((s, b) => s + b.weight, 0);
-  if (total <= 0) return list[0].id;
-
-  // espalha o hash dentro do range total
-  const hv = hash32(String(identity));
-  const r  = hv % total;
-
-  let acc = 0;
-  for (const b of list) {
-    acc += b.weight;
-    if (r < acc) return b.id;
+  for (const p of tryFiles) {
+    const mod = await tryImport(p);
+    if (mod?.default && typeof mod.default === "object") {
+      return normalizeFunnel(mod.default);
+    }
   }
-  return list[0].id;
+
+  // Tenta compor pelas etapas soltas
+  const parts = {};
+  for (const stage of ["greet", "qualify", "offer", "close"]) {
+    const mod = await tryImport(`${base}/${stage}.js`);
+    if (Array.isArray(mod?.default)) parts[stage] = mod.default;
+    else if (typeof mod?.default === "string") parts[stage] = [mod.default];
+  }
+  const composed = normalizeFunnel(parts);
+  if (Object.keys(composed).length) return composed;
+
+  // Fallback vazio
+  return { greet: [""], qualify: [""], offer: [""], close: [""] };
 }
 
 /**
- * Roteia uma etapa do funil para a variante escolhida.
- * Mantém API enxuta: orquestrador passa { stage, context, buckets }.
- * @param {object} params
- * @param {string} params.stage   etapa lógica (ex.: "offer")
- * @param {object} params.context deve conter uma identidade estável (jid/phone/userId)
- * @param {{id:string, weight:number}[]=} params.buckets
- * @param {string=} params.identityKey chave no context que contém a identidade (default: "jid" | "phone" | "userId")
- * @returns {{ variant: string, stage: string }}
+ * Carrega o funil específico de uma variante (A/B) do bot.
+ * Convenções tentadas:
+ *  - funnel.<VARIANT>.js | funnel_<VARIANT>.js | <VARIANT>.js
+ * Se não encontrar, cai no default.
  */
-export function route({ stage = "", context = {}, buckets = null, identityKey } = {}) {
-  const idKey = identityKey || (("jid" in context) ? "jid" :
-                                ("phone" in context) ? "phone" :
-                                ("userId" in context) ? "userId" :
-                                null);
-  const identity = idKey ? String(context[idKey] || "") : String(context.identity || "");
-  const variant = pickVariant(identity, buckets);
-  return { variant, stage: String(stage || "") };
+export async function loadFunnelForVariant(botId, variant) {
+  const base = `/app/configs/bots/${normBotId(botId)}/flow`;
+  const v = String(variant || "").trim();
+  if (!v) return await loadDefaultFunnel(botId);
+
+  const tryFiles = [
+    `${base}/funnel.${v}.js`,
+    `${base}/funnel_${v}.js`,
+    `${base}/${v}.js`,
+  ];
+  for (const p of tryFiles) {
+    const mod = await tryImport(p);
+    if (mod?.default && typeof mod.default === "object") {
+      return normalizeFunnel(mod.default);
+    }
+  }
+  return await loadDefaultFunnel(botId);
 }
 
-/**
- * Registro de resultado (no-op por padrão).
- * O orquestrador pode chamar para telemetria/Thompson posteriormente.
- * @param {object} params
- * @param {string} params.identity
- * @param {string} params.variant
- * @param {string} params.metric   ex.: "conversion", "click", "reply"
- * @param {number} params.value    ex.: 0/1 ou score
- */
-export function registerOutcome({ identity = "", variant = "", metric = "", value = 0 } = {}) {
-  // Intencionalmente vazio neste shim.
-  // Futuro: integrar com src/core/telemetry.js ou Thompson.
-  if (process.env.DEBUG_ABROUTER === "true") {
-    // Log leve para depuração (não quebra produção)
-    console.log(`[abrouter] outcome`, { identity, variant, metric, value });
+// -----------------------------------------------------------------------------
+
+function normalizeFunnel(obj) {
+  const out = {};
+  for (const key of ["greet", "qualify", "offer", "close"]) {
+    const v = obj?.[key];
+    if (typeof v === "string") out[key] = [v];
+    else if (Array.isArray(v)) out[key] = v.map(x => String(x || ""));
+  }
+  return out;
+}
+
+async function tryImport(path) {
+  try {
+    // Import ESM dinâmico — o Nixpacks/Railway resolve caminho absoluto em /app
+    const mod = await import(path);
+    return mod;
+  } catch {
+    return null;
   }
 }
 
-// Default export para compat com imports antigos (default e named)
-const api = { pickVariant, route, registerOutcome };
-export default api;
+export default { chooseVariant, loadDefaultFunnel, loadFunnelForVariant };
