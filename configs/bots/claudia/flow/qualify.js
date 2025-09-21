@@ -1,6 +1,6 @@
 // configs/bots/claudia/flow/qualify.js
 // Captura/uso de NOME + slot-filling (cabelo / já fez / objetivo) + atalhos (preço/link)
-// Anti-loop com cooldown, "pular" e escalada para oferta
+// Anti-loop com cooldown, "pular" e escalada para oferta + fusível anti-rajada (dedupe 5s)
 import { callUser, tagReply } from "./_state.js";
 
 const RX = {
@@ -25,6 +25,8 @@ const QUESTIONS = [
 // limites pra não “prender” a cliente nessa etapa
 const COOLDOWN_MS = 60_000;
 const MAX_TOUCHES_BEFORE_ESCALATE = 3;
+// fusível anti-rajada (não repetir a MESMA pergunta em < 5s)
+const DEDUPE_MS = 5_000;
 
 /** Captura e grava nome no state.profile.name (compatível com callUser) */
 function captureName(state, text = "") {
@@ -110,9 +112,16 @@ export default async function qualify(ctx) {
     const flag = `__asked_${pending.key}_at`;
     const now  = Date.now();
 
+    // 🔒 fusível anti-rajada: evita repetição da MESMA pergunta em poucos segundos
+    if (state.__last_q_key === pending.key && (now - (state.__last_q_at || 0)) < DEDUPE_MS) {
+      return { reply: null, next: "qualificacao" };
+    }
+
     if (!state[flag] || (now - state[flag]) > COOLDOWN_MS) {
       state[flag] = now;
       const q = maybePrefixWithName(state, pending.q);
+      state.__last_q_key = pending.key;
+      state.__last_q_at = now;
       return { reply: tagReply(settings, q, "flow/qualify"), next: "qualificacao" };
     }
 

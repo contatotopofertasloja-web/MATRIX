@@ -5,71 +5,43 @@ company:
   name: "TopOfertas"
   hours: "06:00–21:00"
 
+# Flags operacionais (usados pelos flows)
 flags:
   flow_only: true
-  debug_trace_replies: true         # carimbo (flow/...)
+  debug_trace_replies: true          # carimbo (flow/...)
   has_cod: true
   force_funnel: true
   useModelsByStage: true
   fallbackToGlobal: true
-  send_opening_photo: true          # <- garante a foto no primeiro contato
+  send_opening_photo: true           # envia a foto no primeiro contato
+  small_talk_soften: true
+  guardrails_strict: true
 
+# Produto (dados usados nos textos e guardrails)
 product:
   name: "Progressiva Vegetal"
   price_original: 197
   price_target: 170
-  applications_up_to: 10
-  duration_avg: "de 2 a 3 meses"
-  volume_ml: 500
-  site_url: "https://seusite.com"
-  checkout_link: "https://seusite.com/checkout"
-  refund_days_after_delivery: 7
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  site_url: "https://tpofertas.com/collections/cod-todos"
+  anvisa_ok: true
   how_to_use: >
-    Lave os cabelos, seque ~80%, aplique mecha a mecha, pause 40–50min,
-    enxágue, escove e pranche.
+    Lave os cabelos, seque ~80%, aplique mecha a mecha e deixe agir 40–50 min.
+    Enxágue, escove e pranche para melhor selagem. Rende em média 3 meses.
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
   coupon_post_payment_only: false
   coupon_code: ""
 
+# Mídia usada no microprocesso de abertura
 media:
-  opening_photo_url: "https://cdn.seusite.com/arte-abertura.jpg"
+  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
-guardrails:
-  allow_links_only_from_list: true
-  allowed_links:
-    - "{{site_url}}"
-    - "{{checkout_link}}"
-  price_min: 100
-  price_max: 300
-  freeze_fields:
-    - "price_target"
-    - "checkout_link"
-    - "coupon_code"
+marketing:
+  sold_count: 40000
 
-# Mensagens para o greet (AB test)
-abtest:
-  greet:
-    enabled: true
-    weights:
-      A: 1
-      B: 1
-
-messages:
-  # Variante A: profissional/credibilidade
-  opening_A:
-    - "Oi, eu sou a Cláudia da *TopOfertas* ✨ especialista na Progressiva Vegetal. Qual o seu nome? Posso te explicar como funciona o tratamento?"
-  # Variante B: leve/acolhedora
-  opening_B:
-    - "Oi! Eu sou a Cláudia, prazer falar com você 😊 Como posso te chamar? Quer que eu te explique rapidinho sobre a Progressiva Vegetal?"
-
-  delivery_info:
-    - "Entregamos rápido: **{{delivery_sla.capitals_hours}}h** capitais / **{{delivery_sla.others_hours}}h** demais locais."
-  features_intro:
-    - "Como usar (resumo):"
-
-# Modelos por etapa (compat 5.x↔4.x pelo core)
+# Modelos por etapa — pode usar gpt-5-* (o core traduz p/ compat se preciso)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -78,6 +50,7 @@ models_by_stage:
   fechamento:   "gpt-5"
   posvenda:     "gpt-5-nano"
 
+# Fallbacks globais (mantém compat)
 global_models:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -96,3 +69,26 @@ audio:
   asr_model: "whisper-1"
   tts_provider: "none"
   tts_voice: "alloy"
+
+# Guardrails (não deixar o bot alterar preço/link)
+guardrails:
+  allow_links_only_from_list: true
+  allowed_links:
+    - "{{checkout_link}}"
+    - "{{site_url}}"
+  price_min: 149
+  price_max: 249
+  freeze_fields:
+    - "price_target"
+    - "checkout_link"
+    - "sold_count"
+
+messages:
+  # textos prontos que outros flows podem reutilizar
+  opening:
+    - "Oi! Eu sou a Cláudia. Consigo te orientar certinho. Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)?"
+    - "Oi! Sou a Cláudia. Pra te ajudar melhor: seu cabelo é liso, ondulado, cacheado ou crespo?"
+  delivery_info:
+    - "Prazo de entrega: até {{delivery_sla.capitals_hours}}h capitais e até {{delivery_sla.others_hours}}h demais regiões. Pagamento é COD (na entrega) ✅"
+  payment_info:
+    - "O link que envio é só pra confirmar endereço e acompanhar pelo WhatsApp. O pagamento é **na entrega** (COD)."
