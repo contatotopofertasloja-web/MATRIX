@@ -1,102 +1,32 @@
 // configs/bots/claudia/flow/_state.js
-// Estado curto + helpers + carimbo (flow/*) com whitelist de links.
+// Estado curto + helpers + carimbo (flow/*) com whitelist de links e gating anti-rajada.
 
 export function initialState() {
   return {
     // identificação & qualificação
-    nome: null,
-    apelido: null,
+    profile: { name: null },
     hair_type: null,          // liso | ondulado | cacheado | crespo
     had_prog_before: null,    // boolean | null
-    goal: null,               // "liso" | "alinhado" | "reduzir frizz"...
+    goal: null,               // "liso" | "alinhado/menos frizz"...
 
     // intenções rápidas
     price_allowed: false,
     link_allowed: false,
     consent_checkout: false,
 
-    // rastros
+    // controle de fluxo
     turns: 0,
-    stage: "recepcao",
-    last_intent: null,
-
-    // fechamento
-    telefone: null,
-    cep: null,
-    rua: null,
-    numero: null,
-    complemento: null,
-    bairro: null,
-    cidade: null,
-    uf: null,
-    referencia: null,
-
-    // anti-loop / mídia
     __sent_opening_photo: false,
-    __qualify_hits: 0,
-    last_offer_at: 0,
-    last_link_at: 0,
+    __boot_greet_done: false,
+
+    // antifluxo / antiflood
+    __gate: {},               // mapa { chave: timestamp }
   };
 }
 
-const CARINHOS = ["minha linda", "amor", "gata", "minha flor"];
-export function callUser(state = {}) {
-  const nome = (state?.nome || "").trim();
-  if (nome && Math.random() < 0.6) return nome.split(" ")[0];
-  if (!state._apx) state._apx = 0;
-  const ap = CARINHOS[state._apx % CARINHOS.length];
-  state._apx++;
-  return ap;
-}
-
-function numEnv(name, fallback) {
-  const raw = process.env[name];
-  if (raw == null) return fallback;
-  const n = Number(String(raw).replace(/[^\d.,-]/g, "").replace(",", "."));
-  return Number.isFinite(n) ? n : fallback;
-}
-
-export function getFixed(settings = {}) {
-  const s = settings || {};
-  const empresa = (s.company && s.company.name) || "TopOfertas";
-  const hours = (s.company && s.company.hours) || "06:00–21:00";
-  const product = s.product || {};
-
-  const priceOriginal = numEnv("PRICE_ORIGINAL", product.price_original ?? 197);
-  const priceTarget   = numEnv("PRICE_TARGET",   product.price_target   ?? 170);
-
-  return {
-    empresa,
-    hours,
-    priceOriginal,
-    priceTarget,
-    applications: product.applications_up_to ? `até ${product.applications_up_to} aplicações` : "várias aplicações",
-    duration: product.duration_avg || "de 2 a 3 meses",
-    soldCount: s?.marketing?.sold_count || 40000,
-    hasCOD: !!s?.flags?.has_cod,
-  };
-}
-
-export function summarizeAddress(st = {}) {
-  const p1 = [];
-  if (st.rua) p1.push(st.rua);
-  if (st.numero) p1.push(`nº ${st.numero}`);
-  const p2 = [];
-  if (st.bairro) p2.push(st.bairro);
-  if (st.cidade && st.uf) p2.push(`${st.cidade}/${st.uf}`);
-  const comp = st.complemento ? ` (${st.complemento})` : "";
-  const linha1 = p1.join(", ");
-  const linha2 = p2.join(" – ");
-  return [linha1 + comp, linha2].filter(Boolean).join(" – ");
-}
-
-export function isAwaitingConsent(state = {}) {
-  return state && state.consent_checkout === true;
-}
-
-/** Carimba a saída com (flow/<tag>) e aplica guardrails com whitelist de links */
-export function tagReply(settings = {}, text = "", tag = "flow") {
-  const wl = new Set(
+/** Whitelist de links para evitar vazamento */
+function whitelist(settings = {}) {
+  return new Set(
     [
       settings?.product?.checkout_link,
       settings?.product?.site_url,
@@ -105,6 +35,52 @@ export function tagReply(settings = {}, text = "", tag = "flow") {
       .map((u) => String(u || ""))
       .filter((u) => /^https?:\/\//i.test(u))
   );
+}
+
+/** Carimba SOMENTE se debug estiver ativo */
+export function tagReply(settings = {}, text = "", tag = "flow") {
+  const wl = whitelist(settings);
   const safe = String(text || "").replace(/https?:\/\/\S+/gi, (u) => (wl.has(u) ? u : "[link removido]"));
-  return `${safe} (${tag})`;
+  const debug = !!settings?.flags?.debug_trace_replies;
+  return debug && tag ? `${safe} (${tag})` : safe;
+}
+
+/** Nome do usuário (quando conhecido) */
+export function callUser(state = {}) {
+  const name = state?.profile?.name || state?.name;
+  if (!name) return null;
+  const clean = String(name).trim();
+  return clean || null;
+}
+
+/**
+ * Gating anti-rajada: retorna true se ainda está em janela de bloqueio.
+ * Ex.: if (gate(state,'boot_greet', 4000)) return { reply: null };
+ */
+export function gate(state = {}, key = "", ms = 3000) {
+  if (!key) return false;
+  const now = Date.now();
+  state.__gate = state.__gate || {};
+  const last = state.__gate[key] || 0;
+  if (now - last < ms) return true;
+  state.__gate[key] = now;
+  return false;
+}
+
+/** Utilitário de número -> string “inteiro” */
+export function n(v, d = 0) {
+  return Number.isFinite(+v) ? (+v).toFixed(0) : String(v ?? d);
+}
+
+/** Atalhos fixos do produto (opcional) */
+export function getFixed(settings = {}) {
+  const p = settings?.product || {};
+  return {
+    priceOriginal: +p.price_original || 0,
+    priceTarget: +p.price_target || 0,
+    slaCap: +(p?.delivery_sla?.capitals_hours ?? 24),
+    slaOthers: +(p?.delivery_sla?.others_hours ?? 72),
+    checkout: String(p.checkout_link || ""),
+    site: String(p.site_url || ""),
+  };
 }
