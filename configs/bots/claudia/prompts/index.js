@@ -24,7 +24,7 @@ export function buildPrompt({ stage = "greet", message = "", settings = {} }) {
 
   // Regras invioláveis — “domestica” o modelo:
   const regras = [
-    "Seja breve, gentil e consultiva (1–2 frases).",
+    "Responda em PT-BR, com 1–2 frases, tom amigo e direto.",
     "NUNCA invente preço, parcelas, cupons, prazos de entrega ou links.",
     "Não mencione números concretos (troque por termos genéricos: 'parcelado', 'o valor', 'em pouco tempo').",
     "Quando falar de pagamento, cite apenas: Pagamento na Entrega (COD).",
