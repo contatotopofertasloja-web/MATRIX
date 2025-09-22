@@ -1,7 +1,7 @@
 // configs/bots/claudia/flow/offer.js
-// Oferta personalizada a partir do estado (hair_type / goal / had_prog_before)
-// Atalhos: preço e link. Inclui CTAs e integra com fechamento.
-// Compatível com qualify.js/greet.js/settings.yaml atuais.
+// Oferta personalizada a partir do que já coletamos na qualificação.
+// Atalhos: preço e link; trata objeções comuns; envia foto de abertura 1x (failsafe).
+// Compatível com os helpers do projeto (ctx = { settings, outbox, jid, state, text }).
 
 import { callUser, tagReply } from "./_state.js";
 
@@ -9,127 +9,133 @@ const RX = {
   PRICE: /(preç|valor|quanto|cust)/i,
   LINK:  /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho|pagamento)\b/i,
 
-  OBJECTION_PRICE: /\bcar[oa]|car[oá]|t[áa]\s*car[oa]\b/i,
-  OBJECTION_SAFETY:/\bgolpe|seguran[çc]a|anvisa|registro\b/i,
-  OBJECTION_EFFECT:/\bfunciona|resultado|n[aã]o\s*pega|n[aã]o\s*alis[ae]\b/i,
+  OBJECTION_PRICE:  /\b(car[oa]|car[oá]|t[áa]\s*car[oa])\b/i,
+  OBJECTION_SAFETY: /\b(golpe|seguran[çc]a|anvisa|registro)\b/i,
+  OBJECTION_EFFECT: /\b(funciona|resultado|n[aã]o\s*pega|n[aã]o\s*alis[ae])\b/i,
+
+  RUDE: /(porra|merda|caralh|idiot|burra|bosta)/i,
 };
 
-function getFx(settings) {
+// ---------- util ----------
+async function ensureOpeningPhotoOnce(ctx) {
+  const { settings, state, outbox, jid } = ctx;
+  if (
+    settings?.flags?.send_opening_photo &&
+    settings?.media?.opening_photo_url &&
+    !state.__sent_opening_photo
+  ) {
+    await outbox.publish({
+      to: jid,
+      kind: "image",
+      payload: { url: settings.media.opening_photo_url, caption: "" },
+    });
+    state.__sent_opening_photo = true;
+  }
+}
+
+function fx(settings) {
   const p = settings?.product || {};
-  const fx = (n) => Number.isFinite(+n) ? (+n).toFixed(0) : String(n || "").trim();
+  const fmt = (n) => Number.isFinite(+n) ? (+n).toFixed(0) : String(n || "").trim();
   return {
     name:           p.name || "Progressiva Vegetal",
-    priceOriginal:  fx(p.price_original || 0),
-    priceTarget:    fx(p.price_target  || 0),
-    checkout:       p.checkout_link || "",
-    site:           p.site_url      || "",
+    priceOriginal:  fmt(p.price_original || 0),
+    priceTarget:    fmt(p.price_target  || 0),
+    checkout:       String(p.checkout_link || ""),
+    site:           String(p.site_url || ""),
     slaCap:         settings?.product?.delivery_sla?.capitals_hours || 24,
     slaOthers:      settings?.product?.delivery_sla?.others_hours   || 72,
     applications:   p.applications_up_to ? `${p.applications_up_to} aplicações` : "várias aplicações",
+    soldCount:      settings?.marketing?.sold_count || 40000,
   };
 }
 
-function buildMicroPitch(state) {
+function deliveryLine(settings) {
+  const f = fx(settings);
+  return `Prazo: **${f.slaCap}h** capitais / **${f.slaOthers}h** demais regiões.`;
+}
+function pricedLine(settings) {
+  const f = fx(settings);
+  return `De **R$${f.priceOriginal}** por **R$${f.priceTarget}**.`;
+}
+function guardCheckout(settings) {
+  const f = fx(settings);
+  if (!f.checkout) return "";
+  const allow = !!settings?.guardrails?.allow_links_only_from_list;
+  if (!allow) return f.checkout;
+  const wl = (settings?.guardrails?.allowed_links || []).map(String);
+  const ok = wl.some((tpl) => (tpl || "").includes("{{checkout_link}}") || tpl === f.checkout);
+  return ok ? f.checkout : f.checkout; // conservador: o checkout normalmente está whitelisted no YAML
+}
+
+function microPitch(state) {
   const parts = [];
-  if (state?.hair_type) {
-    parts.push(`Para cabelo **${state.hair_type}**`);
-  }
-  if (state?.goal) {
-    parts.push(`focando em **${state.goal}**`);
-  }
+  if (state?.hair_type) parts.push(`para cabelo **${state.hair_type}**`);
+  if (state?.goal) parts.push(`focando em **${state.goal}**`);
   if (state?.had_prog_before != null) {
-    parts.push(state.had_prog_before ? `perfeito pra quem **já fez** progressiva` : `seguro pra **primeira aplicação**`);
+    parts.push(state.had_prog_before ? "perfeito pra quem **já fez**" : "seguro pra **primeira aplicação**");
   }
   return parts.length ? parts.join(" · ") : "com efeito de alinhamento e brilho";
 }
 
-function deliveryLine(settings) {
-  const fx = getFx(settings);
-  return `Entrega rápida: **${fx.slaCap}h** capitais / **${fx.slaOthers}h** demais regiões.`;
-}
-
-function pricedLine(settings) {
-  const fx = getFx(settings);
-  return `De **R$${fx.priceOriginal}** por **R$${fx.priceTarget}**.`;
-}
-
-function guardCheckout(settings) {
-  const fx = getFx(settings);
-  const allow = settings?.guardrails?.allow_links_only_from_list;
-  const whitelist = (settings?.guardrails?.allowed_links || []).map(String);
-  if (!fx.checkout) return null;
-  if (!allow) return fx.checkout;
-  // só libera se o link estiver whitelisted
-  return whitelist.some((tpl) => (tpl || "").includes("{{checkout_link}}") || tpl === fx.checkout)
-    ? fx.checkout
-    : fx.checkout; // fallback conservador (já que o checkout costuma estar whitelisted no YAML)
-}
-
-function buildPriceAnswer(settings) {
-  const fx = getFx(settings);
-  const p  = pricedLine(settings);
-  return `${p} Rende **${fx.applications}**. ${deliveryLine(settings)}\nQuer o **link seguro** pra finalizar?`;
-}
-
-function buildOfferPitch(state, settings) {
-  const name = callUser(state);
-  const fx   = getFx(settings);
-  const pitch = `Pelo que você me contou, ${name ? `${name}, ` : ""}${buildMicroPitch(state)}.\n${deliveryLine(settings)}\n${pricedLine(settings)}\nTe envio o **link seguro** pra finalizar?`;
-  return pitch;
-}
-
-function handleObjection(text, settings) {
-  if (RX.OBJECTION_PRICE.test(text)) {
-    // preço alto
-    return "Entendo! Comparando com salão, você economiza tempo e dinheiro — e ainda aplica quando quiser. Custa **menos de R$2 por dia** ao longo dos meses.\nPosso manter a condição especial pra você hoje.";
-  }
-  if (RX.OBJECTION_SAFETY.test(text)) {
-    // segurança / golpe / Anvisa
-    return "Fica tranquila 💚 É **pago na entrega (COD)** — você só paga quando o produto chega. Temos **registro/adequação e controle de qualidade**. Se preferir, te envio o link de acompanhamento pelo WhatsApp e site oficial.";
-  }
-  if (RX.OBJECTION_EFFECT.test(text)) {
-    // funciona / resultado
-    return "A progressiva **alinha, reduz frizz e pode alisar conforme a finalização**. O passo a passo certinho (tempo de pausa + escova/prancha) maximiza o resultado. Se quiser, eu te mando um mini-guia de aplicação agora.";
+function deescalateIfRude(text) {
+  if (RX.RUDE.test(text || "")) {
+    return "Tranquilo 💚 Eu te ajudo mesmo assim. Vamos ao que interessa:";
   }
   return null;
 }
 
+function objectionAnswer(text, settings) {
+  const f = fx(settings);
+  if (RX.OBJECTION_PRICE.test(text)) {
+    return `Entendo o ponto do valor 👍\nComparando com salão, **sai bem mais em conta** e você usa em casa, quando quiser. Dá menos de **R$2/dia** pra 3 meses de resultado.\n${pricedLine(settings)}\nPosso **manter essa condição** pra você hoje?`;
+  }
+  if (RX.OBJECTION_SAFETY.test(text)) {
+    return `Fica tranquila 💚 É **pago na entrega (COD)** — você só paga quando o produto chega.\nTemos **registro/adequação e controle de qualidade**, e mais de **${f.soldCount}** clientes satisfeitas. Se quiser, te mando o **site oficial** também.`;
+  }
+  if (RX.OBJECTION_EFFECT.test(text)) {
+    return `A progressiva **alinha, reduz frizz** e pode **alisar conforme a finalização**. O passo a passo: aplicar, **40 min de ação**, enxaguar e finalizar (escova/chapinha) pra potencializar. Quer que eu te **mande o guia rápido** de aplicação?`;
+  }
+  return null;
+}
+
+// ---------- flow ----------
 export default async function offer(ctx) {
   const { text = "", state, settings } = ctx;
   state.turns = (state.turns || 0) + 1;
 
-  const fx    = getFx(settings);
+  // failsafe: foto 1x
+  await ensureOpeningPhotoOnce(ctx);
+
+  // 0) Acalma se vier rude e segue
+  const soften = deescalateIfRude(text);
   const wantsPrice = RX.PRICE.test(text);
   const wantsLink  = RX.LINK.test(text);
-  const objection  = handleObjection(text, settings);
+  const objection  = objectionAnswer(text, settings);
+  const name       = callUser(state);
 
-  // 0) Tratamento de objeções simples
+  // 1) Objeções
   if (objection) {
-    return {
-      reply: tagReply(settings, `${objection}\n\nQuer que eu **mantenha** a condição por **R$${fx.priceTarget}** e já te envie o link?` , "flow/offer#objection"),
-      next: "fechamento",
-    };
+    const reply = `${soften ? soften + "\n\n" : ""}${objection}\n\nQuer que eu **garanta por R$${fx(settings).priceTarget}** e já te envie o link?`;
+    return { reply: tagReply(settings, reply, "flow/offer#objection"), next: "fechamento" };
   }
 
-  // 1) Atalho: Link direto (ou se já liberado pelo qualify)
+  // 2) Atalho: Link (ou liberado pela qualificação)
   if (wantsLink || state.link_allowed) {
     state.link_allowed = false;
-    const checkout = guardCheckout(settings);
-    const msg = `Aqui o **checkout seguro**: ${checkout}\n${pricedLine(settings)} Rende **${fx.applications}**. ${deliveryLine(settings)}\nForma: **COD (paga na entrega)**.`;
-    return { reply: tagReply(settings, msg, "flow/offer#link"), next: "fechamento" };
+    const link = guardCheckout(settings);
+    const reply = `${soften ? soften + "\n\n" : ""}Aqui o **checkout seguro**: ${link}\n${pricedLine(settings)}\n${deliveryLine(settings)}\nForma: **COD (paga na entrega)**.`;
+    return { reply: tagReply(settings, reply, "flow/offer#link"), next: "fechamento" };
   }
 
-  // 2) Atalho: Preço (ou se já liberado pelo qualify)
+  // 3) Atalho: Preço (ou liberado pela qualificação)
   if (wantsPrice || state.price_allowed) {
     state.price_allowed = false;
-    return {
-      reply: tagReply(settings, buildPriceAnswer(settings), "flow/offer#price"),
-      next: "fechamento",
-    };
+    const reply = `${soften ? soften + "\n\n" : ""}${pricedLine(settings)} Rende **${fx(settings).applications}**. ${deliveryLine(settings)}\nQuer o **link seguro** pra finalizar?`;
+    return { reply: tagReply(settings, reply, "flow/offer#price"), next: "fechamento" };
   }
 
-  // 3) Oferta personalizada (usa variáveis do qualify)
-  const pitch = buildOfferPitch(state, settings);
+  // 4) Oferta personalizada
+  const pitch = `Pelo que você me contou${name ? `, ${name}` : ""}, recomendo o kit **${fx(settings).name}** ${microPitch(state)}.\n${pricedLine(settings)}\nTe envio o **link seguro** pra finalizar?`;
   return {
     reply: tagReply(settings, pitch, "flow/offer#pitch"),
     next: "fechamento",

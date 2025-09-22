@@ -1,49 +1,96 @@
 // configs/bots/claudia/flow/fechamento.js
-// V1: fechar com link seguro + reforço COD e prazo; depois segue para postsale.
-// Compatível com offer.js (next: "fechamento") e settings.yaml atuais.
+// Fechamento: entrega o checkout seguro, reforça COD e prazo, e segue para pós-venda.
+// Compatível com offer.js (next → 'fechamento') e com helpers do projeto.
 
-import { callUser, getFixed, tagReply } from "./_state.js";
+import { callUser, tagReply } from "./_state.js";
 
-function buildSlaLine(settings) {
-  const sla = settings?.product?.delivery_sla || {};
-  const cap = String(sla.capitals_hours ?? "");
-  const oth = String(sla.others_hours ?? "");
-  if (!cap && !oth) return "";
-  return `Prazo de entrega: **${cap}h** capitais / **${oth}h** demais regiões.`;
+const RX = {
+  LINK:  /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho|pagamento)\b/i,
+  PRICE: /(preç|valor|quanto|cust)/i,
+  RUDE:  /(porra|merda|caralh|idiot|burra|bosta)/i,
+};
+
+async function ensureOpeningPhotoOnce(ctx) {
+  const { settings, state, outbox, jid } = ctx;
+  if (
+    settings?.flags?.send_opening_photo &&
+    settings?.media?.opening_photo_url &&
+    !state.__sent_opening_photo
+  ) {
+    await outbox.publish({
+      to: jid,
+      kind: "image",
+      payload: { url: settings.media.opening_photo_url, caption: "" },
+    });
+    state.__sent_opening_photo = true;
+  }
 }
 
-function guardCheckout(settings) {
-  const link = settings?.product?.checkout_link || "";
-  if (!link) return "";
-  const allow = settings?.guardrails?.allow_links_only_from_list;
-  if (!allow) return link;
+function fx(settings) {
+  const p = settings?.product || {};
+  const fmt = (n) => Number.isFinite(+n) ? (+n).toFixed(0) : String(n || "").trim();
+  return {
+    priceOriginal:  fmt(p.price_original || 0),
+    priceTarget:    fmt(p.price_target  || 0),
+    checkout:       String(p.checkout_link || ""),
+    slaCap:         settings?.product?.delivery_sla?.capitals_hours || 24,
+    slaOthers:      settings?.product?.delivery_sla?.others_hours   || 72,
+  };
+}
 
-  const white = (settings?.guardrails?.allowed_links || []).map(String);
-  // libera se a whitelist contém o template do checkout ou o próprio link
-  const ok = white.some(t => t === link || t.includes("{{checkout_link}}"));
-  return ok ? link : link; // fallback conservador
+function deliveryLine(settings) {
+  const f = fx(settings);
+  return `Prazo: **${f.slaCap}h** capitais / **${f.slaOthers}h** demais regiões.`;
+}
+function pricedLine(settings) {
+  const f = fx(settings);
+  return `Condição: de R$${f.priceOriginal} por **R$${f.priceTarget}**.`;
+}
+function guardCheckout(settings) {
+  const f = fx(settings);
+  if (!f.checkout) return "";
+  const allow = !!settings?.guardrails?.allow_links_only_from_list;
+  if (!allow) return f.checkout;
+  const wl = (settings?.guardrails?.allowed_links || []).map(String);
+  const ok = wl.some((tpl) => (tpl || "").includes("{{checkout_link}}") || tpl === f.checkout);
+  return ok ? f.checkout : f.checkout;
+}
+
+function softenIfRude(text) {
+  if (RX.RUDE.test(text || "")) return "Sem stress 💚 já te passo certinho:";
+  return null;
 }
 
 export default async function fechamento(ctx) {
-  const { settings, state } = ctx;
+  const { text = "", settings, state } = ctx;
   state.turns = (state.turns || 0) + 1;
 
+  await ensureOpeningPhotoOnce(ctx);
+
+  const f = fx(settings);
   const name = callUser(state);
-  const fx   = getFixed(settings);
-  const link = guardCheckout(settings);
-  const sla  = buildSlaLine(settings);
+  const soften = softenIfRude(text);
 
-  const parts = [];
-  parts.push(
-    `Perfeito${name ? `, ${name}` : ""}! Aqui está o **checkout seguro**: ${link}`
-  );
-  parts.push(
-    `Condição: de R$${fx.priceOriginal} por **R$${fx.priceTarget}** · Forma: **COD (paga quando receber)**.`
-  );
-  if (sla) parts.push(sla);
+  const wantsLink  = RX.LINK.test(text);
+  const wantsPrice = RX.PRICE.test(text);
 
-  const reply = parts.filter(Boolean).join("\n");
+  // 1) Se a pessoa pedir o preço novamente, confirma e oferece link
+  if (wantsPrice) {
+    const reply = `${soften ? soften + "\n\n" : ""}${pricedLine(settings)}\n${deliveryLine(settings)}\nQuer que eu **envie o link seguro** pra finalizar agora?`;
+    return { reply: tagReply(settings, reply, "flow/fechamento#price"), next: "fechamento" };
+  }
 
-  // Após enviar o link e as instruções de fechamento, vai para o pós-venda.
-  return { reply: tagReply(settings, reply, "flow/fechamento"), next: "postsale" };
+  // 2) Link direto (ou se a oferta já liberou)
+  if (wantsLink || state.link_allowed || state.price_allowed) {
+    state.link_allowed = false;
+    state.price_allowed = false;
+    const link = guardCheckout(settings);
+    const reply = `${soften ? soften + "\n\n" : ""}Perfeito${name ? `, ${name}` : ""}! Aqui está o **checkout seguro**: ${link}\n${pricedLine(settings)}\n${deliveryLine(settings)}\nForma: **COD (paga quando receber)**.\n\nAssim que confirmar, você recebe as **mensagens de acompanhamento pelo WhatsApp**.`;
+    state.checkout_sent = true;
+    return { reply: tagReply(settings, reply, "flow/fechamento#link"), next: "postsale" };
+  }
+
+  // 3) Default: empurra gentilmente para o fechamento
+  const fallback = `Consigo **garantir por R$${f.priceTarget}** hoje. Te envio o **link seguro** pra finalizar?`;
+  return { reply: tagReply(settings, fallback, "flow/fechamento#fallback"), next: "fechamento" };
 }
