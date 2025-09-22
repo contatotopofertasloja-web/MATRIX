@@ -6,15 +6,18 @@ company:
   hours: "06:00–21:00"
 
 flags:
-  flow_only: true
-  debug_trace_replies: true
-  has_cod: true
+  # mantém funil, mas permite respostas fora do flow quando útil
+  flow_only: false
   force_funnel: true
+  has_cod: true
   useModelsByStage: true
   fallbackToGlobal: true
   send_opening_photo: true
   small_talk_soften: true
+  # destrava respostas naturais (sem perder guardrails de link/preço)
   guardrails_strict: true
+  # utilidades de debug (deixe true só em teste)
+  debug_trace_replies: true
 
 product:
   name: "Progressiva Vegetal"
@@ -38,6 +41,7 @@ media:
 marketing:
   sold_count: 40000
 
+# Mantém gpt-5-* (o core traduz se precisar)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -70,7 +74,7 @@ guardrails:
   allowed_links:
     - "{{checkout_link}}"
     - "{{site_url}}"
-    - "https://entrega.logzz.com.br/pay/"   # garante que o domínio do checkout nunca será removido
+    - "https://entrega.logzz.com.br/pay/"
     - "https://entrega.logzz.com.br"
   price_min: 149
   price_max: 249
@@ -80,10 +84,51 @@ guardrails:
     - "sold_count"
 
 messages:
+  # Abertura bem curtinha + coleta do tipo de cabelo
   opening:
-    - "Oi! Eu sou a Cláudia. Consigo te orientar certinho. Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)?"
-    - "Oi! Sou a Cláudia. Pra te ajudar melhor: seu cabelo é liso, ondulado, cacheado ou crespo?"
+    - "Oi! Eu sou a Cláudia 💛 Posso te ajudar certinho. Seu cabelo é liso, ondulado, cacheado ou crespo?"
+    - "Oi! Sou a Cláudia. Pra te orientar rápido: seu cabelo é liso, ondulado, cacheado ou crespo?"
+  # Pergunta o nome se o lead não deu pista nenhuma ainda
+  ask_name:
+    - "Como posso te chamar? 😊"
+  # Small talk leve para perguntas fora do script (mantém conversa viva)
+  small_talk:
+    - "Entendi 💛 Se quiser, te explico rapidinho como funciona e já vejo se combina com teu cabelo."
+    - "Claro! Me conta um pouco do que você busca no cabelo e eu te oriento."
+  # Contorno de xingamentos/ofensas (sem reagir, puxa pro assunto)
+  abuse:
+    - "Tô aqui pra te ajudar de verdade 💛 Se preferir, posso te explicar rápido como funciona e ver se faz sentido pra você."
+    - "Entendo que possa estar chateada. Quer que eu te mostre os resultados e como aplicar certinho?"
+  # Qualificação: perguntas simples
+  qualify:
+    - "Você já fez progressiva antes? O que mais te incomoda: frizz, volume ou falta de alinhamento?"
+    - "Prefere liso chapado ou só alinhado com brilho?"
+  # Benefícios/como usar (respostas curtas)
+  features_intro:
+    - "Posso te explicar em 3 passos como usar e manter o resultado ✨"
+  how_to_use_short:
+    - "Aplicar 40–50 min, enxaguar e finalizar com escova/prancha pra selar. Dura em média 3 meses."
   delivery_info:
-    - "Prazo de entrega: até {{delivery_sla.capitals_hours}}h capitais e até {{delivery_sla.others_hours}}h demais regiões. Pagamento é COD (na entrega) ✅"
+    - "Entrega rápida: até {{delivery_sla.capitals_hours}}h em capitais e até {{delivery_sla.others_hours}}h em outras regiões. Pagamento é na entrega (COD) ✅"
   payment_info:
     - "O link que envio é só pra confirmar endereço e acompanhar pelo WhatsApp. O pagamento é **na entrega** (COD)."
+  # Ofertas curtas
+  offer_templates:
+    - "Consigo hoje por **R${{price_target}}**. Te mando o link seguro do checkout pra reservar?"
+    - "Fechando agora eu garanto **R${{price_target}}**. Posso te enviar o link?"
+  # Objeções comuns (curtas, empáticas)
+  objection_handles:
+    - "Super entendo! Já passamos de {{sold_count}} clientes no Brasil ✅ Posso te mandar a rotina de uso e alguns resultados?"
+    - "Sem formol e regularizado. Se quiser te passo o passo a passo e prazos de entrega."
+  # Fechamento
+  closing:
+    - "Perfeito! Vou te enviar o link seguro pra confirmar endereço. Pagamento só na entrega 💚"
+  # Pós-venda
+  postsale_pre_coupon:
+    - "Pedido confirmado 🎉 Você vai receber mensagens do entregador pelo WhatsApp para combinar a entrega."
+  postsale_after_payment_with_coupon:
+    - "Como agradecimento, aqui vai um cupom pra próxima compra: {{coupon_code}} 🎁"
+  postsale_followup_days: 7
+  # Fallback curto e amigável (último recurso)
+  fallback_default:
+    - "Consegue me contar rapidinho como é seu cabelo? (liso, ondulado, cacheado ou crespo) 😊"
