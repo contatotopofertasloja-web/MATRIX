@@ -17,6 +17,13 @@ function buildSlaLine(settings) {
   if (!cap && !oth) return "";
   return `Prazo de entrega: **${cap}h** capitais / **${oth}h** demais regiões.`;
 }
+// configs/bots/claudia/flow/close.js
+import { settings } from '../../../src/core/settings.js';
+
+export default function close() {
+  const link = settings?.product?.checkout_link || '';
+  return `Perfeito! Te envio o link do checkout agora: ${link} — pagamento na entrega (COD). (flow/close)`;
+}
 
 /** Respeita guardrails/whitelist antes de liberar o checkout */
 function guardCheckout(settings) {

@@ -3,6 +3,11 @@
 // Mantém compat com pipeline atual (ctx = { settings, outbox, jid, state, text })
 import { tagReply } from "./_state.js";
 
+// configs/bots/claudia/flow/greet.js
+export default function greet() {
+  return 'Oi! Como é seu cabelo: liso, ondulado, cacheado ou crespo? (flow/greet)';
+}
+
 /** Extrai um possível nome do texto do usuário */
 function guessNameFromText(t) {
   if (!t) return null;

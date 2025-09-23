@@ -15,6 +15,13 @@ const RX = {
 
   RUDE: /(porra|merda|caralh|idiot|burra|bosta)/i,
 };
+// configs/bots/claudia/flow/offer.js
+import { settings } from '../../../src/core/settings.js';
+
+export default function offer() {
+  const price = settings?.product?.price_target || 170;
+  return `Pelo que você me falou, o kit sai por R$ ${price} com pagamento na entrega (COD). Posso te mandar o link de checkout? (flow/offer)`;
+}
 
 // ---------- util ----------
 async function ensureOpeningPhotoOnce(ctx) {

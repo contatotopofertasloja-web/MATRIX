@@ -5,6 +5,14 @@
 //
 // ctx esperado: { settings, state, outbox, jid, text }
 // helpers: callUser(state), tagReply(settings, text, stamp), getFixed(settings)
+// configs/bots/claudia/flow/postsale.js
+import { settings } from '../../../src/core/settings.js';
+
+export default function postsale() {
+  const coupon = settings?.product?.coupon_code || '';
+  const cupomMsg = coupon ? ` Como agradecimento, cupom para a PRÓXIMA compra: ${coupon}.` : '';
+  return `Pagamento confirmado! Você receberá mensagens para acompanhar a entrega. Dúvidas no uso? Posso te mandar a rotina. ${cupomMsg} (flow/postsale)`;
+}
 
 import { callUser, tagReply, getFixed } from "./_state.js";
 

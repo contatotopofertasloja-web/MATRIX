@@ -22,6 +22,11 @@ const QUESTIONS = [
   { key: "goal",            q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
 ];
 
+// configs/bots/claudia/flow/qualify.js
+export default function qualify() {
+  return 'Você já fez progressiva antes? Te incomoda mais o frizz ou o volume? (flow/qualify)';
+}
+
 // limites pra não “prender” a cliente nessa etapa
 const COOLDOWN_MS = 60_000;
 const MAX_TOUCHES_BEFORE_ESCALATE = 3;
