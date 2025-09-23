@@ -1,7 +1,6 @@
 // configs/bots/claudia/flow/offer.js
-// Oferta personalizada a partir do que já coletamos na qualificação.
-// Atalhos: preço e link; trata objeções comuns; envia foto de abertura 1x (failsafe).
-// Compatível com os helpers do projeto (ctx = { settings, outbox, jid, state, text }).
+// Oferta personalizada com atalhos (preço/link), objeções e failsafe de foto.
+// Compatível com ctx = { settings, outbox, jid, state, text }.
 
 import { callUser, tagReply } from "./_state.js";
 
@@ -15,13 +14,6 @@ const RX = {
 
   RUDE: /(porra|merda|caralh|idiot|burra|bosta)/i,
 };
-// configs/bots/claudia/flow/offer.js
-import { settings } from '../../../src/core/settings.js';
-
-export default function offer() {
-  const price = settings?.product?.price_target || 170;
-  return `Pelo que você me falou, o kit sai por R$ ${price} com pagamento na entrega (COD). Posso te mandar o link de checkout? (flow/offer)`;
-}
 
 // ---------- util ----------
 async function ensureOpeningPhotoOnce(ctx) {
@@ -49,8 +41,8 @@ function fx(settings) {
     priceTarget:    fmt(p.price_target  || 0),
     checkout:       String(p.checkout_link || ""),
     site:           String(p.site_url || ""),
-    slaCap:         settings?.product?.delivery_sla?.capitals_hours || 24,
-    slaOthers:      settings?.product?.delivery_sla?.others_hours   || 72,
+    slaCap:         p?.delivery_sla?.capitals_hours || 24,
+    slaOthers:      p?.delivery_sla?.others_hours   || 72,
     applications:   p.applications_up_to ? `${p.applications_up_to} aplicações` : "várias aplicações",
     soldCount:      settings?.marketing?.sold_count || 40000,
   };
@@ -60,10 +52,12 @@ function deliveryLine(settings) {
   const f = fx(settings);
   return `Prazo: **${f.slaCap}h** capitais / **${f.slaOthers}h** demais regiões.`;
 }
+
 function pricedLine(settings) {
   const f = fx(settings);
   return `De **R$${f.priceOriginal}** por **R$${f.priceTarget}**.`;
 }
+
 function guardCheckout(settings) {
   const f = fx(settings);
   if (!f.checkout) return "";
@@ -71,7 +65,7 @@ function guardCheckout(settings) {
   if (!allow) return f.checkout;
   const wl = (settings?.guardrails?.allowed_links || []).map(String);
   const ok = wl.some((tpl) => (tpl || "").includes("{{checkout_link}}") || tpl === f.checkout);
-  return ok ? f.checkout : f.checkout; // conservador: o checkout normalmente está whitelisted no YAML
+  return ok ? f.checkout : f.checkout; // conservador
 }
 
 function microPitch(state) {
@@ -94,13 +88,18 @@ function deescalateIfRude(text) {
 function objectionAnswer(text, settings) {
   const f = fx(settings);
   if (RX.OBJECTION_PRICE.test(text)) {
-    return `Entendo o ponto do valor 👍\nComparando com salão, **sai bem mais em conta** e você usa em casa, quando quiser. Dá menos de **R$2/dia** pra 3 meses de resultado.\n${pricedLine(settings)}\nPosso **manter essa condição** pra você hoje?`;
+    return `Entendo o ponto do valor 👍
+Comparando com salão, **sai bem mais em conta** e você usa em casa, quando quiser. Dá menos de **R$2/dia** pra 3 meses de resultado.
+${pricedLine(settings)}
+Posso **manter essa condição** pra você hoje?`;
   }
   if (RX.OBJECTION_SAFETY.test(text)) {
-    return `Fica tranquila 💚 É **pago na entrega (COD)** — você só paga quando o produto chega.\nTemos **registro/adequação e controle de qualidade**, e mais de **${f.soldCount}** clientes satisfeitas. Se quiser, te mando o **site oficial** também.`;
+    return `Fica tranquila 💚 É **pago na entrega (COD)** — você só paga quando o produto chega.
+Temos controles de qualidade e mais de **${f.soldCount}** clientes satisfeitas. Se quiser, te mando o **site oficial** também.`;
   }
   if (RX.OBJECTION_EFFECT.test(text)) {
-    return `A progressiva **alinha, reduz frizz** e pode **alisar conforme a finalização**. O passo a passo: aplicar, **40 min de ação**, enxaguar e finalizar (escova/chapinha) pra potencializar. Quer que eu te **mande o guia rápido** de aplicação?`;
+    return `A progressiva **alinha, reduz frizz** e pode **alisar conforme a finalização**.
+Passo a passo: aplicar, **40 min de ação**, enxaguar e finalizar (escova/chapinha). Quer que eu te **mande o guia rápido**?`;
   }
   return null;
 }
@@ -113,36 +112,42 @@ export default async function offer(ctx) {
   // failsafe: foto 1x
   await ensureOpeningPhotoOnce(ctx);
 
-  // 0) Acalma se vier rude e segue
-  const soften = deescalateIfRude(text);
+  const soften     = deescalateIfRude(text);
   const wantsPrice = RX.PRICE.test(text);
   const wantsLink  = RX.LINK.test(text);
   const objection  = objectionAnswer(text, settings);
   const name       = callUser(state);
 
-  // 1) Objeções
+  // 1) Objeções priorizadas
   if (objection) {
     const reply = `${soften ? soften + "\n\n" : ""}${objection}\n\nQuer que eu **garanta por R$${fx(settings).priceTarget}** e já te envie o link?`;
     return { reply: tagReply(settings, reply, "flow/offer#objection"), next: "fechamento" };
   }
 
-  // 2) Atalho: Link (ou liberado pela qualificação)
+  // 2) Link direto (ou liberado pela qualificação)
   if (wantsLink || state.link_allowed) {
     state.link_allowed = false;
     const link = guardCheckout(settings);
-    const reply = `${soften ? soften + "\n\n" : ""}Aqui o **checkout seguro**: ${link}\n${pricedLine(settings)}\n${deliveryLine(settings)}\nForma: **COD (paga na entrega)**.`;
+    const reply = `${soften ? soften + "\n\n" : ""}Aqui o **checkout seguro**: ${link}
+${pricedLine(settings)}
+${deliveryLine(settings)}
+Forma: **COD (paga na entrega)**.`;
     return { reply: tagReply(settings, reply, "flow/offer#link"), next: "fechamento" };
   }
 
-  // 3) Atalho: Preço (ou liberado pela qualificação)
+  // 3) Preço direto (ou liberado pela qualificação)
   if (wantsPrice || state.price_allowed) {
     state.price_allowed = false;
-    const reply = `${soften ? soften + "\n\n" : ""}${pricedLine(settings)} Rende **${fx(settings).applications}**. ${deliveryLine(settings)}\nQuer o **link seguro** pra finalizar?`;
+    const reply = `${soften ? soften + "\n\n" : ""}${pricedLine(settings)} Rende **${fx(settings).applications}**.
+${deliveryLine(settings)}
+Quer o **link seguro** pra finalizar?`;
     return { reply: tagReply(settings, reply, "flow/offer#price"), next: "fechamento" };
   }
 
   // 4) Oferta personalizada
-  const pitch = `Pelo que você me contou${name ? `, ${name}` : ""}, recomendo o kit **${fx(settings).name}** ${microPitch(state)}.\n${pricedLine(settings)}\nTe envio o **link seguro** pra finalizar?`;
+  const pitch = `Pelo que você me contou${name ? `, ${name}` : ""}, recomendo o kit **${fx(settings).name}** ${microPitch(state)}.
+${pricedLine(settings)}
+Te envio o **link seguro** pra finalizar?`;
   return {
     reply: tagReply(settings, pitch, "flow/offer#pitch"),
     next: "fechamento",

@@ -1,11 +1,6 @@
 // configs/bots/claudia/flow/close.js
-// V1: Fechamento simples — envia o link seguro de checkout, reforça COD e prazo,
-// e segue para o pós-venda. Compatível com greet/qualify/offer/postsale.
-//
-// Observações:
-// - Lê link/SLAs/mensagens do settings.yaml da Cláudia.
-// - Respeita guardrails de allowed_links (checkout).
-// - Usa nome da cliente de forma intermitente (callUser) para conexão, sem soar repetitivo.
+// Fechamento simpático: reforça COD e prazo e aponta o checkout.
+// Compatível com ctx = { settings, state }.
 
 import { callUser, tagReply, getFixed } from "./_state.js";
 
@@ -17,13 +12,6 @@ function buildSlaLine(settings) {
   if (!cap && !oth) return "";
   return `Prazo de entrega: **${cap}h** capitais / **${oth}h** demais regiões.`;
 }
-// configs/bots/claudia/flow/close.js
-import { settings } from '../../../src/core/settings.js';
-
-export default function close() {
-  const link = settings?.product?.checkout_link || '';
-  return `Perfeito! Te envio o link do checkout agora: ${link} — pagamento na entrega (COD). (flow/close)`;
-}
 
 /** Respeita guardrails/whitelist antes de liberar o checkout */
 function guardCheckout(settings) {
@@ -33,9 +21,8 @@ function guardCheckout(settings) {
   if (!allow) return link;
 
   const white = (settings?.guardrails?.allowed_links || []).map(String);
-  // libera se a whitelist contém o template do checkout ou o próprio link
   const ok = white.some(t => t === link || t.includes("{{checkout_link}}"));
-  return ok ? link : link; // fallback conservador
+  return ok ? link : link; // conservador
 }
 
 /** Às vezes prefixa com o nome para aproximar sem ficar repetitivo */
@@ -43,7 +30,6 @@ function maybeWithName(state, text, prob = 0.45) {
   const name = callUser(state);
   if (!name) return text;
   if (Math.random() >= prob) return text;
-  // se a frase começar com "Perfeito", injeta o nome ali
   return text.replace(/^Perfeito(,|\s|!)/i, `Perfeito, ${name}!`);
 }
 
@@ -55,11 +41,10 @@ export default async function close(ctx) {
   const link = guardCheckout(settings);
   const sla  = buildSlaLine(settings);
 
-  // Texto base de fechamento (se houver no YAML, usa; senão, fallback)
+  // Texto base (se existir no YAML usa; senão, fallback)
   const base = (settings?.messages?.closing?.[0])
     || "Perfeito! Te envio o **checkout seguro** agora 🛒 Pagamento é **na entrega (COD)**.";
 
-  // Montagem final
   const lines = [
     maybeWithName(state, base),
     `Condição: de R$${fx.priceOriginal} por **R$${fx.priceTarget}**.`,
@@ -69,6 +54,6 @@ export default async function close(ctx) {
 
   const reply = lines.join("\n");
 
-  // Após o fechamento, redireciona para o pós-venda (confirmação/instruções)
+  // Depois do close, manda pro pós-venda.
   return { reply: tagReply(settings, reply, "flow/close"), next: "postsale" };
 }

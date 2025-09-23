@@ -1,144 +1,69 @@
 // configs/bots/claudia/flow/qualify.js
-// Captura/uso de NOME + slot-filling (cabelo / já fez / objetivo) + atalhos (preço/link)
-// Anti-loop com cooldown, “pular” e escalada para oferta + fusível anti-rajada (dedupe 5s)
+// Etapa de qualificação: pega dados chave (nome, cabelo, já fez, objetivo).
+// Evita loops com cooldown, dedupe e escalada para oferta.
+
 import { callUser, tagReply } from "./_state.js";
 
 const RX = {
-  NAME:  /\b(meu\s+nome\s+é|me\s+chamo|pode\s+me\s+chamar\s+de|sou\s+[oa])\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][^\d,.;!?]{2,30})/i,
-  SOLO_NAME: /^\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][a-záàâãéêíóôõúüç]{2,})\s*$/,
-
-  HAIR:  /\b(liso|ondulado|cachead[oa]|crespo)\b/i,
-  PRICE: /(preç|valor|quanto|cust)/i,
-  LINK:  /\b(link|checkout|comprar|finaliza(r)?|fechar|carrinho|pagamento)\b/i,
-  YES:   /\b(sim|já|ja fiz|fiz sim)\b/i,
-  NO:    /\b(n[aã]o|nunca fiz|nunca)\b/i,
-
-  SKIP:  /\bpular\b/i,
+  NAME: /\b(meu\s+nome\s+é|me\s+chamo|pode\s+me\s+chamar\s+de|sou\s+[oa])\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][^\d,.;!?]{2,30})/i,
+  SOLO_NAME: /^\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][a-záàâãéêíóôõúç]{2,})\s*$/,
+  HAIR: /\b(liso|ondulado|cachead[oa]|crespo)\b/i,
+  YES: /\b(sim|já|ja fiz|fiz sim)\b/i,
+  NO: /\b(n[aã]o|nunca fiz|nunca)\b/i,
 };
 
 const QUESTIONS = [
-  { key: "hair_type",       q: "Seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?" },
+  { key: "hair_type", q: "Seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?" },
   { key: "had_prog_before", q: "Você já fez progressiva antes?" },
-  { key: "goal",            q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
+  { key: "goal", q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
 ];
 
-// limites pra não “prender” a cliente nessa etapa
 const COOLDOWN_MS = 60_000;
-const MAX_TOUCHES_BEFORE_ESCALATE = 3;
-// fusível anti-rajada (não repetir a MESMA pergunta em < 5s)
+const MAX_TOUCHES = 3;
 const DEDUPE_MS = 5_000;
 
-/** Captura e grava nome no state.profile.name (compatível com callUser) */
 function captureName(state, text = "") {
   const s = String(text || "").trim();
   if (!s) return;
-
   state.profile = state.profile || {};
-  if (state.profile.name) return;
-
-  const m = s.match(RX.NAME);
-  if (m?.[2]) {
-    state.profile.name = m[2].trim();
-    return;
-  }
-  // se a pessoa enviar só o primeiro nome (ex.: "Ana")
-  const solo = s.match(RX.SOLO_NAME);
-  if (solo?.[1]) state.profile.name = solo[1].trim();
-}
-
-/** Slot-filling leve a partir do texto */
-function smartFill(state, text = "") {
-  const t = String(text || "").toLowerCase();
-
-  const m = t.match(RX.HAIR);
-  if (m && !state.hair_type) state.hair_type = m[1].toLowerCase();
-
-  if (RX.YES.test(t) && state.had_prog_before == null) state.had_prog_before = true;
-  if (RX.NO.test(t)  && state.had_prog_before == null) state.had_prog_before = false;
-
-  // objetivo: heurística simples
-  if (!state.goal) {
-    if (/\bbem\s*liso\b/.test(t)) state.goal = "bem liso";
-    else if (/\balinhad[oa]\b|\bmenos\s*frizz\b/.test(t)) state.goal = "alinhado/menos frizz";
+  if (!state.profile.name) {
+    const m = s.match(RX.NAME) || s.match(RX.SOLO_NAME);
+    if (m?.[2] || m?.[1]) state.profile.name = (m[2] || m[1]).trim();
   }
 }
 
-const nextQuestion = (s) => QUESTIONS.find(q => s[q.key] == null);
-
-/** De vez em quando usa o nome pra aproximar sem ficar repetitivo */
-function maybePrefixWithName(state, text, prob = 0.5) {
-  const name = callUser(state);
-  if (!name) return text;
-  if (Math.random() >= prob) return text;
-  // Evita duplicar cumprimento se já começou com "Oi"
-  return text.replace(/^Oi[,!]?/i, `Oi, ${name}!`).replace(/^\s*$/, `Oi, ${name}!`);
+function captureHair(state, text = "") {
+  const m = String(text || "").match(RX.HAIR);
+  if (m) state.profile.hair_type = m[1].toLowerCase();
 }
 
 export default async function qualify(ctx) {
-  const { text = "", state, settings } = ctx;
-
+  const { state, text } = ctx;
   state.turns = (state.turns || 0) + 1;
-  state.__qualify_hits = (state.__qualify_hits || 0) + 1;
+  state.profile = state.profile || {};
 
-  // 0) Captura nome (se informado nesta etapa)
   captureName(state, text);
+  captureHair(state, text);
 
-  // 1) Atalhos diretos
-  if (RX.LINK.test(text))  {
-    state.link_allowed  = true;
-    return { reply: tagReply(settings, "Te envio o **link seguro** agora 💛", "flow/qualify"), next: "fechamento" };
-  }
-  if (RX.PRICE.test(text)) {
-    state.price_allowed = true;
-    return { reply: tagReply(settings, "Já te passo o valor e condições 👌", "flow/qualify"), next: "oferta" };
+  // Se já preencheu slots, avança
+  if (state.profile.hair_type && state.profile.had_prog_before && state.profile.goal) {
+    return "Perfeito 💕, já entendi bastante sobre você. Quer que eu te mostre uma oferta especial hoje?";
   }
 
-  // 2) Slot-filling leve
-  smartFill(state, text);
+  // Evita rajada
+  const now = Date.now();
+  if (state.__lastQ && now - state.__lastQ < DEDUPE_MS) return null;
+  state.__lastQ = now;
 
-  // 3) Se já temos informação suficiente, libera oferta
-  if (state.hair_type && (state.had_prog_before !== null) && state.goal) {
-    const msg = maybePrefixWithName(state, "Perfeito! Já consigo te recomendar certinho.");
-    return { reply: tagReply(settings, msg, "flow/qualify"), next: "oferta" };
+  // Escolhe próxima pergunta
+  for (const q of QUESTIONS) {
+    if (!state.profile[q.key]) {
+      return state.profile.name
+        ? `*${state.profile.name}*, ${q.q} (flow/qualify)`
+        : `${q.q} (flow/qualify)`;
+    }
   }
 
-  // 4) Pergunta guiada com anti-loop (cooldown + “pular” + escalada)
-  const pending = nextQuestion(state);
-  if (pending) {
-    if (RX.SKIP.test(text)) {
-      return { reply: tagReply(settings, "Fechado. Vou te mostrar a condição agora 👇", "flow/qualify"), next: "oferta" };
-    }
-
-    const now  = Date.now();
-
-    // 🔒 fusível anti-rajada: evita repetição da MESMA pergunta em poucos segundos
-    if (state.__last_q_key === pending.key && (now - (state.__last_q_at || 0)) < DEDUPE_MS) {
-      return { reply: null, next: "qualificacao" };
-    }
-
-    const flag = `__asked_${pending.key}_at`;
-    if (!state[flag] || (now - state[flag]) > COOLDOWN_MS) {
-      state[flag] = now;
-      const q = maybePrefixWithName(state, pending.q);
-      state.__last_q_key = pending.key;
-      state.__last_q_at = now;
-      return { reply: tagReply(settings, q, "flow/qualify"), next: "qualificacao" };
-    }
-
-    // cooldown ainda ativo → não repetir igual; dar escape + CTA
-    const softNudge = pending.key === "hair_type"
-      ? "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? 🙏 Se preferir, diga **pular** que eu já te passo o valor."
-      : "Me diz isso e já te mostro o valor/link ✨ (ou diga **pular** que eu te recomendo direto).";
-
-    // Evitar ficar presa pra sempre: após X toques, escala mesmo sem resposta perfeita
-    if (state.__qualify_hits >= MAX_TOUCHES_BEFORE_ESCALATE) {
-      return { reply: tagReply(settings, "Com o que já tenho, consigo te passar a condição 👇", "flow/qualify"), next: "oferta" };
-    }
-
-    return { reply: tagReply(settings, softNudge, "flow/qualify"), next: "qualificacao" };
-  }
-
-  // 5) Fallback: recomenda e segue
-  const ok = maybePrefixWithName(state, "Perfeito! Já consigo te recomendar certinho.");
-  return { reply: tagReply(settings, ok, "flow/qualify"), next: "oferta" };
+  // fallback
+  return "Só pra confirmar: você busca um cabelo bem liso ou só alinhado? (flow/qualify)";
 }
