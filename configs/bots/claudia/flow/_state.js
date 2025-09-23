@@ -1,86 +1,78 @@
 // configs/bots/claudia/flow/_state.js
-// Estado curto + helpers + carimbo (flow/*) com whitelist de links e gating anti-rajada.
+// Utilitários de estado (memória diária em Redis) + helpers de formatação e carimbo.
 
-export function initialState() {
+import Redis from "ioredis";
+
+const REDIS_URL = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || "redis://localhost:6379";
+const redis = new Redis(REDIS_URL);
+const TTL = 60 * 60 * 24; // 1 dia
+
+const key = (jid) => `state:${jid}`;
+
+export async function remember(jid, patch = {}) {
+  try {
+    const data = {};
+    for (const [k, v] of Object.entries(patch)) data[k] = JSON.stringify(v);
+    if (Object.keys(data).length) {
+      await redis.hset(key(jid), data);
+      await redis.expire(key(jid), TTL);
+    }
+  } catch {}
+}
+
+export async function recall(jid) {
+  try {
+    const raw = await redis.hgetall(key(jid));
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) out[k] = JSON.parse(v);
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function callUser(state) {
+  return state?.profile?.name || "";
+}
+
+export function ensureProfile(state) {
+  state.profile = state.profile || {};
+  return state.profile;
+}
+
+export function tagReply(_settings, text, tag = "flow") {
+  const t = String(text || "").trim();
+  return t ? `${t} (${tag})` : "";
+}
+
+export function normalizeSettings(s = {}) {
+  const p = s.product || {};
+  const g = s.guardrails || {};
+  const m = s.marketing || {};
   return {
-    // identificação & qualificação
-    profile: { name: null },
-    hair_type: null,          // liso | ondulado | cacheado | crespo
-    had_prog_before: null,    // boolean | null
-    goal: null,               // "liso" | "alinhado/menos frizz"...
-
-    // intenções rápidas
-    price_allowed: false,
-    link_allowed: false,
-    consent_checkout: false,
-
-    // controle de fluxo
-    turns: 0,
-    __sent_opening_photo: false,
-    __boot_greet_done: false,
-
-    // antifluxo / antiflood
-    __gate: {},               // mapa { chave: timestamp }
-  };
-}
-
-/** Whitelist de links para evitar vazamento */
-function whitelist(settings = {}) {
-  return new Set(
-    [
-      settings?.product?.checkout_link,
-      settings?.product?.site_url,
-      ...(settings?.guardrails?.allowed_links || []),
-    ]
-      .map((u) => String(u || ""))
-      .filter((u) => /^https?:\/\//i.test(u))
-  );
-}
-
-/** Carimba SOMENTE se debug estiver ativo */
-export function tagReply(settings = {}, text = "", tag = "flow") {
-  const wl = whitelist(settings);
-  const safe = String(text || "").replace(/https?:\/\/\S+/gi, (u) => (wl.has(u) ? u : "[link removido]"));
-  const debug = !!settings?.flags?.debug_trace_replies;
-  return debug && tag ? `${safe} (${tag})` : safe;
-}
-
-/** Nome do usuário (quando conhecido) */
-export function callUser(state = {}) {
-  const name = state?.profile?.name || state?.name;
-  if (!name) return null;
-  const clean = String(name).trim();
-  return clean || null;
-}
-
-/**
- * Gating anti-rajada: retorna true se ainda está em janela de bloqueio.
- * Ex.: if (gate(state,'boot_greet', 4000)) return { reply: null };
- */
-export function gate(state = {}, key = "", ms = 3000) {
-  if (!key) return false;
-  const now = Date.now();
-  state.__gate = state.__gate || {};
-  const last = state.__gate[key] || 0;
-  if (now - last < ms) return true;
-  state.__gate[key] = now;
-  return false;
-}
-
-/** Utilitário de número -> string “inteiro” */
-export function n(v, d = 0) {
-  return Number.isFinite(+v) ? (+v).toFixed(0) : String(v ?? d);
-}
-
-/** Atalhos fixos do produto (opcional) */
-export function getFixed(settings = {}) {
-  const p = settings?.product || {};
-  return {
-    priceOriginal: +p.price_original || 0,
-    priceTarget: +p.price_target || 0,
-    slaCap: +(p?.delivery_sla?.capitals_hours ?? 24),
-    slaOthers: +(p?.delivery_sla?.others_hours ?? 72),
-    checkout: String(p.checkout_link || ""),
-    site: String(p.site_url || ""),
+    product: {
+      name: p.name || "Progressiva Vegetal",
+      store_name: p.store_name || "TopOfertas",
+      price_original: p.price_original ?? 197,
+      price_target: p.price_target ?? 170,
+      checkout_link: p.checkout_link || "",
+      site_url: p.site_url || "",
+      coupon_code: p.coupon_code || "",
+      opening_hours: p.opening_hours || "Seg a Sex, 9h às 18h",
+      delivery_sla: {
+        capitals_hours: p?.delivery_sla?.capitals_hours ?? 24,
+        others_hours: p?.delivery_sla?.others_hours ?? 72,
+      },
+    },
+    guardrails: {
+      allow_links_only_from_list: !!g.allow_links_only_from_list,
+      allowed_links: Array.isArray(g.allowed_links) ? g.allowed_links : [],
+    },
+    marketing: {
+      sold_count: m.sold_count ?? 40000,
+    },
+    flags: s.flags || {},
+    messages: s.messages || {},
+    media: s.media || {},
   };
 }

@@ -1,59 +1,21 @@
 // configs/bots/claudia/flow/close.js
-// Fechamento simpático: reforça COD e prazo e aponta o checkout.
-// Compatível com ctx = { settings, state }.
+// Fechamento curto com COD + prazo + link.
 
-import { callUser, tagReply, getFixed } from "./_state.js";
-
-/** Monta linha de prazo de entrega, se houver no settings */
-function buildSlaLine(settings) {
-  const sla = settings?.product?.delivery_sla || {};
-  const cap = String(sla.capitals_hours ?? "");
-  const oth = String(sla.others_hours ?? "");
-  if (!cap && !oth) return "";
-  return `Prazo de entrega: **${cap}h** capitais / **${oth}h** demais regiões.`;
-}
-
-/** Respeita guardrails/whitelist antes de liberar o checkout */
-function guardCheckout(settings) {
-  const link = settings?.product?.checkout_link || "";
-  if (!link) return "";
-  const allow = settings?.guardrails?.allow_links_only_from_list;
-  if (!allow) return link;
-
-  const white = (settings?.guardrails?.allowed_links || []).map(String);
-  const ok = white.some(t => t === link || t.includes("{{checkout_link}}"));
-  return ok ? link : link; // conservador
-}
-
-/** Às vezes prefixa com o nome para aproximar sem ficar repetitivo */
-function maybeWithName(state, text, prob = 0.45) {
-  const name = callUser(state);
-  if (!name) return text;
-  if (Math.random() >= prob) return text;
-  return text.replace(/^Perfeito(,|\s|!)/i, `Perfeito, ${name}!`);
-}
+import { callUser, tagReply, normalizeSettings } from "./_state.js";
 
 export default async function close(ctx) {
-  const { settings, state } = ctx;
+  const { state, settings } = ctx;
+  const S = normalizeSettings(settings);
   state.turns = (state.turns || 0) + 1;
 
-  const fx   = getFixed(settings); // normaliza price_original/price_target etc.
-  const link = guardCheckout(settings);
-  const sla  = buildSlaLine(settings);
-
-  // Texto base (se existir no YAML usa; senão, fallback)
-  const base = (settings?.messages?.closing?.[0])
-    || "Perfeito! Te envio o **checkout seguro** agora 🛒 Pagamento é **na entrega (COD)**.";
-
+  const name = callUser(state);
   const lines = [
-    maybeWithName(state, base),
-    `Condição: de R$${fx.priceOriginal} por **R$${fx.priceTarget}**.`,
-    link ? `👉 Finalize aqui: ${link}` : "",
-    sla,
+    `${name ? "Perfeito, " + name + "!" : "Perfeito!"} Te envio o **checkout seguro** agora 🛒`,
+    `Condição: de R$${S.product.price_original} por **R$${S.product.price_target}**.`,
+    S.product.checkout_link ? `👉 Finalize aqui: ${S.product.checkout_link}` : "",
+    `Prazo: **${S.product.delivery_sla.capitals_hours}h** capitais / **${S.product.delivery_sla.others_hours}h** demais regiões.`,
+    `Pagamento é **na entrega (COD)**. Qualquer dúvida, tô aqui 💚`,
   ].filter(Boolean);
 
-  const reply = lines.join("\n");
-
-  // Depois do close, manda pro pós-venda.
-  return { reply: tagReply(settings, reply, "flow/close"), next: "postsale" };
+  return tagReply(S, lines.join("\n"), "flow/close->postsale");
 }
