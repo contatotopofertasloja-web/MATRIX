@@ -1,12 +1,7 @@
 // configs/bots/claudia/flow/greet.js
 // Greeting com A/B test, memória de nome e envio da foto 1x
-// Mantém compat com pipeline atual (ctx = { settings, outbox, jid, state, text })
+// Compatível com pipeline atual (ctx = { settings, outbox, jid, state, text })
 import { tagReply } from "./_state.js";
-
-// configs/bots/claudia/flow/greet.js
-export default function greet() {
-  return 'Oi! Como é seu cabelo: liso, ondulado, cacheado ou crespo? (flow/greet)';
-}
 
 /** Extrai um possível nome do texto do usuário */
 function guessNameFromText(t) {
@@ -20,7 +15,7 @@ function guessNameFromText(t) {
   return w?.[1] || null;
 }
 
-/** Pseudo-aleatório estável por JID (pra manter o mesmo bucket) */
+/** Pseudo-aleatório estável por JID (mantém bucket A/B por contato) */
 function stableBucket(jid, buckets = ["A", "B"]) {
   const str = String(jid || "");
   let h = 0;
@@ -60,12 +55,11 @@ export default async function greet(ctx) {
   const ab = (state.ab && state.ab.greet) || stableBucket(jid, ["A", "B"]);
   state.ab = { ...(state.ab || {}), greet: ab };
 
-  // 4) Variedades de abertura (neutras e sem “amor”)
+  // 4) Variedades de abertura (neutras)
   const openings = {
     A: "Oi! Eu sou a Cláudia. Consigo te orientar certinho. Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)?",
     B: "Oi! Eu sou a Cláudia. Pra te ajudar melhor: seu cabelo é liso, ondulado, cacheado ou crespo?",
   };
-
   let opening = openings[ab];
 
   // 5) Usa o nome de vez em quando

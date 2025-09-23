@@ -1,6 +1,6 @@
 // configs/bots/claudia/flow/qualify.js
 // Captura/uso de NOME + slot-filling (cabelo / já fez / objetivo) + atalhos (preço/link)
-// Anti-loop com cooldown, "pular" e escalada para oferta + fusível anti-rajada (dedupe 5s)
+// Anti-loop com cooldown, “pular” e escalada para oferta + fusível anti-rajada (dedupe 5s)
 import { callUser, tagReply } from "./_state.js";
 
 const RX = {
@@ -21,11 +21,6 @@ const QUESTIONS = [
   { key: "had_prog_before", q: "Você já fez progressiva antes?" },
   { key: "goal",            q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
 ];
-
-// configs/bots/claudia/flow/qualify.js
-export default function qualify() {
-  return 'Você já fez progressiva antes? Te incomoda mais o frizz ou o volume? (flow/qualify)';
-}
 
 // limites pra não “prender” a cliente nessa etapa
 const COOLDOWN_MS = 60_000;
@@ -114,7 +109,6 @@ export default async function qualify(ctx) {
       return { reply: tagReply(settings, "Fechado. Vou te mostrar a condição agora 👇", "flow/qualify"), next: "oferta" };
     }
 
-    const flag = `__asked_${pending.key}_at`;
     const now  = Date.now();
 
     // 🔒 fusível anti-rajada: evita repetição da MESMA pergunta em poucos segundos
@@ -122,6 +116,7 @@ export default async function qualify(ctx) {
       return { reply: null, next: "qualificacao" };
     }
 
+    const flag = `__asked_${pending.key}_at`;
     if (!state[flag] || (now - state[flag]) > COOLDOWN_MS) {
       state[flag] = now;
       const q = maybePrefixWithName(state, pending.q);

@@ -38,7 +38,7 @@ flags:
 marketing:
   sold_count: 40000
 
-# Modelos por etapa (pode manter gpt-5-*, teu core já traduz p/ 4o/4o-mini quando preciso)
+# Modelos por etapa (pode manter gpt-5-*, o core traduz p/ 4o/4o-mini quando preciso)
 models_by_stage:
   recepcao:     "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -61,7 +61,7 @@ typing:
   max_ms: 5000
 
 messages:
-  # Usadas só em fallback/manual; a conversa oficial vai pelos prompts (LLM)
+  # fallback/manual; a conversa oficial vai pelos prompts/LLM
   opening:
     - "Oi! Eu sou a Cláudia. Como é seu cabelo: liso, ondulado, cacheado ou crespo? (flow/greet)"
   qualify_followups:
