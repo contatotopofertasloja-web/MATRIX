@@ -131,7 +131,7 @@ export default async function qualify(ctx) {
       return tagReply(S, msg, "flow/qualify->offer");
     }
 
-    // empurra um empurrão suave
+    // empurrão suave
     const nudge = pending.key === "hair_type"
       ? "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? Se preferir, diga **pular**."
       : "Me diz isso e já te mostro o valor/link ✨ (ou diga **pular**).";

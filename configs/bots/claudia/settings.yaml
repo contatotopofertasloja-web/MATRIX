@@ -52,3 +52,9 @@ typing:
   ms_per_char: 35
   min_ms: 800
   max_ms: 5000
+
+# >>> NOVO: guardrails libera explicitamente os links do settings (checkout + site)
+guardrails:
+  allowed_links:
+    - "{{ product.checkout_link }}"
+    - "{{ product.site_url }}"

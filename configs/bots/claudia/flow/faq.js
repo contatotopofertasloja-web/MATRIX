@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/faq.js
-import { callUser, getFixed, tagReply } from "./_state.js";
+import { callUser, tagReply, normalizeSettings } from "./_state.js";
 
 function norm(s = "") { return String(s || "").toLowerCase(); }
 
@@ -23,59 +23,70 @@ export function match(text = "", _settings = {}) {
 export default async function faq(ctx) {
   const { text = "", settings, state } = ctx;
   state.turns = (state.turns || 0) + 1;
-  const fx = getFixed(settings);
+
+  const S = normalizeSettings(settings);
   const t = norm(text);
 
   // Entrega / SP
   if (/entrega(s)?|frete|prazo|s[ãa]o paulo|sp\b/.test(t)) {
-    const sla = settings?.product?.delivery_sla || {};
-    const msg = `Entregamos em São Paulo e região. Prazo médio: **${sla.capitals_hours ?? 24}h** capitais / **${sla.others_hours ?? 72}h** demais locais.`;
-    return { reply: tagReply(settings, msg, "flow/faq"), next: "oferta" };
+    const sla = S.product.delivery_sla || {};
+    const msg = `Entregamos em São Paulo e região. Prazo médio: **${sla.capitals_hours}h** capitais / **${sla.others_hours}h** demais locais.`;
+    return { reply: tagReply(S, msg, "flow/faq"), next: "oferta" };
   }
 
   // Pagamentos (PIX, cartão, COD)
   if (/pix|cart[aã]o|boleto|pagamento|na entrega/.test(t)) {
     const msg = `Temos **COD** (paga quando recebe). No site, rola **PIX** e **cartão** também. Quer que eu te envie o **link**?`;
-    return { reply: tagReply(settings, msg, "flow/faq"), next: "fechamento" };
+    return { reply: tagReply(S, msg, "flow/faq"), next: "fechamento" };
   }
 
+  // Nome do produto / empresa / horários
   if (/nome do produto|qual\s*é\s*o\s*produto|como\s*se\s*chama\s*o\s*produto/.test(t)) {
-    const nm = settings?.product?.name || "Progressiva Vegetal";
-    return { reply: tagReply(settings, `O nome do produto é **${nm}**. Quer que eu te explique rapidinho como ele funciona?`, "flow/faq"), next: "oferta" };
+    const nm = S.product.name;
+    return { reply: tagReply(S, `O nome do produto é **${nm}**. Quer que eu te explique rapidinho como ele funciona?`, "flow/faq"), next: "oferta" };
   }
   if (/empresa|voc[eê]s s[aã]o quem|nome da empresa/.test(t)) {
-    const empresa = settings?.company?.name || fx?.empresa || "TopOfertas";
-    return { reply: tagReply(settings, `Somos a **${empresa}** 🧡. Posso te ajudar a decidir se combina com teu cabelo?`, "flow/faq"), next: "oferta" };
+    const empresa = S.product.store_name || "TopOfertas";
+    return { reply: tagReply(S, `Somos a **${empresa}** 🧡. Posso te ajudar a decidir se combina com teu cabelo?`, "flow/faq"), next: "oferta" };
   }
   if (/hor[aá]rio|atendem|funciona at[eé] quando|que horas voc[eê]s abrem|fecha/.test(t)) {
-    const hours = settings?.company?.hours || fx?.hours || "06:00–21:00";
-    return { reply: tagReply(settings, `Atendemos **${hours} (BRT)**, ${callUser(state)}. Quer aproveitar e tirar uma dúvida agora?`, "flow/faq"), next: "oferta" };
+    const hours = S.product.opening_hours || "06:00–21:00";
+    return { reply: tagReply(S, `Atendemos **${hours} (BRT)**, ${callUser(state)}. Quer aproveitar e tirar uma dúvida agora?`, "flow/faq"), next: "oferta" };
   }
+
+  // Promo / garantia / uso & rendimento / volume
   if (/sorteio|brinde|premi/.test(t)) {
     const on = settings?.promotions?.raffle?.enabled === true;
     const teaser = on
       ? (settings?.promotions?.raffle?.teaser || "Comprando este mês você participa do nosso sorteio de prêmios. Quer que eu te explique rapidinho?")
       : "No momento não temos sorteios ativos, mas te aviso se abrir um novo! ✨";
-    return { reply: tagReply(settings, teaser, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, teaser, "flow/faq"), next: "oferta" };
   }
   if (/garanti|troca|devolu/.test(t)) {
     const g = settings?.product?.refund_days_after_delivery ?? 7;
-    return { reply: tagReply(settings, `Você tem **${g} dias** após receber. Se não amar, devolvemos sem burocracia. Quer ver o passo a passo de uso?`, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, `Você tem **${g} dias** após receber. Se não amar, devolvemos sem burocracia. Quer ver o passo a passo de uso?`, "flow/faq"), next: "oferta" };
   }
   if (/aplica|rende|quantas vezes|dura|mes(es)?/.test(t)) {
-    return { reply: tagReply(settings, `Rende ${fx.applications} e costuma durar ${fx.duration} (depende dos cuidados). Quer que eu te mande o resumo de aplicação?`, "flow/faq"), next: "oferta" };
+    // valores exemplo; se quiser, coloque no settings.messages para personalizar
+    const applications = settings?.messages?.applications_hint || "2–4 aplicações (varia com comprimento)";
+    const duration = settings?.messages?.duration_hint || "de 2 a 3 meses";
+    return { reply: tagReply(S, `Rende ${applications} e costuma durar ${duration}. Quer que eu te mande o resumo de aplicação?`, "flow/faq"), next: "oferta" };
   }
   if (/\bml\b|mili|frasco|tamanho/.test(t)) {
     const ml = settings?.product?.volume_ml || 500;
-    return { reply: tagReply(settings, `O frasco tem **${ml} ml**.`, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, `O frasco tem **${ml} ml**.`, "flow/faq"), next: "oferta" };
   }
+
+  // Parcelamento
   if (/parcel|divid/.test(t)) {
-    return { reply: tagReply(settings, `Dá pra fazer **parcelado** no site, e também temos **COD** (paga só quando recebe). Quer o **link seguro**?`, "flow/faq"), next: "fechamento" };
+    return { reply: tagReply(S, `Dá pra fazer **parcelado** no site, e também temos **COD** (paga só quando recebe). Quer o **link seguro**?`, "flow/faq"), next: "fechamento" };
   }
+
+  // Áudio
   if (/audio|áudio|mandar\s*voz/.test(t)) {
-    return { reply: tagReply(settings, `Se preferir, te mando um **áudio** com o resumo rapidinho. Quer?`, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, `Se preferir, te mando um **áudio** com o resumo rapidinho. Quer?`, "flow/faq"), next: "oferta" };
   }
 
   // fallback neutro
-  return { reply: tagReply(settings, `Posso te ajudar com as principais dúvidas (uso, prazo, garantia, parcelamento). O que você prefere saber primeiro?`, "flow/faq"), next: "oferta" };
+  return { reply: tagReply(S, `Posso te ajudar com as principais dúvidas (uso, prazo, garantia, parcelamento). O que você prefere saber primeiro?`, "flow/faq"), next: "oferta" };
 }

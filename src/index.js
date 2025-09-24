@@ -17,6 +17,9 @@ import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 import { orchestrate } from './core/orchestrator.js';
 
+// >>> NOVO: sessão persistente
+import { loadSession, saveSession } from './core/session.js';
+
 // ===== MÉTRICAS (novos)
 import { attachMetricsRoutes } from './core/metrics/receiver.js';
 import { flushMetricsNow } from './core/metrics/middleware.js';
@@ -293,18 +296,24 @@ async function sendActions(to, actions = []) {
 // =================== Handler principal ===================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
+  // >>> NOVO: carrega sessão persistente
+  const state = await loadSession(BOT_ID, from);
+
+  // helper: salvar sessão antes de sair
+  const persist = async () => { try { await saveSession(BOT_ID, from, state); } catch {} };
+
   try {
     const now = Date.now();
 
     // --------- Idempotência de inbound ---------
     const mid = getMsgId(raw);
     if (mid) {
-      if (processedIds.has(mid)) return '';
+      if (processedIds.has(mid)) { await persist(); return ''; }
       processedIds.add(mid);
       setTimeout(() => processedIds.delete(mid), 3 * 60_000).unref();
     } else {
       const h = `${from}:${hash(text)}`;
-      if (lastHash.get(from) === h && (now - (lastSentAt.get(from) || 0)) < 3000) return '';
+      if (lastHash.get(from) === h && (now - (lastSentAt.get(from) || 0)) < 3000) { await persist(); return ''; }
       lastHash.set(from, h);
     }
 
@@ -327,6 +336,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await enqueueOrDirect({ to: from, payload: { text: stamped } });
       lastSentAt.set(from, now);
       pushTrace({ from, text_in: text, source: 'echo', preview: stamped.slice(0,120), intent: 'echo', stage: 'echo', path: 'direct' });
+      await persist();
       return '';
     }
 
@@ -338,11 +348,11 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       const asr = buf ? await transcribeIfPossible(buf) : null;
       if (asr && asr.trim()) msgText = asr.trim();
     }
-    if (!msgText) return '';
+    if (!msgText) { await persist(); return ''; }
 
     // --------- Cooldown por contato ---------
     const last = lastSentAt.get(from) || 0;
-    if (now - last < MIN_GAP_PER_CONTACT_MS) return '';
+    if (now - last < MIN_GAP_PER_CONTACT_MS) { await persist(); return ''; }
 
     // webhook-like por texto (pós-venda)
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
@@ -353,6 +363,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       });
       lastSentAt.set(from, Date.now());
       pushTrace({ from, text_in: msgText, source: 'hook:payment', preview: 'onPaymentConfirmed', intent: 'postsale', stage: 'posvenda', path: 'direct' });
+      await persist();
       return '';
     }
 
@@ -368,7 +379,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     const hasFlowRunner = typeof flows?.__handle === 'function' || typeof flows?.handle === 'function';
     if (hasFlowRunner) {
       const handleFn = flows.__handle || flows.handle;
-      const out = await handleFn({ jid: from, text: msgText, settings, state: sessionState(from), send: (to, t) => deliverReply({ to, text: t, wantAudio }) });
+      const out = await handleFn({ jid: from, text: msgText, settings, state, send: (to, t) => deliverReply({ to, text: t, wantAudio }) });
       reply = out?.reply || '';
       used = 'flow/index';
     } else {
@@ -379,7 +390,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
 
       if (flowObj?.run) {
         const send = async (to, t) => deliverReply({ to, text: String(t || ''), wantAudio });
-        await flowObj.run({ jid: from, text: msgText, settings, send, state: sessionState(from) });
+        await flowObj.run({ jid: from, text: msgText, settings, send, state });
         used = `flow/${flowObj?.name || userIntent}`;
       }
     }
@@ -390,6 +401,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await deliverReply({ to: from, text: stamped, wantAudio });
       lastSentAt.set(from, Date.now());
       pushTrace({ from, text_in: msgText, source: used, preview: stamped.slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
+      await persist();
       return '';
     }
 
@@ -403,6 +415,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
           await sendActions(from, out);
           lastSentAt.set(from, Date.now());
           pushTrace({ from, text_in: msgText, source: 'llm/orchestrator', preview: JSON.stringify(out).slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
+          await persist();
           return '';
         }
         // b) Se for string (compat legado)
@@ -411,6 +424,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
           await deliverReply({ to: from, text: stamped, wantAudio });
           lastSentAt.set(from, Date.now());
           pushTrace({ from, text_in: msgText, source: 'llm/orchestrator', preview: stamped.slice(0,120), intent: userIntent, stage: userIntent, path: DIRECT_SEND ? 'direct' : 'outbox' });
+          await persist();
           return '';
         }
       } catch (e) {
@@ -426,6 +440,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await deliverReply({ to: from, text: stamped, wantAudio });
       lastSentAt.set(from, Date.now());
       pushTrace({ from, text_in: msgText, source: 'llm/freeform', preview: stamped.slice(0,120), intent: userIntent, stage: 'qualificacao', path: DIRECT_SEND ? 'direct' : 'outbox' });
+      await persist();
       return '';
     }
 
@@ -435,22 +450,16 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     await enqueueOrDirect({ to: from, payload: { text: stamped } });
     lastSentAt.set(from, Date.now());
     pushTrace({ from, text_in: msgText, source: 'hooks', preview: stamped.slice(0,120), intent: userIntent, stage: 'error', path: DIRECT_SEND ? 'direct' : 'outbox' });
+    await persist();
     return '';
   } catch (e) {
     console.error('[onMessage]', e);
     const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
     await enqueueOrDirect({ to: from, payload: { text: prepareOutboundText(fb) } });
+    await persist();
     return '';
   }
 });
-
-// ======= Estado curto por JID (slots simples em memória)
-const _state = new Map();
-function sessionState(jid) {
-  const s = _state.get(jid) || {};
-  _state.set(jid, s);
-  return s;
-}
 
 // Anti-duplicação de mídia de abertura e anti-spam
 const sentOpening = new Set();
