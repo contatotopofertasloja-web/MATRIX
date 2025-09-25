@@ -1,6 +1,6 @@
-// src/bootstrap.js
-// Carrega configs do bot (YAML) e injeta variáveis em process.env para compat.
-// Mantém comportamento original; adiciona try/catch para evitar crash em produção.
+// bootstrap.js (raiz)
+// Carrega o YAML da bot ativa e injeta alguns espelhos em ENV.
+// Fail-soft: nunca derruba o processo se o YAML faltar/estiver inválido.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -11,9 +11,7 @@ export function loadBotConfig() {
   const file  = path.join(process.cwd(), "configs", "bots", botId, "settings.yaml");
 
   if (!fs.existsSync(file)) {
-    const msg = `Config do bot não encontrada: ${file}`;
-    // não derruba o processo: avisa e retorna objeto vazio (core.settings cuida dos defaults)
-    console.warn("[bootstrap]", msg);
+    console.warn("[bootstrap] Config do bot não encontrada:", file);
     return {};
   }
 
@@ -21,7 +19,7 @@ export function loadBotConfig() {
     const raw = fs.readFileSync(file, "utf-8");
     const cfg = yaml.parse(raw) || {};
 
-    // Injeta espelhos em ENV (mantém compat)
+    // Espelhos em ENV (compatibilidade com códigos antigos)
     if (cfg.product) {
       const p = cfg.product;
       if (p.price_original != null) process.env.PRICE_ORIGINAL = String(p.price_original);
