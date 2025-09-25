@@ -53,6 +53,7 @@ flags:
   # Janela de dedupe persistente (entre invocações). Pode ajustar para 60000 (60s), 90000 (90s) etc.
   reply_dedupe_ms: 120000   # 120s
   send_opening_photo: true
+  disable_opening_hook: true
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
