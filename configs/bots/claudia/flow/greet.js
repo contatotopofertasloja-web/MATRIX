@@ -1,43 +1,43 @@
 // configs/bots/claudia/flow/greet.js
-// Saudação com foto (1x), captura de nome e pergunta objetiva inicial.
+// Saudação idempotente: captura nome (se vier), recupera da memória se existir
+// e faz uma única pergunta de abertura. A foto de abertura é enviada pelo flow/index.js.
 
-import { remember, recall, ensureProfile, tagReply, normalizeSettings } from "./_state.js";
+import { remember, recall, ensureProfile, tagReply, normalizeSettings, callUser } from "./_state.js";
 
 function guessName(t = "") {
-  const s = String(t).trim();
+  const s = String(t || "").trim();
   const m = s.match(/\b(meu\s*nome\s*é|me\s*chamo|sou\s+[oa])\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,})/i);
   if (m?.[2]) return m[2].trim();
   const solo = s.match(/^\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ][a-záàâãéêíóôõúüç]{2,})\s*$/);
   return solo?.[1] || "";
 }
 
-export default async function greet(ctx) {
-  const { jid, outbox, state, text, settings } = ctx;
+export default async function greet(ctx = {}) {
+  const { jid, state = {}, text = "", settings = {} } = ctx;
   const S = normalizeSettings(settings);
   state.turns = (state.turns || 0) + 1;
   ensureProfile(state);
 
-  // Envia foto 1x
-  if (S.flags.send_opening_photo && S.media.opening_photo_url && !state.__sent_opening_photo) {
-    await outbox.publish({ to: jid, kind: "image", payload: { url: S.media.opening_photo_url, caption: "" } });
-    state.__sent_opening_photo = true;
-  }
-
-  // Nome (se vier junto)
+  // 1) tenta capturar nome deste turno
   const maybe = guessName(text);
   if (maybe) {
     state.profile.name = maybe;
-    await remember(jid, { profile: state.profile });
+    try { await remember(jid, { profile: state.profile }); } catch {}
   } else {
-    // tenta recuperar de memória
-    const saved = await recall(jid);
-    if (saved?.profile?.name && !state.profile.name) state.profile.name = saved.profile.name;
+    // 2) sem nome no turno → tenta recuperar da memória persistente
+    try {
+      const saved = await recall(jid);
+      if (saved?.profile?.name && !state.profile.name) state.profile.name = saved.profile.name;
+    } catch {}
   }
 
-  const name = state.profile.name ? `, ${state.profile.name}` : "";
-  const opening =
+  const name = callUser(state);
+  const hello = name ? `Oi, ${name}!` : "Oi!";
+  const openingText =
     S.messages?.opening?.[0] ||
-    `Oi${name}! Eu sou a Cláudia da *${S.product.store_name}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
+    `${hello} Eu sou a Cláudia da *${S.product.store_name}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
 
-  return tagReply(S, opening, "flow/greet");
+  // ⚠️ Importante: a foto de abertura (se houver) é enviada pelo flow/index.js
+  // via ensureOpeningPhotoOnce(). Aqui, só devolvemos a primeira fala.
+  return tagReply(S, openingText, "flow/greet");
 }
