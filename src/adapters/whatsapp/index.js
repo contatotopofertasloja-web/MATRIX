@@ -1,4 +1,7 @@
 ﻿// src/adapters/whatsapp/index.js
+// Ponte do WhatsApp: expõe init/isReady/QR e repassa a API do Baileys adapter.
+// Mantém compat com o que já integramos no index do app.
+
 import * as baileys from './baileys/index.js';
 
 let _ready = false;
@@ -23,14 +26,14 @@ export async function getQrDataURL() {
   return _lastQrDataURL || await baileys.getQrDataURL();
 }
 
-// Força geração de novo QR (quando app diz “não é possível conectar”)
+// Força um novo QR quando app ainda não está pareado
 export async function forceNewQr() {
   _lastQrDataURL = null;
   const ok = await baileys.forceRefreshQr();
   return ok;
 }
 
-// Logout + apaga sessão + reinicia (sessão corrompida)
+// Logout + reset total de sessão (para sessão corrompida)
 export async function logoutAndReset() {
   _ready = false;
   _lastQrDataURL = null;
@@ -38,6 +41,7 @@ export async function logoutAndReset() {
   return true;
 }
 
+// Espelha a API do adapter
 export const adapter = {
   onMessage: baileys.adapter.onMessage,
   sendMessage: baileys.adapter.sendMessage,

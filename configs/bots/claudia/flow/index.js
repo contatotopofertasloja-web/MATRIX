@@ -2,12 +2,13 @@
 import greet from './greet.js';
 import qualify from './qualify.js';
 import offer from './offer.js';
-import fechamento from './fechamento.js';
+// ⚠️ corrigido: era './fechamento.js'
+import close from './close.js';
 import postsale from './postsale.js';
 import { pickFlow } from './router.js';
 import { initialState, gate, recall, remember } from './_state.js';
 
-export const registry = { greet, qualify, offer, fechamento, postsale };
+export const registry = { greet, qualify, offer, close, postsale };
 
 function shouldLog(settings) {
   return process.env.NODE_ENV !== 'production' || settings?.flags?.debug_log_router === true;
@@ -53,13 +54,13 @@ function dedupeTick(ctx, out) {
   ctx.__tickSet = ctx.__tickSet || new Set();
   const h = hashStr(reply);
   if (ctx.__tickSet.has(h)) {
-    return { reply: null, next: out.next };
+    return { reply: null, next: out.next, meta: out.meta };
   }
   ctx.__tickSet.add(h);
   return out;
 }
 
-// De-dupe **persistente** (Redis): evita repetição entre invocações/retentativas
+// De-dupe persistente (Redis): evita repetição entre invocações/retentativas
 async function dedupePersistent(ctx, out) {
   if (!out || !out.reply) return out;
   const reply = String(out.reply);
@@ -67,17 +68,14 @@ async function dedupePersistent(ctx, out) {
   const now = Date.now();
   const windowMs = getDedupeWindowMs(ctx.settings);
 
-  // lê último hash/ts da store persistente do flow
   const saved = await recall(ctx.jid);
-  const lastH = saved?.__last_reply_hash || ctx.state.__last_reply_hash || null;
-  const lastAt = saved?.__last_reply_at   || ctx.state.__last_reply_at   || 0;
+  const lastH = saved?.(__last_reply_hash) ?? ctx.state.__last_reply_hash ?? null;
+  const lastAt = saved?.(__last_reply_at)   ?? ctx.state.__last_reply_at   ?? 0;
 
-  // mesma mensagem dentro da janela -> suprime
   if (lastH === h && (now - lastAt) < windowMs) {
-    return { reply: null, next: out.next };
+    return { reply: null, next: out.next, meta: out.meta };
   }
 
-  // atualiza memória local e persistente
   ctx.state.__last_reply_hash = h;
   ctx.state.__last_reply_at   = now;
   await remember(ctx.jid, { __last_reply_hash: h, __last_reply_at: now });
@@ -86,7 +84,6 @@ async function dedupePersistent(ctx, out) {
 }
 
 export async function handle(ctx = {}) {
-  // estado base
   ctx.state = ctx.state || {};
   const base = initialState();
   for (const k of Object.keys(base)) if (ctx.state[k] === undefined) ctx.state[k] = base[k];
@@ -95,7 +92,7 @@ export async function handle(ctx = {}) {
   const settings = ctx?.settings || {};
   ctx.state.turns = (ctx.state.turns || 0) + 1;
 
-  // 🔒 trava geral anti-rajada (aqui pode ajustar para 1800ms se preferir)
+  // 🔒 trava geral anti-rajada
   if (gate(ctx.state, '__any_out', 1200)) {
     log(settings, 'GATE: __any_out (drop burst)');
     return { reply: null, next: undefined };

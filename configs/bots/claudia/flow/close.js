@@ -17,5 +17,7 @@ export default async function close(ctx) {
     `Pagamento é **na entrega (COD)**. Qualquer dúvida, tô aqui 💚`,
   ].filter(Boolean);
 
-  return tagReply(S, lines.join("\n"), "flow/close->postsale");
+  const msg = lines.join("\n");
+  // Sinaliza que esta resposta contem link (para sanitização permitir)
+  return { reply: tagReply(S, msg, "flow/close->postsale"), next: "postsale", meta: { allowLink: true } };
 }

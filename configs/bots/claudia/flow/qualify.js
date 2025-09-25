@@ -32,9 +32,9 @@ const QUESTIONS = [
   { key: "goal",            q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
 ];
 
-const COOLDOWN_MS = 60_000;   // 1 min entre a MESMA pergunta
-const NUDGE_MS    = 15_000;   // nudge sem repetir igual
-const MAX_TOUCHES = 3;        // depois disso, avança
+const COOLDOWN_MS = 60_000;
+const NUDGE_MS    = 15_000;
+const MAX_TOUCHES = 3;
 
 function captureAll(state, text = "") {
   const s = String(text || "");
@@ -127,7 +127,6 @@ export default async function qualify(ctx) {
   const now = Date.now();
 
   if (!asked) {
-    // primeira vez
     markAsked(state, missing.key);
     await remember(jid, { asked: state.asked });
     const name = callUser(state);

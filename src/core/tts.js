@@ -1,5 +1,5 @@
 // src/core/tts.js
-// TTS neutro (OpenAI gpt-4o-mini-tts). Retorna { buffer, mime }.
+// TTS neutro (OpenAI gpt-4o-mini-tts). Retorna { buffer, mime } ou null em falha.
 
 import OpenAI from "openai";
 
@@ -12,13 +12,14 @@ const TTS_PROVIDER = env("TTS_PROVIDER", "openai");
 const TTS_MODEL    = env("TTS_MODEL", "gpt-4o-mini-tts");
 const TTS_VOICE    = env("TTS_VOICE", "alloy");
 const TTS_FORMAT   = env("TTS_FORMAT", "ogg");
-const TTS_LANG     = env("ASR_LANG", "pt");
+// Mantém ASR_LANG como fallback de linguagem preferida, se for útil no futuro
+const TTS_LANG     = env("ASR_LANG", "pt"); // eslint-disable-line no-unused-vars
 
 function fmtInfo(requested = TTS_FORMAT) {
   const want = String(requested || "").toLowerCase();
   if (want === "mp3") return { api: "mp3", mime: "audio/mpeg", ext: "mp3" };
   if (want === "wav") return { api: "wav", mime: "audio/wav", ext: "wav" };
-  return { api: "opus", mime: "audio/ogg", ext: "ogg" };
+  return { api: "opus", mime: "audio/ogg", ext: "ogg" }; // "ogg" → API "opus"
 }
 
 let openai = null;
@@ -32,27 +33,32 @@ function getOpenAI() {
 }
 
 export async function synthesizeTTS(opts = {}) {
-  const text = (opts.text || "").toString().trim();
-  if (!text) return null;
+  try {
+    const text = (opts.text || "").toString().trim();
+    if (!text) return null;
 
-  const voice = (opts.voice || TTS_VOICE).toString();
-  const fmt   = fmtInfo(opts.format);
-  const provider = (opts.provider || TTS_PROVIDER).toLowerCase();
-  if (provider !== "openai") return null;
+    const voice = (opts.voice || TTS_VOICE).toString();
+    const fmt   = fmtInfo(opts.format);
+    const provider = (opts.provider || TTS_PROVIDER).toLowerCase();
+    if (provider !== "openai") return null;
 
-  const client = getOpenAI();
-  if (!client) return null;
+    const client = getOpenAI();
+    if (!client) return null;
 
-  const resp = await client.audio.speech.create({
-    model: TTS_MODEL,
-    voice,
-    input: text,
-    format: fmt.api,
-  });
+    const resp = await client.audio.speech.create({
+      model: TTS_MODEL,
+      voice,
+      input: text,
+      format: fmt.api,
+    });
 
-  const ab = await resp.arrayBuffer();
-  const buffer = Buffer.from(ab);
-  return { buffer, mime: fmt.mime };
+    const ab = await resp.arrayBuffer();
+    const buffer = Buffer.from(ab);
+    return { buffer, mime: fmt.mime };
+  } catch (e) {
+    console.warn("[tts] falha ao sintetizar:", e?.status || "", e?.message || e);
+    return null; // fail-soft para não derrubar o processo
+  }
 }
 
 export const speak = synthesizeTTS;

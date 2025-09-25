@@ -1,7 +1,7 @@
 // src/core/tools.js
 // Fontes de verdade para o orquestrador (NÃO inventam)
 
-import { settings } from "../../configs/src/core/settings.js";
+import { settings } from "./settings.js"; // ✅ caminho correto
 
 const getS = (s) => s || settings;
 
@@ -12,7 +12,7 @@ const numEnv = (k, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-export async function getPrice({ settings: s }) {
+export async function getPrice({ settings: s } = {}) {
   const SS = getS(s);
   const p = SS?.product || {};
   const orig = numEnv("PRICE_ORIGINAL", typeof p.price_original === "number" ? p.price_original : 197);
@@ -20,26 +20,26 @@ export async function getPrice({ settings: s }) {
   return { original: orig, price: targ };
 }
 
-export async function getCheckoutLink({ settings: s }) {
+export async function getCheckoutLink({ settings: s } = {}) {
   const SS = getS(s);
   const env = (process.env.CHECKOUT_LINK || "").trim();
   return { url: env || SS?.product?.checkout_link || "" };
 }
 
-export async function getDeliverySLA({ settings: s }) {
+export async function getDeliverySLA({ settings: s } = {}) {
   const SS = getS(s);
   const sla = SS?.product?.delivery_sla || {};
   return { capitals_hours: sla.capitals_hours || 24, others_hours: sla.others_hours || 72 };
 }
 
-export async function getPaymentInfo({ settings: s }) {
+export async function getPaymentInfo({ settings: s } = {}) {
   const SS = getS(s);
   const cod = SS?.messages?.cod_short || "Pagamento na entrega (COD).";
   return { payment: "COD", text: cod };
 }
 
 // Consulta FAQ embutido no settings (`settings.faq.categories`)
-export async function getFAQ({ args = {}, settings: s }) {
+export async function getFAQ({ args = {}, settings: s } = {}) {
   const SS = getS(s);
   const cats = SS?.faq?.categories || {};
   const key = String(args?.key || "").trim();
@@ -58,3 +58,5 @@ export async function getFAQ({ args = {}, settings: s }) {
   }
   return { answer: "" };
 }
+
+export default { getPrice, getCheckoutLink, getDeliverySLA, getPaymentInfo, getFAQ };

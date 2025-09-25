@@ -1,16 +1,16 @@
 ﻿// configs/bots/claudia/prompts/index.js
-// Prompts por estágio para a Cláudia (Progressiva Vegetal)
+// Prompts por estágio para a Cláudia (Progressiva Vegetal).
 // Core permanece neutro; aqui só definimos comportamento da "menina".
 
 import { settings } from '../../../src/core/settings.js';
 
 const STAGE_TAG = {
-  recepcao:   'flow/greet',
+  recepcao: 'flow/greet',
   qualificacao: 'flow/qualify',
-  oferta:     'flow/offer',
-  objecoes:   'flow/offer',     // objeções tratadas no estágio de oferta
+  oferta: 'flow/offer',
+  objecoes: 'flow/offer',
   fechamento: 'flow/close',
-  posvenda:   'flow/postsale',
+  posvenda: 'flow/postsale',
 };
 
 function hardRules() {
@@ -101,13 +101,10 @@ export function buildPrompt({ stage, message }) {
     'Finalize SEMPRE sua resposta com o carimbo do estágio.',
   ].join('\n\n');
 
-  // Força pergunta objetiva no greet e confirmações simples nos demais
   let user = String(message || '').trim();
   if (!user) user = 'Oi';
 
-  // carimbo no final da geração (o modelo deverá colar o sufixo)
   const carimbo = suffixTag(stageKey);
-
   const finalUser = [
     `Mensagem do lead: """${user}"""`,
     `Responda conforme as regras acima. Termine com: "${carimbo}".`,

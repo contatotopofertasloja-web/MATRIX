@@ -67,7 +67,6 @@ export default async function faq(ctx) {
     return { reply: tagReply(S, `Você tem **${g} dias** após receber. Se não amar, devolvemos sem burocracia. Quer ver o passo a passo de uso?`, "flow/faq"), next: "oferta" };
   }
   if (/aplica|rende|quantas vezes|dura|mes(es)?/.test(t)) {
-    // valores exemplo; se quiser, coloque no settings.messages para personalizar
     const applications = settings?.messages?.applications_hint || "2–4 aplicações (varia com comprimento)";
     const duration = settings?.messages?.duration_hint || "de 2 a 3 meses";
     return { reply: tagReply(S, `Rende ${applications} e costuma durar ${duration}. Quer que eu te mande o resumo de aplicação?`, "flow/faq"), next: "oferta" };
@@ -87,6 +86,6 @@ export default async function faq(ctx) {
     return { reply: tagReply(S, `Se preferir, te mando um **áudio** com o resumo rapidinho. Quer?`, "flow/faq"), next: "oferta" };
   }
 
-  // fallback neutro
+  // fallback
   return { reply: tagReply(S, `Posso te ajudar com as principais dúvidas (uso, prazo, garantia, parcelamento). O que você prefere saber primeiro?`, "flow/faq"), next: "oferta" };
 }

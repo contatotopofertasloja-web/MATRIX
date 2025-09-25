@@ -61,7 +61,8 @@ ${deliveryLine(S)} Quer o **link seguro** pra finalizar?`;
     const link = S.product.checkout_link;
     const ans = `Aqui o **checkout seguro**: ${link}
 ${deliveryLine(S)} Forma: **COD (paga na entrega)**.`;
-    return tagReply(S, ans, "flow/offer#link");
+    // Se o orquestrador/outbox suportar flags, ele pode ler meta.allowLink.
+    return { reply: tagReply(S, ans, "flow/offer#link"), next: undefined, meta: { allowLink: true } };
   }
 
   // oferta personalizada

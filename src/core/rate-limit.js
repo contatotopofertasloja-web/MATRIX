@@ -1,5 +1,9 @@
 // src/core/rateLimit.js
 // Orquestrador de rate-limit: Redis (preferencial) + fallback memória.
+// src/core/rate-limit.js
+// Shim de compat: reexporta o módulo camelCase para evitar "module not found".
+export * from './rateLimit.js';
+export { default } from './rateLimit.js';
 
 import { allowSend as allowSendRedis } from './queue/rate-limit.js';
 
