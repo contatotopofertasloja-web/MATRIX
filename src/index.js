@@ -698,14 +698,51 @@ app.get('/debug/metrics', requireOpsAuth, (_req, res) => {
   res.json({ ok: true, sources: counts, total: traceBuf.length });
 });
 
-// ====== NOVO: rotas de métricas (/metrics/webhook e /metrics/health)
-attachMetricsRoutes(app, '/');
+// --- substitua as rotas /wpp/qr e adicione /wpp/logout ---
 
-// ===== Boot do WhatsApp e HTTP =====
-await wppInit({ onQr: () => {} });
-const server = app.listen(PORT, HOST, () => {
-  console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`);
+app.get('/wpp/qr', async (req, res) => {
+  try {
+    // sempre no-store: evita QR cacheado pelo browser/reverse proxy
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+
+    const force = String(req.query.force || '') === '1';
+    if (force) {
+      try { await (await import('./adapters/whatsapp/index.js')).then(m => m.forceNewQr && m.forceNewQr()); } catch {}
+    }
+
+    const dataURL = await getQrDataURL();
+    if (!dataURL) return res.status(204).end();
+
+    const view = (req.query.view || '').toString();
+    if (view === 'img') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(`<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff"><img src="${dataURL}" width="320" height="320"/></body></html>`);
+    }
+    if (view === 'png') {
+      const b64 = dataURL.split(',')[1];
+      const buf = Buffer.from(b64, 'base64');
+      res.setHeader('Content-Type', 'image/png');
+      return res.send(buf);
+    }
+    res.json({ ok: true, qr: dataURL, bot: BOT_ID });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
+
+app.post('/wpp/logout', async (_req, res) => {
+  try {
+    const wpp = await import('./adapters/whatsapp/index.js');
+    if (wpp?.logoutAndReset) await wpp.logoutAndReset();
+    res.json({ ok: true, reset: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 
 // ===== Shutdown limpo (SIGINT/SIGTERM) =====
 async function gracefulClose(signal) {

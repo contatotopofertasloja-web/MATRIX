@@ -7,10 +7,9 @@ let _lastQrDataURL = null;
 export async function init(opts = {}) {
   const { onQr } = opts || {};
   await baileys.init({
-    onReady: () => { _ready = true; },
-    onQr: async () => {
-      const du = await baileys.getQrDataURL();
-      _lastQrDataURL = du || null;
+    onReady: () => { _ready = true; _lastQrDataURL = null; },
+    onQr: async (dataURL) => {
+      _lastQrDataURL = dataURL || null;
       if (typeof onQr === 'function') onQr(_lastQrDataURL);
     },
     onDisconnect: () => { _ready = false; },
@@ -18,9 +17,25 @@ export async function init(opts = {}) {
 }
 
 export function isReady() { return _ready; }
+
 export async function getQrDataURL() {
-  if (_ready) return null; // se já pareou, não exibe QR
+  if (_ready) return null;                  // já pareado
   return _lastQrDataURL || await baileys.getQrDataURL();
+}
+
+// Força geração de novo QR (quando app diz “não é possível conectar”)
+export async function forceNewQr() {
+  _lastQrDataURL = null;
+  const ok = await baileys.forceRefreshQr();
+  return ok;
+}
+
+// Logout + apaga sessão + reinicia (sessão corrompida)
+export async function logoutAndReset() {
+  _ready = false;
+  _lastQrDataURL = null;
+  await baileys.logoutAndReset();
+  return true;
 }
 
 export const adapter = {
@@ -34,4 +49,4 @@ export const adapter = {
   close: baileys.stop,
 };
 
-export default { init, isReady, getQrDataURL, adapter };
+export default { init, isReady, getQrDataURL, forceNewQr, logoutAndReset, adapter };

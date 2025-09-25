@@ -1,8 +1,12 @@
 // src/adapters/whatsapp/baileys/index.js
 // ---------------------------------------------------------------------------
 // Adapter Baileys com QR exposto, áudio end-to-end e compat de legado.
+// Assinatura alinhada ao caller: init({ onReady, onQr, onDisconnect })
+// + forceRefreshQr() e logoutAndReset() para lidar com QR “velho”.
 // ---------------------------------------------------------------------------
 import * as qrcode from "qrcode";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { sanitizeOutbound } from "../../../utils/polish.js";
 
 // Import dinâmico com fallback
@@ -54,6 +58,7 @@ let _isReady = false;
 let _lastQrText = null;
 let _onMessageHandler = null;
 let _booting = false;
+let _callbacks = { onReady:null, onQr:null, onDisconnect:null };
 
 // Helpers
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -103,7 +108,8 @@ async function getAudioBufferFromRaw(raw) {
 export function isReady() { return _isReady && !!sock; }
 export async function getQrDataURL() {
   if (!_lastQrText) return null;
-  return qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 });
+  try { return await qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 }); }
+  catch { return null; }
 }
 function finalizeOutbound(text, { allowPrice=false, allowLink=false } = {}) {
   return sanitizeOutbound(String(text || ""), { allowPrice, allowLink });
@@ -157,7 +163,8 @@ async function boot() {
   if (_booting) return;
   _booting = true;
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(`${WPP_AUTH_DIR}/${WPP_SESSION}`);
+    const authDir = path.join(WPP_AUTH_DIR, WPP_SESSION);
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2,3000,0] }));
 
     sock = makeWASocket({
@@ -169,14 +176,26 @@ async function boot() {
     });
 
     sock.ev.on("creds.update", saveCreds);
-    sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
-      if (qr) _lastQrText = qr;
-      if (connection === "open")  _isReady = true;
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        _lastQrText = qr;
+        try {
+          const dataURL = await qrcode.toDataURL(qr, { margin: 1, width: 300 });
+          if (typeof _callbacks.onQr === "function") _callbacks.onQr(dataURL);
+        } catch (e) {
+          console.warn("[baileys] QR toDataURL fail:", e?.message || e);
+        }
+      }
+      if (connection === "open")  {
+        _isReady = true; _lastQrText = null;
+        if (typeof _callbacks.onReady === "function") _callbacks.onReady();
+      }
       if (connection === "close") {
         _isReady = false;
         const reason = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.reason;
-        if (reason !== DisconnectReason.loggedOut) {
-          setTimeout(boot, 2000); // tenta reconectar
+        if (typeof _callbacks.onDisconnect === "function") _callbacks.onDisconnect(reason);
+        if (reason !== DisconnectReason?.loggedOut) {
+          setTimeout(boot, 2000).unref(); // tenta reconectar
         }
       }
     });
@@ -185,7 +204,7 @@ async function boot() {
       const m = messages?.[0];
       if (!m || !_onMessageHandler) return;
       const from = m.key?.remoteJid || "";
-      const hasMedia = !!m.message?.imageMessage || !!m.message?.audioMessage;
+      const hasMedia = !!m.message?.imageMessage || !!m.message?.audioMessage || !!m.message?.videoMessage || !!m.message?.documentMessage || !!m.message?.stickerMessage;
       const text = m.message?.conversation || m.message?.extendedTextMessage?.text || "";
       try {
         await _onMessageHandler({ from, text, hasMedia, raw: m });
@@ -197,9 +216,37 @@ async function boot() {
     _booting = false;
   }
 }
-export async function init() { await boot(); }
-export async function stop() { try { await sock?.logout?.(); } catch {} try { await sock?.end?.(); } catch {} }
+
+export async function init({ onReady, onQr, onDisconnect } = {}) {
+  _callbacks = { onReady, onQr, onDisconnect };
+  await boot();
+}
+
+export async function stop() {
+  try { await sock?.logout?.(); } catch {}
+  try { await sock?.end?.(); } catch {}
+  sock = null; _isReady = false; _lastQrText = null;
+}
+
+// Gera um novo QR forçando reboot controlado (sem derrubar app)
+export async function forceRefreshQr() {
+  if (_isReady) return false; // já pareado, não há QR
+  try { await stop(); } catch {}
+  await boot();
+  return true;
+}
+
+// Remove pasta de credenciais e reinicia (resolve sessão corrompida)
+export async function logoutAndReset() {
+  try { await stop(); } catch {}
+  try {
+    const dir = path.join(WPP_AUTH_DIR, WPP_SESSION);
+    await fs.rm(dir, { recursive: true, force: true });
+  } catch {}
+  await boot();
+  return true;
+}
 
 // Compat legado
 export async function createBaileysClient() { await init(); return { sock, isReady, getQrDataURL, adapter }; }
-export default { init, stop, isReady, getQrDataURL, adapter };
+export default { init, stop, isReady, getQrDataURL, adapter, forceRefreshQr, logoutAndReset };
