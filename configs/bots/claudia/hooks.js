@@ -1,8 +1,40 @@
 // configs/bots/claudia/hooks.js
 // Hooks da Cláudia. Core neutro; aqui só expomos utilidades.
 // >>> Fallback passa a ser OPT-IN via flags.disable_hooks_fallback === false.
+// >>> Revisado com anti-rajada (gate temporal + dedupe hash) para evitar rajadas.
 
 import { buildPrompt } from "./prompts/index.js";
+import { recall, remember } from "./flow/_state.js";
+
+// === Helpers de anti-rajada/dedupe ===
+function hashStr(s = "") {
+  let h = 0, i = 0, len = s.length;
+  while (i < len) { h = (h << 5) - h + s.charCodeAt(i++) | 0; }
+  return h;
+}
+
+async function shouldSendFallback(jid, reply, settings) {
+  if (!reply) return false;
+
+  const now = Date.now();
+  const h = hashStr(reply);
+
+  const windowMs = Number(settings?.flags?.reply_dedupe_ms) || 90_000; // default 90s
+  try {
+    const saved = await recall(jid);
+    const lastH = saved?.__last_fb_hash || null;
+    const lastAt = saved?.__last_fb_at || 0;
+
+    if (lastH === h && (now - lastAt) < windowMs) {
+      return false; // supressão de rajada
+    }
+
+    await remember(jid, { __last_fb_hash: h, __last_fb_at: now });
+  } catch {
+    // fallback silencioso em caso de erro
+  }
+  return true;
+}
 
 export const hooks = {
   /**
@@ -28,18 +60,23 @@ export const hooks = {
   },
 
   /**
-   * Fallback textual FINAL — agora é opt-in.
+   * Fallback textual FINAL — agora é opt-in e com anti-rajada.
    * Regras:
    *  - Se flags.flow_only=true → desliga (retorna null).
    *  - Se flags.disable_hooks_fallback=true (padrão) → desliga (retorna null).
    *  - Nunca fala no stage "greet".
+   *  - Garante no máximo 1 saída a cada windowMs (default 90s) por contato/hash.
    */
-  async fallbackText({ stage, settings = {} }) {
+  async fallbackText({ stage, settings = {}, jid }) {
     const flags = settings?.flags || {};
     if (flags.flow_only === true) return null;
     if (flags.disable_hooks_fallback !== false) return null; // default: desliga
     if (String(stage || "").toLowerCase() === "greet") return null;
-    return "Consigo te orientar certinho! Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)? (hooks)";
+
+    const reply = "Consigo te orientar certinho! Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)? (hooks)";
+
+    const ok = await shouldSendFallback(jid, reply, settings);
+    return ok ? reply : null;
   },
 };
 
