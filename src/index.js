@@ -116,6 +116,7 @@ function tag(text, sourceTag) {
 }
 
 // =================== Helpers de envio ===================
+// >>>>>> CORREÇÃO CRÍTICA: adapter.sendMessage(to, textString)  (ANTES estava passando { text }, o que silenciava o envio)
 async function sendViaAdapter(to, kind, payload) {
   if (!to || !sendEnabled) return;
   if (kind === 'image') {
@@ -136,11 +137,11 @@ async function sendViaAdapter(to, kind, payload) {
       return;
     }
     const fallbackText = (payload?.fallbackText || '').toString();
-    if (fallbackText) await adapter.sendMessage(to, { text: fallbackText });
+    if (fallbackText) await adapter.sendMessage(to, String(fallbackText)); // <<< fix
     return;
   }
   const text = String(payload?.text || '');
-  if (text) await adapter.sendMessage(to, { text });
+  if (text) await adapter.sendMessage(to, String(text)); // <<< fix
 }
 
 async function enqueueOrDirect({ to, kind = 'text', payload = {} }) {
@@ -292,6 +293,13 @@ async function sendActions(to, actions = []) {
   }
   return true;
 }
+
+// Anti-duplicação de mídia de abertura e anti-spam
+const sentOpening = new Set();
+const lastSentAt  = new Map();
+const lastHash    = new Map();
+const processedIds = new Set();
+setInterval(() => { if (processedIds.size > 5000) processedIds.clear(); }, 60_000).unref();
 
 // =================== Handler principal ===================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
@@ -485,13 +493,6 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     return '';
   }
 });
-
-// Anti-duplicação de mídia de abertura e anti-spam
-const sentOpening = new Set();
-const lastSentAt  = new Map();
-const lastHash    = new Map();
-const processedIds = new Set();
-setInterval(() => { if (processedIds.size > 5000) processedIds.clear(); }, 60_000).unref();
 
 // =================== Rotas HTTP ===================
 const limiter = rateLimit({
@@ -712,10 +713,4 @@ async function gracefulClose(signal) {
   console.log(`[shutdown] signal=${signal}`);
   try { await stopOutboxWorkers(); } catch (e) { console.warn('[shutdown] stopOutboxWorkers:', e?.message || e); }
   try { await flushMetricsNow(); } catch (e) { console.warn('[shutdown] flushMetricsNow:', e?.message || e); }
-  try { await new Promise((resolve) => server?.close?.(() => resolve())); console.log('[http] closed'); } catch {}
-  try { adapter?.close?.(); } catch {}
-  try { outbox?.stop?.(); } catch {}
-  setTimeout(() => process.exit(0), 1500).unref();
-}
-process.once('SIGINT',  () => { gracefulClose('SIGINT');  });
-process.once('SIGTERM', () => { gracefulClose('SIGTERM'); });
+  try { await new Promise((resolve) => server?.close?.(()
