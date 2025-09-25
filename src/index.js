@@ -16,6 +16,9 @@ import { intentOf } from './core/intent.js';
 import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 import { orchestrate } from './core/orchestrator.js';
+// antes: import { loadBotConfig } from "../configs/bootstrap.js";
+import { loadBotConfig } from "../bootstrap.js";
+
 
 // Sessão persistente
 import { loadSession, saveSession } from './core/session.js';

@@ -57,19 +57,26 @@ function mapStageName(s) {
   return "greet";
 }
 
+function allowedLinksFromSettings() {
+  const arr = settings?.guardrails?.allowed_links;
+  return Array.isArray(arr) ? arr : [];
+}
+
 function buildOutbox(actions, stage, variant=null) {
   return {
     publish: async (msg) => {
       if (!msg) return;
+      const baseMeta = { stage, variant, source: `flow/${stage}`, allowedLinks: allowedLinksFromSettings() };
+
       if (msg.kind === "image" || msg.type === "image") {
         const url = msg.payload?.url || msg.url;
         const caption = msg.payload?.caption || msg.caption || "";
-        if (url) actions.push({ kind: "image", url, caption, meta: { stage, variant, source: `flow/${stage}` } });
+        if (url) actions.push({ kind: "image", url, caption, meta: baseMeta });
         return;
       }
-      if (msg.kind === "text" || typeof msg === "string") {
+      if (msg.kind === "text" || typeof msg === "string" || msg.text || msg.payload?.text) {
         const text = typeof msg === "string" ? msg : (msg.payload?.text || msg.text || "");
-        if (text) actions.push({ kind: "text", text, meta: { stage, variant, source: `flow/${stage}` } });
+        if (text) actions.push({ kind: "text", text, meta: { ...baseMeta, ...(msg.meta || {}) } });
         return;
       }
     }
@@ -94,8 +101,19 @@ async function runFlow(botId, stage, ctxBase, actions) {
   const res = await fn(ctx);
   if (!res) return null;
 
+  // propaga reply + meta do flow (ex.: allowLink)
   if (res.reply) {
-    actions.push({ kind: "text", text: String(res.reply || ""), meta: { stage: file, variant: null, source: `flow/${file}` } });
+    actions.push({
+      kind: "text",
+      text: String(res.reply || ""),
+      meta: {
+        stage: file,
+        variant: null,
+        source: `flow/${file}`,
+        allowedLinks: allowedLinksFromSettings(),
+        ...(res.meta || {}),
+      }
+    });
   }
   return { res, file };
 }
@@ -112,31 +130,37 @@ export async function orchestrate({ jid, text }) {
     if (shouldDebounceInbound(session, msg)) return [];
     markInbound(session, msg);
 
-    // 1) estágio
+    // 1) estágio atual
     let stage = mapStageName(normalizeStage(session.stage));
 
-    // 2) flow do estágio atual
+    // 2) roda flow do estágio
     const outbox = buildOutbox(actions, stage, null);
     const flowRun = await runFlow(BOT_ID, stage, { settings, outbox, jid, state: session.flow, text: msg }, actions);
 
-    // 3) fallback via hooks (exceto greet)
+    // 3) fallback via hooks (exceto greet) — **opcional** e **não bloqueia** o flow
     if (!actions.length) {
       try {
         const mod = await import(`../../configs/bots/${BOT_ID}/hooks.js`);
         const botHooks = mod?.hooks || mod?.default?.hooks || null;
         if (botHooks?.fallbackText && stage !== "greet") {
-          const fb = await botHooks.fallbackText({ stage, settings });
-          if (fb && fb.trim()) actions.push({ kind: "text", text: fb.trim(), meta: { stage, source: "hooks" } });
+          const fb = await botHooks.fallbackText({ stage, settings, jid });
+          if (fb && fb.trim()) {
+            actions.push({
+              kind: "text",
+              text: fb.trim(),
+              meta: { stage, source: "hooks", allowedLinks: allowedLinksFromSettings() }
+            });
+          }
         }
       } catch {}
     }
 
-    // 4) fallback local
+    // 4) fallback local — nudge curto
     if (!actions.length) {
       actions.push({
         kind: "text",
         text: "Consegue me contar rapidinho sobre seu cabelo? (liso, ondulado, cacheado ou crespo) 💛",
-        meta: { stage, source: "fallback" }
+        meta: { stage, source: "fallback", allowedLinks: allowedLinksFromSettings() }
       });
     }
 
