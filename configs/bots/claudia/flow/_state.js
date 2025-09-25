@@ -87,6 +87,8 @@ export function initialState() {
     stage: null,
     // telemetria leve
     turns: 0,
+    // asked{} preenchido dinamicamente
+    asked: {},
   };
 }
 
@@ -150,4 +152,53 @@ export function normalizeSettings(s = {}) {
     messages: s.messages || {},
     media: s.media || {},
   };
+}
+
+// === Helpers de slot-filling ===
+export function ensureAsked(state) {
+  state.asked = state.asked || {};
+  return state.asked;
+}
+
+export function markAsked(state, key) {
+  const a = ensureAsked(state);
+  a[key] = { at: Date.now(), count: (a[key]?.count || 0) + 1 };
+  return a[key];
+}
+
+export function isFilled(state, key) {
+  const v = state?.profile?.[key];
+  return v !== undefined && v !== null && v !== "";
+}
+
+export function filledSummary(state) {
+  const p = state?.profile || {};
+  const map = {
+    hair_type: v => `cabelo **${v}**`,
+    had_prog_before: v => v ? '**já fez** progressiva' : '**nunca fez** progressiva',
+    goal: v => `objetivo **${v}**`,
+  };
+  return Object.entries(p)
+    .filter(([k, v]) => v != null && v !== "" && map[k])
+    .map(([k, v]) => map[k](v));
+}
+
+// === Auditoria segura (para debug em produção) ===
+export function formatAudit(state) {
+  const p = state?.profile || {};
+  const a = state?.asked || {};
+  const stage = state?.stage || null;
+  const turns = state?.turns || 0;
+
+  const askedList = Object.entries(a).map(([k, v]) => `${k}:${v?.count || 1}x`).join(" · ") || "—";
+  const filled = filledSummary(state).join(" · ") || "—";
+
+  // NÃO incluímos dados sensíveis como telefone/endereço aqui.
+  return [
+    "AUDITORIA DA SESSÃO",
+    `stage: ${stage || "—"} | turns: ${turns}`,
+    `preenchido: ${filled}`,
+    `perguntado: ${askedList}`,
+    `nome: ${p.name || "—"}`,
+  ].join("\n");
 }

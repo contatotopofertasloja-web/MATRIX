@@ -1,7 +1,11 @@
 // configs/bots/claudia/flow/qualify.js
-// Qualificação com slot-filling + anti-loop + avanço forçado pra oferta.
+// Slot-filling com memória: NÃO repete perguntas já respondidas; ratifica o que já tem.
+// Inclui comando de auditoria: /memoria, /memória ou /memory
 
-import { remember, recall, ensureProfile, callUser, tagReply, normalizeSettings } from "./_state.js";
+import {
+  remember, recall, ensureProfile, ensureAsked, markAsked, isFilled,
+  callUser, tagReply, normalizeSettings, filledSummary, formatAudit
+} from "./_state.js";
 
 const RX = {
   NAME:  /\b(meu\s*nome\s*é|me\s*chamo|sou\s+[oa])\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,})/i,
@@ -11,11 +15,15 @@ const RX = {
   NO:    /\b(n[aã]o|nunca fiz|nunca)\b/i,
   GOAL_LISO: /\bbem\s*liso\b/i,
   GOAL_ALIN: /\balinhad[oa]\b|\bmenos\s*frizz\b/i,
-  SKIP:  /\bpular\b/i,
 
-  WANT_STORE: /\b(nome|qual)\s+(da|de)\s+(loja|empresa)\b/i,
+  WANT_STORE:   /\b(nome|qual)\s+(da|de)\s+(loja|empresa)\b/i,
   WANT_PRODUCT: /\b(nome|qual)\s+(do|da)\s+(produto|progressiva)\b/i,
-  WANT_HOURS: /\b(hor[aá]rio|funcionamento|atendimento)\b/i,
+  WANT_HOURS:   /\b(hor[aá]rio|funcionamento|atendimento)\b/i,
+
+  CONFIRM: /\b(confirma|confirmar|t[áa]\s*certo|ok|isso mesmo|isso)\b/i,
+  EDIT:    /\b(mudar|trocar|na verdade|corrig|err(ei|o))\b/i,
+
+  AUDIT:   /^\/(memoria|memória|memory)\b/i,
 };
 
 const QUESTIONS = [
@@ -24,15 +32,15 @@ const QUESTIONS = [
   { key: "goal",            q: "Prefere resultado **bem liso** ou só **alinhado** e com menos frizz?" },
 ];
 
-const COOLDOWN_MS = 60_000;
-const DEDUPE_MS   = 5_000;
-const MAX_HITS    = 3;
+const COOLDOWN_MS = 60_000;   // 1 min entre a MESMA pergunta
+const NUDGE_MS    = 15_000;   // nudge sem repetir igual
+const MAX_TOUCHES = 3;        // depois disso, avança
 
 function captureAll(state, text = "") {
-  const s = String(text);
+  const s = String(text || "");
   const p = ensureProfile(state);
 
-  // Nome
+  // nome
   if (!p.name) {
     const m = s.match(RX.NAME);
     if (m?.[2]) p.name = m[2].trim();
@@ -41,106 +49,132 @@ function captureAll(state, text = "") {
       if (solo?.[1]) p.name = solo[1].trim();
     }
   }
-  // Cabelo
-  const h = s.match(RX.HAIR);
-  if (h) p.hair_type = h[1].toLowerCase();
 
-  // Já fez?
+  // cabelo
+  const hair = s.match(RX.HAIR);
+  if (hair) p.hair_type = hair[1].toLowerCase();
+
+  // já fez?
   if (RX.YES.test(s) && p.had_prog_before == null) p.had_prog_before = true;
   if (RX.NO.test(s)  && p.had_prog_before == null) p.had_prog_before = false;
 
-  // Objetivo
+  // objetivo
   if (!p.goal) {
     if (RX.GOAL_LISO.test(s)) p.goal = "bem liso";
     else if (RX.GOAL_ALIN.test(s)) p.goal = "alinhado/menos frizz";
   }
 }
 
-function nextQuestion(p) {
-  for (const q of QUESTIONS) if (p[q.key] == null) return q;
+function nextMissing(state) {
+  const p = ensureProfile(state);
+  for (const q of QUESTIONS) if (!isFilled(state, q.key)) return q;
   return null;
 }
 
+function buildRatify(state) {
+  const itens = filledSummary(state);
+  if (!itens.length) return "";
+  return `Anotei: ${itens.join(" · ")}. Está correto?`;
+}
+
 export default async function qualify(ctx) {
-  const { jid, state, text, settings } = ctx;
+  const { jid, state, text = "", settings } = ctx;
   const S = normalizeSettings(settings);
   state.turns = (state.turns || 0) + 1;
-  state.__qualify_hits = (state.__qualify_hits || 0) + 1;
 
-  // merge com memória
+  // Auditoria (comando)
+  if (RX.AUDIT.test(text)) {
+    const audit = formatAudit(state);
+    return tagReply(S, audit, "flow/qualify#audit");
+  }
+
+  // merge com memória (flow store)
   const saved = await recall(jid);
   if (saved?.profile) state.profile = { ...(state.profile || {}), ...saved.profile };
+  if (saved?.asked)   state.asked   = { ...(state.asked   || {}), ...saved.asked   };
 
   // captura do turno
   captureAll(state, text);
   await remember(jid, { profile: state.profile });
 
-  // atalhos informativos (loja/produto/horário)
-  if (RX.WANT_STORE.test(text || "")) {
-    const reply = `A loja é a *${S.product.store_name}*. Precisa de algo específico?`;
-    return tagReply(S, reply, "flow/qualify");
+  // atalhos informativos
+  if (RX.WANT_STORE.test(text)) {
+    return tagReply(S, `A loja é a *${S.product.store_name}*.`, "flow/qualify");
   }
-  if (RX.WANT_PRODUCT.test(text || "")) {
-    const reply = `O produto é a *${S.product.name}*. Posso te explicar como usar e o que ele resolve.`;
-    return tagReply(S, reply, "flow/qualify");
+  if (RX.WANT_PRODUCT.test(text)) {
+    return tagReply(S, `O produto é a *${S.product.name}*.`, "flow/qualify");
   }
-  if (RX.WANT_HOURS.test(text || "")) {
-    const reply = `Atendemos ${S.product.opening_hours}. Quer que eu já te passe a condição?`;
-    return tagReply(S, reply, "flow/qualify");
+  if (RX.WANT_HOURS.test(text)) {
+    return tagReply(S, `Atendemos ${S.product.opening_hours}.`, "flow/qualify");
   }
 
-  // Se já temos informação suficiente → oferta
-  const p = ensureProfile(state);
-  if (p.hair_type && p.goal && p.had_prog_before != null) {
-    const msg = callUser(state)
-      ? `Perfeito, ${callUser(state)}! Com isso eu já consigo te recomendar certinho.`
-      : `Perfeito! Com isso eu já consigo te recomendar certinho.`;
+  // edição/correção
+  if (RX.EDIT.test(text)) {
+    const rat = buildRatify(state);
+    return tagReply(S, `${rat || "Me diga o correto e eu atualizo aqui."}`, "flow/qualify");
+  }
+
+  // Se está completo → ratifica e avança
+  const missing = nextMissing(state);
+  if (!missing) {
+    const rat = buildRatify(state);
+    const msg = rat ? `${rat} Se quiser, já te mostro a condição.` : "Perfeito! Já consigo te recomendar certinho.";
     return tagReply(S, msg, "flow/qualify->offer");
   }
 
-  // Anti-loop: cooldown / dedupe / avanço forçado
+  // NÃO repetir pergunta: cooldown + nudges
+  const asked = ensureAsked(state)[missing.key];
   const now = Date.now();
-  const pending = nextQuestion(p);
 
-  if (pending) {
-    if (RX.SKIP.test(text || "")) {
-      const msg = "Fechado. Posso te mostrar a condição agora 👇";
-      return tagReply(S, msg, "flow/qualify->offer");
-    }
-
-    if (state.__last_q_key === pending.key && (now - (state.__last_q_at || 0)) < DEDUPE_MS) {
-      // não repete a mesma pergunta em sequência curtíssima
-      return null;
-    }
-
-    // cooldown da pergunta
-    const stamp = `__asked_${pending.key}_at`;
-    if (!state[stamp] || (now - state[stamp]) > COOLDOWN_MS) {
-      state[stamp] = now;
-      state.__last_q_key = pending.key;
-      state.__last_q_at = now;
-
-      const name = callUser(state);
-      const q = name ? `${name}, ${pending.q}` : pending.q;
-      return tagReply(S, q, "flow/qualify");
-    }
-
-    // atingiu hits → força avançar
-    if (state.__qualify_hits >= MAX_HITS) {
-      const msg = "Com o que já tenho, consigo te passar a condição 👇";
-      return tagReply(S, msg, "flow/qualify->offer");
-    }
-
-    // empurrão suave
-    const nudge = pending.key === "hair_type"
-      ? "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**? Se preferir, diga **pular**."
-      : "Me diz isso e já te mostro o valor/link ✨ (ou diga **pular**).";
-    return tagReply(S, nudge, "flow/qualify");
+  if (!asked) {
+    // primeira vez
+    markAsked(state, missing.key);
+    await remember(jid, { asked: state.asked });
+    const name = callUser(state);
+    const q = name ? `${name}, ${missing.q}` : missing.q;
+    return tagReply(S, q, "flow/qualify");
   }
 
-  // fallback
-  const ok = callUser(state)
-    ? `Perfeito, ${callUser(state)}! Já consigo te recomendar certinho.`
-    : "Perfeito! Já consigo te recomendar certinho.";
-  return tagReply(S, ok, "flow/qualify->offer");
+  const elapsed = now - (asked.at || 0);
+
+  // confirmação do tipo “ok/isso”
+  if (RX.CONFIRM.test(text)) {
+    const rat = buildRatify(state);
+    return tagReply(S, rat || "Anotado! Posso seguir?", "flow/qualify");
+  }
+
+  // curto prazo → nudge sem repetir
+  if (elapsed < NUDGE_MS) {
+    return tagReply(
+      S,
+      missing.key === "hair_type"
+        ? "Rapidinho: é **liso**, **ondulado**, **cacheado** ou **crespo**?"
+        : "Me diz isso e eu já te passo o valor/link ✨",
+      "flow/qualify"
+    );
+  }
+
+  // dentro do cooldown → oferece pular
+  if (elapsed < COOLDOWN_MS) {
+    return tagReply(S, "Se preferir, posso **pular isso** e já te mostrar a condição.", "flow/qualify");
+  }
+
+  // passou cooldown → reformula (conta toques)
+  if ((asked.count || 0) < MAX_TOUCHES) {
+    markAsked(state, missing.key);
+    await remember(jid, { asked: state.asked });
+    const reform = missing.key === "had_prog_before"
+      ? "Você **já fez progressiva** alguma vez?"
+      : (missing.key === "goal"
+          ? "Quer resultado **bem liso** ou **alinhado** com menos frizz?"
+          : "Seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?");
+    return tagReply(S, reform, "flow/qualify");
+  }
+
+  // excedeu toques → avança
+  const rat = buildRatify(state);
+  const msg = rat
+    ? `${rat} Com isso eu já consigo te recomendar certinho 👇`
+    : "Com o que já tenho, consigo te recomendar certinho 👇";
+  return tagReply(S, msg, "flow/qualify->offer");
 }
