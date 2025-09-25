@@ -16,8 +16,22 @@ import { intentOf } from './core/intent.js';
 import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 import { orchestrate } from './core/orchestrator.js';
-// antes: import { loadBotConfig } from "../configs/bootstrap.js";
-import { loadBotConfig } from "../bootstrap.js";
+// ===== Bootstrap (resiliente: raiz OU configs/) =====
+// Tenta ../bootstrap.js (raiz) e cai pra ../configs/bootstrap.js se não existir.
+// Evita crash de ESM em produção quando o arquivo não está no caminho esperado.
+let loadBotConfig = () => ({});
+try {
+  const m = await import('../bootstrap.js');                  // raiz do projeto
+  loadBotConfig = m.loadBotConfig || m.default?.loadBotConfig || loadBotConfig;
+} catch {
+  try {
+    const m = await import('../configs/bootstrap.js');        // fallback pasta configs
+    loadBotConfig = m.loadBotConfig || m.default?.loadBotConfig || loadBotConfig;
+  } catch {
+    console.warn('[bootstrap] arquivo não encontrado em ../bootstrap.js nem ../configs/bootstrap.js — seguindo com defaults');
+  }
+}
+
 
 
 // Sessão persistente
