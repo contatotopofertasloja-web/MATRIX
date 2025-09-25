@@ -1,5 +1,4 @@
-﻿# configs/bots/claudia/settings.yaml
-bot_id: claudia
+﻿bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 
@@ -49,7 +48,7 @@ flags:
   reply_dedupe_ms: 90000        # janela do anti-rajada de SAÍDA (core/index)
   send_opening_photo: true
   disable_opening_hook: true
-  disable_hooks_fallback: false
+  disable_hooks_fallback: true   # <<< DESLIGADO por padrão (antes estava false)
   flow_only: false
   guardrails_strict: true
   use_telemetry: true
@@ -78,3 +77,5 @@ guardrails:
   allowed_links:
     - "{{ product.checkout_link }}"
     - "{{ product.site_url }}"
+    # redundância segura: literal do checkout para evitar corte se o template não expandir
+    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"

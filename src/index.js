@@ -32,8 +32,6 @@ try {
   }
 }
 
-
-
 // Sessão persistente
 import { loadSession, saveSession } from './core/session.js';
 
@@ -109,6 +107,9 @@ await outbox.start(async (job) => {
 // =================== Flows/Hooks ===================
 const flows = await loadFlows(BOT_ID);
 const hooks = await getBotHooks();
+
+// >>> NOVO: liga/desliga HOOKS por flag central
+const HOOKS_ON = settings?.flags?.disable_hooks_fallback === false;
 
 // =================== Proveniência & Trace ===================
 const TRACE_MAX = 800;
@@ -461,8 +462,8 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       } catch (e) { console.warn('[orchestrator] erro:', e?.message || e); }
     }
 
-    // 4) LLM “texto solto” — só se não flow_only
-    if (!flowOnly) {
+    // 4) LLM “texto solto” — só se não flow_only E hooks ligados
+    if (!flowOnly && HOOKS_ON) {
       try {
         const built = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
         if (built && (built.system || built.user)) {
@@ -481,8 +482,8 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       } catch (e) { console.warn('[freeform] erro:', e?.message || e); }
     }
 
-    // 5) Fallback (hooks) — só se não flow_only
-    if (!flowOnly) {
+    // 5) Fallback (hooks) — só se não flow_only E hooks ligados
+    if (!flowOnly && HOOKS_ON) {
       const fb = await hooks.fallbackText({ stage: 'error', message: msgText, settings });
       const textToSend = (fb && String(fb).trim()) ? prepareOutboundText(fb) : '';
       if (textToSend) {
@@ -504,7 +505,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   } catch (e) {
     console.error('[onMessage]', e);
     try {
-      if (!settings?.flags?.flow_only) {
+      if (!settings?.flags?.flow_only && HOOKS_ON) {
         const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
         const txt = (fb && String(fb).trim()) ? prepareOutboundText(fb) : '';
         if (txt && !shouldDedupeOutbound(from, txt)) {
