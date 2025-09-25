@@ -26,7 +26,6 @@ product:
   opening_hours: "06h às 21h (escala variável)"
 
 media:
-  # A foto é enviada automaticamente pelo flow/index.js quando flags.send_opening_photo=true
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 messages:
@@ -47,11 +46,11 @@ promotions:
 
 flags:
   has_cod: true
-  reply_dedupe_ms: 120000      # 120s (dedupe persistente entre invocações)
+  reply_dedupe_ms: 120000
   send_opening_photo: true
-  disable_opening_hook: true   # hook de abertura silencioso
-  disable_hooks_fallback: true # desliga fallback textual dos hooks (sem “(hooks)”)
-  flow_only: true              # conversa confinada aos flows
+  disable_opening_hook: true
+  disable_hooks_fallback: false   # <- destrava fallback textual dos hooks
+  flow_only: false                # <- permite cair no LLM/hook se o flow não responder
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
