@@ -1,10 +1,7 @@
-// src/core/llm.js
-// Seletor de modelo por estágio com compat GPT-5 ⇄ GPT-4o, neutro ao produto/persona.
-
+// src/core/llm.js — seletor de modelo por estágio com compat GPT-5 ⇄ GPT-4o
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
-// ---------- Stage aliases (pt/en) para chave canônica ----------
 const STAGE_KEYS = {
   recepcao:     ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
   qualificacao: ["qualificacao","qualificação","qualify"],
@@ -13,7 +10,6 @@ const STAGE_KEYS = {
   fechamento:   ["fechamento","close","checkout","closing"],
   posvenda:     ["posvenda","pósvenda","postsale","pos_venda","pós_venda"],
 };
-
 function resolveStageKey(stage) {
   const t = String(stage || "").toLowerCase().trim();
   for (const canonical in STAGE_KEYS) {
@@ -22,7 +18,6 @@ function resolveStageKey(stage) {
   return "recepcao";
 }
 
-// ---------- Defaults & ENV ----------
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
@@ -43,7 +38,6 @@ const ENV_DEFAULTS = {
         : 2048,
   },
 };
-
 const ENV_STAGE_VARS = {
   recepcao: "LLM_MODEL_RECEPCAO",
   qualificacao: "LLM_MODEL_QUALIFICACAO",
@@ -53,7 +47,6 @@ const ENV_STAGE_VARS = {
   posvenda: "LLM_MODEL_POSVENDA",
 };
 
-// ---------- Tradução automática GPT-5 → compat atual (4o) ----------
 export function translateModel(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return n;
@@ -63,28 +56,21 @@ export function translateModel(name) {
   return name;
 }
 
-// ---------- Seleção de modelo por estágio ----------
 export function pickModelForStage(stageRaw) {
   const stage = resolveStageKey(stageRaw);
-
-  // 1) YAML específico por bot
   const fromYaml = settings?.models_by_stage?.[stage];
   if (settings?.flags?.useModelsByStage && fromYaml) return fromYaml;
 
-  // 2) ENV global (Railway)
   const envKey = ENV_STAGE_VARS[stage];
   const fromEnv = envKey ? process.env[envKey] : undefined;
   if (settings?.flags?.fallbackToGlobal && fromEnv) return fromEnv;
 
-  // 3) YAML global_models
   const fromGlobalYaml = settings?.global_models?.[stage];
   if (settings?.flags?.fallbackToGlobal && fromGlobalYaml) return fromGlobalYaml;
 
-  // 4) Fallback
   return "gpt-5-nano";
 }
 
-// ---------- Heurística de max_tokens ----------
 function defaultMaxTokensForModel(modelName = "") {
   const m = String(modelName).toLowerCase();
   if (m.includes("nano")) return ENV_DEFAULTS.maxTokens.nano;
@@ -92,16 +78,12 @@ function defaultMaxTokensForModel(modelName = "") {
   return ENV_DEFAULTS.maxTokens.full;
 }
 
-// ---------- Cliente OpenAI (lazy) ----------
 let openai = null;
 function getOpenAI() {
-  if (!openai) {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+  if (!openai) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return openai;
 }
 
-// ---------- callLLM com retries e backoff ----------
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
   if ((ENV_DEFAULTS.provider || "openai") !== "openai") {
     throw new Error(`Provider "${ENV_DEFAULTS.provider}" não suportado neste módulo.`);
@@ -114,7 +96,6 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
 
   const client = getOpenAI();
   let lastErr;
-
   for (let attempt = 0; attempt <= ENV_DEFAULTS.retries; attempt++) {
     try {
       const controller = new AbortController();
@@ -130,20 +111,16 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
         ],
         signal: controller.signal,
       });
-
       clearTimeout(t);
 
       const text = res?.choices?.[0]?.message?.content?.trim() || "";
       return { model: chosenModel, text };
     } catch (e) {
       lastErr = e;
-      // pequeno backoff exponencial
       const backoff = Math.min(1000 * (2 ** attempt), 4000);
       await new Promise(r => setTimeout(r, backoff));
     }
   }
-  // Log controlado (deixa o caller decidir fallback)
-  // eslint-disable-next-line no-console
   console.error("[LLM][error]", lastErr?.status || "", lastErr?.message || lastErr);
   throw lastErr;
 }

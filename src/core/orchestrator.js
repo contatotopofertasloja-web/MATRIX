@@ -1,11 +1,5 @@
-// src/core/orchestrator.js
-// Orquestrador "flows-first": prioriza flows; hooks/fallback só se não houver ação.
-// Mantém lock anti-rajada, persistência e telemetria. NÃO mexe no texto dos flows.
-
-import {
-  getSession, saveSession,
-  normalizeStage
-} from "./fsm.js";
+// src/core/orchestrator.js — flows-first com lock/anti-rajada, persistência e métricas.
+import { getSession, saveSession, normalizeStage } from "./fsm.js";
 import settings from "./settings.js";
 
 const BOT_ID = process.env.BOT_ID || settings?.bot_id || "claudia";
@@ -13,7 +7,7 @@ const BOT_ID = process.env.BOT_ID || settings?.bot_id || "claudia";
 // ---------- Concurrency / anti-rajada ----------
 const LOCK_MS = 8000;
 const DEBOUNCE_MS_INBOUND = 3500;
-const SAME_REPLY_MS = 8000;
+const SAME_REPLY_MS = Number(settings?.flags?.reply_dedupe_ms) || 8000;
 
 const locks = new Map();
 function tryLock(key) {
@@ -56,10 +50,9 @@ function markReply(session, replyText) {
 function mapStageName(s) {
   const k = String(s || "greet").toLowerCase();
   if (k === "qualify") return "qualificacao";
-  if (k === "offer") return "offer";
+  if (k === "offer" || k === "oferta") return "offer";
   if (k === "close" || k === "fechamento") return "close";
   if (k === "postsale" || k === "posvenda") return "postsale";
-  if (k === "oferta") return "offer";
   if (k === "qualificacao") return "qualificacao";
   return "greet";
 }
@@ -68,14 +61,12 @@ function buildOutbox(actions, stage, variant=null) {
   return {
     publish: async (msg) => {
       if (!msg) return;
-      // normaliza image
       if (msg.kind === "image" || msg.type === "image") {
         const url = msg.payload?.url || msg.url;
         const caption = msg.payload?.caption || msg.caption || "";
         if (url) actions.push({ kind: "image", url, caption, meta: { stage, variant, source: `flow/${stage}` } });
         return;
       }
-      // normaliza text
       if (msg.kind === "text" || typeof msg === "string") {
         const text = typeof msg === "string" ? msg : (msg.payload?.text || msg.text || "");
         if (text) actions.push({ kind: "text", text, meta: { stage, variant, source: `flow/${stage}` } });
@@ -99,21 +90,12 @@ async function runFlow(botId, stage, ctxBase, actions) {
   } catch { fn = null; }
   if (!fn) return null;
 
-  const ctx = {
-    ...ctxBase,
-    meta: { variant: null }
-  };
-
+  const ctx = { ...ctxBase, meta: { variant: null } };
   const res = await fn(ctx);
   if (!res) return null;
 
-  // se o flow devolveu reply como string, empilha
   if (res.reply) {
-    actions.push({
-      kind: "text",
-      text: String(res.reply || ""),
-      meta: { stage: file, variant: null, source: `flow/${file}` }
-    });
+    actions.push({ kind: "text", text: String(res.reply || ""), meta: { stage: file, variant: null, source: `flow/${file}` } });
   }
   return { res, file };
 }
@@ -127,33 +109,29 @@ export async function orchestrate({ jid, text }) {
     session.flow  = session.flow  || {};
 
     const msg = String(text || "");
-
-    // debounce do mesmo input
     if (shouldDebounceInbound(session, msg)) return [];
     markInbound(session, msg);
 
-    // 1) resolve estágio
+    // 1) estágio
     let stage = mapStageName(normalizeStage(session.stage));
 
-    // 2) executa FLOW do estágio atual (greet já envia foto 1x dentro do próprio flow)
+    // 2) flow do estágio atual
     const outbox = buildOutbox(actions, stage, null);
     const flowRun = await runFlow(BOT_ID, stage, { settings, outbox, jid, state: session.flow, text: msg }, actions);
 
-    // 3) se o flow não produziu nenhuma ação → fallback via hooks (exceto greet)
+    // 3) fallback via hooks (exceto greet)
     if (!actions.length) {
       try {
         const mod = await import(`../../configs/bots/${BOT_ID}/hooks.js`);
         const botHooks = mod?.hooks || mod?.default?.hooks || null;
         if (botHooks?.fallbackText && stage !== "greet") {
           const fb = await botHooks.fallbackText({ stage, settings });
-          if (fb && fb.trim()) {
-            actions.push({ kind: "text", text: fb.trim(), meta: { stage, source: "hooks" } });
-          }
+          if (fb && fb.trim()) actions.push({ kind: "text", text: fb.trim(), meta: { stage, source: "hooks" } });
         }
-      } catch { /* sem hooks, segue */ }
+      } catch {}
     }
 
-    // 4) fallback local se ainda vazio
+    // 4) fallback local
     if (!actions.length) {
       actions.push({
         kind: "text",
@@ -162,18 +140,18 @@ export async function orchestrate({ jid, text }) {
       });
     }
 
-    // 5) avanço de estágio (respeita `next` do flow; senão, padrão do funil)
+    // 5) avanço de estágio
     if (flowRun?.res?.next) {
       session.stage = mapStageName(flowRun.res.next);
     } else {
       const f = flowRun?.file;
-      if (f === "greet")       session.stage = "qualificacao";
+      if (f === "greet")        session.stage = "qualificacao";
       else if (f === "qualify") session.stage = "offer";
       else if (f === "offer")   session.stage = "close";
       else if (f === "close")   session.stage = "postsale";
     }
 
-    // 6) anti-flood de mesma resposta
+    // 6) anti-flood mesma resposta
     const lastText = actions.find(a => a.kind === "text")?.text || "";
     if (lastText && shouldBlockSameReply(session, lastText)) return [];
     if (lastText) markReply(session, lastText);
@@ -182,10 +160,8 @@ export async function orchestrate({ jid, text }) {
     await saveSession(session);
     try {
       const { captureFromActions } = await import("./metrics/middleware.js");
-      await captureFromActions(actions, {
-        botId: BOT_ID, jid, stage: session.stage, variant: null
-      });
-    } catch { /* métricas são best effort */ }
+      await captureFromActions(actions, { botId: BOT_ID, jid, stage: session.stage, variant: null });
+    } catch {}
 
     return actions;
   } finally {

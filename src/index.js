@@ -17,41 +17,35 @@ import { callLLM } from './core/llm.js';
 import { getBotHooks } from './core/bot-registry.js';
 import { orchestrate } from './core/orchestrator.js';
 
-// >>> NOVO: sessão persistente
+// Sessão persistente
 import { loadSession, saveSession } from './core/session.js';
 
-// ===== MÉTRICAS (novos)
+// Métricas (best-effort)
 import { attachMetricsRoutes } from './core/metrics/receiver.js';
 import { flushMetricsNow } from './core/metrics/middleware.js';
 
-// ===== ASR (whisper/…)
+// ===== ASR =====
 let transcribeAudio = null;
 try {
   const asrMod = await import('./core/asr.js');
   transcribeAudio = asrMod?.transcribeAudio || asrMod?.default || null;
-} catch {
-  console.warn('[ASR] módulo ausente — áudio será ignorado na entrada.');
-}
+} catch { console.warn('[ASR] módulo ausente — áudio será ignorado.'); }
 
-// ===== TTS (voz/áudio de saída)
+// ===== TTS =====
 let ttsSpeak = null;
 try {
   const ttsMod = await import('./core/tts.js');
   ttsSpeak = ttsMod?.synthesizeTTS || ttsMod?.speak || ttsMod?.default || null;
-} catch {
-  console.warn('[TTS] módulo ausente — respostas por áudio desabilitadas.');
-}
+} catch { console.warn('[TTS] módulo ausente — respostas por áudio desabilitadas.'); }
 
-// ===== Promoções (sorteio): import dinâmico
+// ===== Promoções (opcional) =====
 let promotions = null;
 try {
   const pmod = await import('./core/promotions.js');
   promotions = pmod?.default || pmod;
-} catch {
-  console.warn('[promotions] módulo ausente — endpoints seguirão sem erro.');
-}
+} catch { console.warn('[promotions] módulo ausente — endpoints seguirão sem erro.'); }
 
-// ===== App/ENV
+// ===== App/ENV =====
 if (process.env.NODE_ENV !== 'production') {
   try { await import('dotenv/config'); } catch {}
 }
@@ -65,7 +59,7 @@ const envBool = (v, d=false) =>
   (v==null ? d : ['1','true','yes','y','on'].includes(String(v).trim().toLowerCase()));
 const envNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
-// === ENV principais ===
+// ENV principais
 const PORT = envNum(process.env.PORT, 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 const OPS_TOKEN = process.env.OPS_TOKEN || process.env.ADMIN_TOKEN || '';
@@ -110,16 +104,30 @@ function pushTrace(entry) {
 function tag(text, sourceTag) {
   const s = String(text || '');
   if (!s.trim()) return s;
-  // Se já tiver carimbo (parênteses no final), preserva:
-  if (/\)\s*$/.test(s) && /\([^)]+?\)\s*$/.test(s)) return s;
+  if (/\)\s*$/.test(s) && /\([^)]+?\)\s*$/.test(s)) return s; // já carimbado
   return `${s} (${sourceTag})`;
 }
 
-// =================== Helpers anti-spam/idem (AGORA NO TOPO: evita mute por ReferenceError) ===================
-const sentOpening = new Set();
-const lastSentAt  = new Map();
-const lastHash    = new Map();
+// =================== Anti-idem / anti-rajada de entrada/saída ===================
+const sentOpening  = new Set();
+const lastSentAt   = new Map();
+const lastHash     = new Map();
 const processedIds = new Set();
+
+// >>> NOVO: dedupe por contato para SAÍDA (bloqueia repetidas em janela)
+const lastOutbound = new Map(); // to -> { text, ts }
+function shouldDedupeOutbound(to, text) {
+  const ms = Number(settings?.flags?.reply_dedupe_ms) || 0;
+  if (!ms) return false;
+  const t = (lastOutbound.get(to) || { text: null, ts: 0 });
+  const same = (String(t.text || '') === String(text || ''));
+  const close = (Date.now() - t.ts) < ms;
+  return same && close;
+}
+function markOutbound(to, text) {
+  lastOutbound.set(to, { text: String(text || ''), ts: Date.now() });
+}
+
 setInterval(() => { if (processedIds.size > 5000) processedIds.clear(); }, 60_000).unref();
 
 // =================== Helpers de envio ===================
@@ -147,7 +155,12 @@ async function sendViaAdapter(to, kind, payload) {
     return;
   }
   const text = String(payload?.text || '');
-  if (text) await adapter.sendMessage(to, { text });
+  if (text) {
+    // >>> NOVO: corta rajada idêntica
+    if (shouldDedupeOutbound(to, text)) return;
+    await adapter.sendMessage(to, { text });
+    markOutbound(to, text);
+  }
 }
 
 async function enqueueOrDirect({ to, kind = 'text', payload = {} }) {
@@ -228,10 +241,12 @@ const getMsgId = (raw) => {
   try { return raw?.key?.id || raw?.message?.key?.id || ''; } catch { return ''; }
 };
 
-// =================== Entrega unificada (texto + opcional áudio) ===================
-// BUG CORRIGIDO: usava `from` fora de escopo. Agora usa o `to` recebido.
+// Entrega unificada (texto + opcional áudio)
 async function deliverReply({ to, text, wantAudio = false }) {
   const cleanText = prepareOutboundText(text);
+  if (!cleanText) return;
+  // >>> NOVO: corta rajada idêntica ainda aqui, antes de TTS
+  if (shouldDedupeOutbound(to, cleanText)) return;
   if (wantAudio && settings?.flags?.allow_audio_out !== false) {
     const audio = await ttsIfPossible(cleanText);
     if (audio?.buffer) {
@@ -243,18 +258,16 @@ async function deliverReply({ to, text, wantAudio = false }) {
     }
   }
   await enqueueOrDirect({ to, payload: { text: cleanText } });
+  markOutbound(to, cleanText);
 }
 
-// =================== ASR/TTS helpers ===================
+// ASR/TTS helpers
 async function tryGetAudioBuffer(raw) {
   try {
     if (typeof adapter?.getAudioBuffer === 'function') return await adapter.getAudioBuffer(raw);
     if (typeof adapter?.downloadMedia === 'function') return await adapter.downloadMedia(raw, { audioOnly: true });
     return null;
-  } catch (e) {
-    console.warn('[ASR] tryGetAudioBuffer:', e?.message || e);
-    return null;
-  }
+  } catch (e) { console.warn('[ASR] tryGetAudioBuffer:', e?.message || e); return null; }
 }
 async function transcribeIfPossible(buf, mime = 'audio/ogg') {
   if (!buf || typeof transcribeAudio !== 'function') return null;
@@ -266,10 +279,7 @@ async function transcribeIfPossible(buf, mime = 'audio/ogg') {
       model: settings?.audio?.asrModel || 'whisper-1',
       language: settings?.audio?.language || 'pt',
     });
-  } catch (e) {
-    console.warn('[ASR] transcribeIfPossible:', e?.message || e);
-    return null;
-  }
+  } catch (e) { console.warn('[ASR] transcribeIfPossible:', e?.message || e); return null; }
 }
 async function ttsIfPossible(text) {
   if (!text || typeof ttsSpeak !== 'function') return null;
@@ -278,9 +288,7 @@ async function ttsIfPossible(text) {
     const lang  = settings?.audio?.language || 'pt';
     const out = await ttsSpeak({ text, voice, language: lang, format: 'ogg' });
     if (out?.buffer?.byteLength) return { buffer: out.buffer, mime: out.mime || 'audio/ogg' };
-  } catch (e) {
-    console.warn('[TTS] synth fail:', e?.message || e);
-  }
+  } catch (e) { console.warn('[TTS] synth fail:', e?.message || e); }
   return null;
 }
 
@@ -294,7 +302,11 @@ async function sendActions(to, actions = []) {
     } else if (a.kind === 'audio' && a.buffer) {
       await enqueueOrDirect({ to, kind: 'audio', payload: { buffer: a.buffer, mime: a.mime || 'audio/ogg' } });
     } else if (a.kind === 'text' && a.text) {
-      await enqueueOrDirect({ to, payload: { text: prepareOutboundText(a.text) } });
+      const t = prepareOutboundText(a.text);
+      if (!shouldDedupeOutbound(to, t)) {
+        await enqueueOrDirect({ to, payload: { text: t } });
+        markOutbound(to, t);
+      }
     }
   }
   return true;
@@ -303,16 +315,13 @@ async function sendActions(to, actions = []) {
 // =================== Handler principal ===================
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!intakeEnabled) return '';
-  // >>> NOVO: carrega sessão persistente
   const state = await loadSession(BOT_ID, from);
-
-  // helper: salvar sessão antes de sair
   const persist = async () => { try { await saveSession(BOT_ID, from, state); } catch {} };
 
   try {
     const now = Date.now();
 
-    // --------- Idempotência de inbound ---------
+    // Idempotência inbound
     const mid = getMsgId(raw);
     if (mid) {
       if (processedIds.has(mid)) { await persist(); return ''; }
@@ -324,7 +333,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       lastHash.set(from, h);
     }
 
-    // mídia de abertura (1x por contato)
+    // mídia de abertura (1x)
     if (!sentOpening.has(from)) {
       const media = await hooks.openingMedia({ settings });
       if (media?.url && settings?.flags?.send_opening_photo !== false) {
@@ -357,11 +366,11 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
     if (!msgText) { await persist(); return ''; }
 
-    // --------- Cooldown por contato ---------
+    // Cooldown por contato
     const last = lastSentAt.get(from) || 0;
     if (now - last < MIN_GAP_PER_CONTACT_MS) { await persist(); return ''; }
 
-    // webhook-like por texto (pós-venda)
+    // webhook-like (pós-venda)
     if (/(\bpaguei\b|\bpagamento\s*feito\b|\bcomprovante\b|\bfinalizei\b)/i.test(msgText)) {
       await hooks.onPaymentConfirmed({
         jid: from,
@@ -374,7 +383,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // --------- Roteamento com confinamento por flow ---------
+    // Roteamento com confinamento por flow
     const flowOnly = !!settings?.flags?.flow_only;
     const wantAudio = incomingIsAudio;
     const userIntent = intentOf(msgText);
@@ -382,7 +391,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     let used = 'unknown';
     let reply = '';
 
-    // 1) FLOW RUNNER (configs/bots/<bot>/flow/index.js -> handle())
+    // 1) Runner (handle)
     const hasFlowRunner = typeof flows?.__handle === 'function' || typeof flows?.handle === 'function';
     if (hasFlowRunner) {
       const handleFn = flows.__handle || flows.handle;
@@ -390,7 +399,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       reply = out?.reply || '';
       used = 'flow/index';
     } else {
-      // 2) FLOW UNITÁRIO via loader.__route() ou intent→map
+      // 2) Flow unitário
       let flowObj = null;
       try { if (typeof flows?.__route === 'function') flowObj = flows.__route(msgText, settings, from); } catch {}
       if (!flowObj) flowObj = flows?.[userIntent] || flows?.greet;
@@ -402,7 +411,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       }
     }
 
-    // Se o flow devolveu reply textual direta
+    // 2.5) Se o flow devolveu reply direta
     if (reply && reply.trim()) {
       const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(reply), used.startsWith('flow') ? used.replace('flow','flow') : 'flow') : prepareOutboundText(reply);
       await deliverReply({ to: from, text: stamped, wantAudio });
@@ -412,12 +421,11 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // 3) LLM Orquestrador — compatível com actions[] ou string (apenas se NÃO flow_only)
+    // 3) Orquestrador LLM (actions[]/string) — só se não flow_only
     if (!flowOnly) {
       try {
         const out = await orchestrate({ jid: from, text: msgText, stageHint: userIntent, botSettings: settings });
 
-        // a) Se for array de actions (novo orquestrador)
         if (Array.isArray(out) && out.length) {
           await sendActions(from, out);
           lastSentAt.set(from, Date.now());
@@ -425,7 +433,6 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
           await persist();
           return '';
         }
-        // b) Se for string (compat legado)
         if (out && String(out).trim()) {
           const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(out), 'llm/orchestrator') : prepareOutboundText(out);
           await deliverReply({ to: from, text: stamped, wantAudio });
@@ -434,12 +441,10 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
           await persist();
           return '';
         }
-      } catch (e) {
-        console.warn('[orchestrator] erro:', e?.message || e);
-      }
+      } catch (e) { console.warn('[orchestrator] erro:', e?.message || e); }
     }
 
-    // 4) LLM "texto solto" (freeform) — apenas se NÃO flow_only **e** se houver prompt construído
+    // 4) LLM “texto solto” — só se não flow_only
     if (!flowOnly) {
       try {
         const built = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
@@ -456,18 +461,19 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
             return '';
           }
         }
-      } catch (e) {
-        console.warn('[freeform] erro:', e?.message || e);
-      }
+      } catch (e) { console.warn('[freeform] erro:', e?.message || e); }
     }
 
-    // 5) Sem nada → fallback mínimo via hooks (apenas se NÃO flow_only e se houver texto)
+    // 5) Fallback (hooks) — só se não flow_only
     if (!flowOnly) {
       const fb = await hooks.fallbackText({ stage: 'error', message: msgText, settings });
       const textToSend = (fb && String(fb).trim()) ? prepareOutboundText(fb) : '';
       if (textToSend) {
         const stamped = settings?.flags?.debug_trace_replies ? tag(textToSend, 'hooks') : textToSend;
-        await enqueueOrDirect({ to: from, payload: { text: stamped } });
+        if (!shouldDedupeOutbound(from, stamped)) {
+          await enqueueOrDirect({ to: from, payload: { text: stamped } });
+          markOutbound(from, stamped);
+        }
         lastSentAt.set(from, Date.now());
         pushTrace({ from, text_in: msgText, source: 'hooks', preview: stamped.slice(0,120), intent: userIntent, stage: 'error', path: DIRECT_SEND ? 'direct' : 'outbox' });
         await persist();
@@ -475,20 +481,21 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       }
     }
 
-    // 6) Sem nada mesmo → silêncio (não envia “null” nem “(hooks)”)
+    // 6) Silêncio
     await persist();
     return '';
   } catch (e) {
     console.error('[onMessage]', e);
-    // Erro duro: tenta fallback apenas se NÃO flow_only e se houver texto
     try {
       if (!settings?.flags?.flow_only) {
         const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
         const txt = (fb && String(fb).trim()) ? prepareOutboundText(fb) : '';
-        if (txt) await enqueueOrDirect({ to: from, payload: { text: txt } });
+        if (txt && !shouldDedupeOutbound(from, txt)) {
+          await enqueueOrDirect({ to: from, payload: { text: txt } });
+          markOutbound(from, txt);
+        }
       }
     } catch {}
-    await persist();
     return '';
   }
 });
@@ -532,10 +539,9 @@ app.get('/wpp/health', (_req, res) => {
   });
 });
 
-// --- ROTAS QR (revisadas: no-cache + force=1) ---
+// QR
 app.get('/wpp/qr', async (req, res) => {
   try {
-    // sempre no-store: evita QR cacheado pelo browser/reverse proxy
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -566,10 +572,9 @@ app.get('/wpp/qr', async (req, res) => {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
-
 app.get('/qr', (_req, res) => res.redirect(302, '/wpp/qr?view=img'));
 
-// --- NOVO: Logout + reset de sessão (safe) ---
+// Logout seguro
 app.post('/wpp/logout', async (_req, res) => {
   try {
     const wpp = await import('./adapters/whatsapp/index.js');
@@ -586,11 +591,11 @@ app.get('/ops/mode', (req, res) => {
   if (set === 'outbox') DIRECT_SEND = false;
   res.json({ ok: true, direct_send: DIRECT_SEND, backend: outbox.backend() });
 });
-
 app.get('/ops/status', (_req, res) => {
   res.json({ ok: true, intake_enabled: intakeEnabled, send_enabled: sendEnabled, direct_send: DIRECT_SEND });
 });
 
+// Envio manual
 app.post('/wpp/send', limiter, async (req, res) => {
   try {
     const { to, text, imageUrl, caption } = req.body || {};
@@ -598,14 +603,20 @@ app.post('/wpp/send', limiter, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Informe { to, text } ou { to, imageUrl }' });
     }
     if (imageUrl) await enqueueOrDirect({ to, kind: 'image', payload: { url: imageUrl, caption: caption || '' } });
-    if (text) await enqueueOrDirect({ to, payload: { text: prepareOutboundText(text) } });
+    if (text) {
+      const clean = prepareOutboundText(text);
+      if (!shouldDedupeOutbound(to, clean)) {
+        await enqueueOrDirect({ to, payload: { text: clean } });
+        markOutbound(to, clean);
+      }
+    }
     res.json({ ok: true, enqueued: true, path: DIRECT_SEND ? 'direct' : 'outbox' });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// ===== Webhook de pagamento + promoções =====
+// Webhook pagamento + promo
 app.post('/webhook/payment', async (req, res) => {
   try {
     const headerToken = req.get('X-Webhook-Token');
@@ -619,117 +630,46 @@ app.post('/webhook/payment', async (req, res) => {
 
     if (eligible && to && order_id) {
       if (promotions && typeof promotions.enroll === 'function') {
-        promotions.enroll({
-          jid: String(to),
-          order_id: String(order_id),
-          status: normalizedStatus,
-          delivered_at: delivered_at || null,
-          extra: { buyer: buyer || null }
-        });
+        promotions.enroll({ jid: String(to), order_id: String(order_id), status: normalizedStatus, delivered_at: delivered_at || null, extra: { buyer: buyer || null } });
       }
 
       await hooks.onPaymentConfirmed({
         jid: String(to),
         settings,
-        send: async (jid, text) => enqueueOrDirect({ to: jid, payload: { text: prepareOutboundText(text) } }),
+        send: async (jid, text) => {
+          const clean = prepareOutboundText(text);
+          if (!shouldDedupeOutbound(jid, clean)) {
+            await enqueueOrDirect({ to: jid, payload: { text: clean } });
+            markOutbound(jid, clean);
+          }
+        },
       });
     }
-
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-// ===== Promo admin =====
-function requireOps(req, res, next) {
-  const token = req.get('X-Ops-Token') || (req.query?.token ?? '');
-  if (!OPS_TOKEN) return res.status(403).json({ ok: false, error: 'OPS_TOKEN unset' });
-  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok: false, error: 'unauthorized' });
-  next();
-}
-
-app.get('/ops/promo/export', requireOps, (req, res) => {
-  try {
-    const month = (req.query?.month || '').toString() || undefined;
-    if (!promotions || typeof promotions.exportMonth !== 'function') {
-      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
-    }
-    const r = promotions.exportMonth(month);
-    res.json({ ok: true, ...r });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
-});
-
-app.post('/ops/promo/draw', requireOps, (req, res) => {
-  try {
-    const month = (req.body?.month || req.query?.month || '').toString() || undefined;
-    const n = Number(req.body?.n || req.query?.n || 3);
-    if (!promotions || typeof promotions.drawWinners !== 'function') {
-      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
-    }
-    const r = promotions.drawWinners(month, n);
-    res.json({ ok: true, ...r });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
-});
-
-app.get('/ops/promo/months', requireOps, (req, res) => {
-  try {
-    if (!promotions || typeof promotions.monthsAvailable !== 'function') {
-      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
-    }
-    const months = promotions.monthsAvailable();
-    const stats = months.map(m => promotions.monthStats(m));
-    res.json({ ok: true, months, stats });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
-});
-
-app.get('/ops/promo/logs', requireOps, (req, res) => {
-  try {
-    const n = Number(req.query?.n || 200);
-    const grep = (req.query?.grep || '').toString();
-    const month = (req.query?.month || '').toString();
-    if (!promotions || typeof promotions.tailLog !== 'function') {
-      return res.status(501).json({ ok: false, error: 'promotions module not installed' });
-    }
-    const r = promotions.tailLog({ n, grep, month });
-    res.json({ ok: true, ...r });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
-});
-
-// ===== Debug/trace leve =====
+// Debug/trace leve
 app.get('/debug/last', requireOpsAuth, (req, res) => {
   const limit = Math.max(1, Math.min(500, Number(req.query?.limit || 50)));
   const from = (req.query?.from || '').toString();
-  const rows = traceBuf
-    .filter(r => !from || r.from === from)
-    .slice(-limit)
-    .reverse();
+  const rows = traceBuf.filter(r => !from || r.from === from).slice(-limit).reverse();
   res.json({ ok: true, count: rows.length, rows });
 });
-
 app.get('/debug/metrics', requireOpsAuth, (_req, res) => {
-  const counts = traceBuf.reduce((acc, r) => {
-    acc[r.source] = (acc[r.source] || 0) + 1;
-    return acc;
-  }, {});
+  const counts = traceBuf.reduce((acc, r) => { acc[r.source] = (acc[r.source] || 0) + 1; return acc; }, {});
   res.json({ ok: true, sources: counts, total: traceBuf.length });
 });
 
-// ===== Boot do WhatsApp e HTTP =====
+// Boot do WhatsApp e HTTP
 await wppInit({ onQr: () => {} });
 const server = app.listen(PORT, HOST, () => {
   console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`);
 });
 
-// ===== Shutdown limpo (SIGINT/SIGTERM) =====
+// Shutdown limpo
 async function gracefulClose(signal) {
   console.log(`[shutdown] signal=${signal}`);
   try { await stopOutboxWorkers(); } catch (e) { console.warn('[shutdown] stopOutboxWorkers:', e?.message || e); }

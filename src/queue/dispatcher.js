@@ -1,7 +1,7 @@
-// src/queue/dispatcher.js
+// src/queue/dispatcher.js — wrapper HTTP/outbox
 import express from "express";
 import { enqueueOutbox, startOutboxWorkers, queueSize } from "../core/queue/dispatcher.js";
-import { adapter as wpp } from "../adapters/whatsapp/index.js"; // <— garante que aponta pro adapter atual
+import { adapter as wpp } from "../adapters/whatsapp/index.js";
 
 const OUTBOX_TOPIC           = process.env.OUTBOX_TOPIC || "outbox:whatsapp";
 const OUTBOX_RATE_PER_SEC    = Number(process.env.OUTBOX_RATE_PER_SEC || 0.5);
@@ -44,9 +44,7 @@ export async function start() {
   });
   console.log(`[outbox] iniciado topic=${OUTBOX_TOPIC} conc=${OUTBOX_CONCURRENCY} rps=${OUTBOX_RATE_PER_SEC}`);
 }
-export async function size() {
-  return queueSize(OUTBOX_TOPIC);
-}
+export async function size() { return queueSize(OUTBOX_TOPIC); }
 
 export function mountHealthCheck(app) {
   if (!app || typeof app.get !== "function") return;

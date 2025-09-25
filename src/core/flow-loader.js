@@ -60,29 +60,23 @@ export async function loadFlows(botId) {
       const mod = await import(pathToFileURL(indexJs).href);
       if (typeof mod?.pickFlow === 'function') pickFlow = mod.pickFlow;
       if (typeof mod?.handle === 'function')   handleRunner = mod.handle;
-    } catch (e) {
-      console.warn('[flow-loader] Falha ao importar index.js:', e?.message || e);
-    }
+    } catch (e) { console.warn('[flow-loader] Falha ao importar index.js:', e?.message || e); }
   }
 
   // 2) flows unitários
   for (const [key, fname] of Object.entries(files)) {
     const full = path.join(base, fname);
     if (!fs.existsSync(full)) continue;
-
     try {
       const mod = await import(pathToFileURL(full).href);
       const def = mod?.default;
-
       if (key === 'greet')     out.greet     = mod.greet     || def;
       if (key === 'qualify')   out.qualify   = mod.qualify   || def;
       if (key === 'offer')     out.offer     = mod.offer     || def;
       if (key === 'close')     out.close     = mod.closeDeal || mod.close || def;
       if (key === 'postsale')  out.postsale  = mod.postSale  || mod.posts || mod.postsale || def;
       if (key === 'postsale' && !out.post_sale) out.post_sale = out.postsale;
-    } catch (e) {
-      console.warn(`[flow-loader] Falha ao importar ${key}.js:`, e?.message || e);
-    }
+    } catch (e) { console.warn(`[flow-loader] Falha ao importar ${key}.js:`, e?.message || e); }
   }
 
   // 3) router atual
@@ -96,9 +90,7 @@ export async function loadFlows(botId) {
   out.__route = (text) => (currentRouter ? currentRouter(text) : null);
 
   // 5) runner opcional
-  if (typeof handleRunner === 'function') {
-    out.__handle = async (ctx) => handleRunner(ctx);
-  }
+  if (typeof handleRunner === 'function') out.__handle = async (ctx) => handleRunner(ctx);
 
   console.log(`[flow-loader] Flows carregados para bot="${botId}":`, Object.keys(out).join(', '));
   return out;
