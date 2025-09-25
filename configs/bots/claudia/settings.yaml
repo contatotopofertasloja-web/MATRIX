@@ -30,13 +30,10 @@ media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 messages:
-  # Usadas pelo greet.js (variante genérica)
   opening:
     - "Oi! Eu sou a Cláudia da *{{ product.store_name }}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?"
-  # Usadas pelo greet.js quando já conhecemos o nome e/ou parte do perfil
   opening_named:
     - "Oi, {{ profile.name }}! Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?"
-  # Hints usados no FAQ (aplicações e duração)
   applications_hint: "2–4 aplicações (varia com comprimento)"
   duration_hint: "de 2 a 3 meses"
 
@@ -50,10 +47,11 @@ promotions:
 
 flags:
   has_cod: true
-  # Janela de dedupe persistente (entre invocações). Pode ajustar para 60000 (60s), 90000 (90s) etc.
-  reply_dedupe_ms: 120000   # 120s
+  reply_dedupe_ms: 120000      # 120s (dedupe persistente entre invocações)
   send_opening_photo: true
-  disable_opening_hook: true
+  disable_opening_hook: true   # hook de abertura silencioso
+  disable_hooks_fallback: true # desliga fallback textual dos hooks (sem “(hooks)”)
+  flow_only: true              # conversa confinada aos flows
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
@@ -64,7 +62,6 @@ flags:
   fallbackToGlobal: true
   debug_log_router: false
 
-# Modelos por estágio (opcional; o core usa se flags.useModelsByStage=true)
 models_by_stage:
   recepcao: "gpt-5-nano"
   qualificacao: "gpt-5-nano"
@@ -78,7 +75,6 @@ typing:
   min_ms: 800
   max_ms: 5000
 
-# Guardrails: libera explicitamente os links do settings (checkout + site)
 guardrails:
   allowed_links:
     - "{{ product.checkout_link }}"

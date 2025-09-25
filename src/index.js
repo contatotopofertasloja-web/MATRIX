@@ -405,7 +405,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       return '';
     }
 
-    // 3) LLM Orquestrador — AGORA compatível com actions[] ou string
+    // 3) LLM Orquestrador — compatível com actions[] ou string (apenas se NÃO flow_only)
     if (!flowOnly) {
       try {
         const out = await orchestrate({ jid: from, text: msgText, stageHint: userIntent, botSettings: settings });
@@ -432,30 +432,55 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       }
     }
 
-    // 4) Fallback final LLM "texto solto" (apenas se NÃO flow_only)
+    // 4) LLM "texto solto" (freeform) — apenas se NÃO flow_only **e** se houver prompt construído
     if (!flowOnly) {
-      const { system, user } = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
-      const { text: fb } = await callLLM({ stage: 'qualify', system, prompt: user });
-      const stamped = settings?.flags?.debug_trace_replies ? tag(fb || 'Posso te explicar rapidamente como funciona e o valor?', 'llm/freeform') : (fb || 'Posso te explicar rapidamente como funciona e o valor?');
-      await deliverReply({ to: from, text: stamped, wantAudio });
-      lastSentAt.set(from, Date.now());
-      pushTrace({ from, text_in: msgText, source: 'llm/freeform', preview: stamped.slice(0,120), intent: userIntent, stage: 'qualificacao', path: DIRECT_SEND ? 'direct' : 'outbox' });
-      await persist();
-      return '';
+      try {
+        const built = await hooks.safeBuildPrompt({ stage: 'qualify', message: msgText, settings });
+        if (built && (built.system || built.user)) {
+          const { text: fb } = await callLLM({ stage: 'qualify', system: built.system, prompt: built.user });
+          if (fb && String(fb).trim()) {
+            const stamped = settings?.flags?.debug_trace_replies
+              ? tag(prepareOutboundText(fb), 'llm/freeform')
+              : prepareOutboundText(fb);
+            await deliverReply({ to: from, text: stamped, wantAudio });
+            lastSentAt.set(from, Date.now());
+            pushTrace({ from, text_in: msgText, source: 'llm/freeform', preview: stamped.slice(0,120), intent: userIntent, stage: 'qualificacao', path: DIRECT_SEND ? 'direct' : 'outbox' });
+            await persist();
+            return '';
+          }
+        }
+      } catch (e) {
+        console.warn('[freeform] erro:', e?.message || e);
+      }
     }
 
-    // 5) Sem nada → fallback mínimo
-    const fb = await hooks.fallbackText({ stage: 'error', message: msgText, settings });
-    const stamped = settings?.flags?.debug_trace_replies ? tag(prepareOutboundText(fb), 'hooks') : prepareOutboundText(fb);
-    await enqueueOrDirect({ to: from, payload: { text: stamped } });
-    lastSentAt.set(from, Date.now());
-    pushTrace({ from, text_in: msgText, source: 'hooks', preview: stamped.slice(0,120), intent: userIntent, stage: 'error', path: DIRECT_SEND ? 'direct' : 'outbox' });
+    // 5) Sem nada → fallback mínimo via hooks (apenas se NÃO flow_only e se houver texto)
+    if (!flowOnly) {
+      const fb = await hooks.fallbackText({ stage: 'error', message: msgText, settings });
+      const textToSend = (fb && String(fb).trim()) ? prepareOutboundText(fb) : '';
+      if (textToSend) {
+        const stamped = settings?.flags?.debug_trace_replies ? tag(textToSend, 'hooks') : textToSend;
+        await enqueueOrDirect({ to: from, payload: { text: stamped } });
+        lastSentAt.set(from, Date.now());
+        pushTrace({ from, text_in: msgText, source: 'hooks', preview: stamped.slice(0,120), intent: userIntent, stage: 'error', path: DIRECT_SEND ? 'direct' : 'outbox' });
+        await persist();
+        return '';
+      }
+    }
+
+    // 6) Sem nada mesmo → silêncio (não envia “null” nem “(hooks)”)
     await persist();
     return '';
   } catch (e) {
     console.error('[onMessage]', e);
-    const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
-    await enqueueOrDirect({ to: from, payload: { text: prepareOutboundText(fb) } });
+    // Erro duro: tenta fallback apenas se NÃO flow_only e se houver texto
+    try {
+      if (!settings?.flags?.flow_only) {
+        const fb = await hooks.fallbackText({ stage: 'error', message: text || '', settings });
+        const txt = (fb && String(fb).trim()) ? prepareOutboundText(fb) : '';
+        if (txt) await enqueueOrDirect({ to: from, payload: { text: txt } });
+      }
+    } catch {}
     await persist();
     return '';
   }
