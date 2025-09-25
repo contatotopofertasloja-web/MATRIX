@@ -1,10 +1,10 @@
 // src/core/llm.js
-// Seletor de modelo por estágio + tradução GPT-5→GPT-4o (compat transição)
+// Seletor de modelo por estágio com compat GPT-5 ⇄ GPT-4o, neutro ao produto/persona.
 
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
-// Aliases
+// ---------- Stage aliases (pt/en) para chave canônica ----------
 const STAGE_KEYS = {
   recepcao:     ["recepcao","recepção","greet","saudacao","saudação","start","hello"],
   qualificacao: ["qualificacao","qualificação","qualify"],
@@ -13,13 +13,16 @@ const STAGE_KEYS = {
   fechamento:   ["fechamento","close","checkout","closing"],
   posvenda:     ["posvenda","pósvenda","postsale","pos_venda","pós_venda"],
 };
+
 function resolveStageKey(stage) {
   const t = String(stage || "").toLowerCase().trim();
-  for (const canonical in STAGE_KEYS) if (STAGE_KEYS[canonical].some(k => t.includes(k))) return canonical;
+  for (const canonical in STAGE_KEYS) {
+    if (STAGE_KEYS[canonical].some(k => t.includes(k))) return canonical;
+  }
   return "recepcao";
 }
 
-// Defaults
+// ---------- Defaults & ENV ----------
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
@@ -27,6 +30,7 @@ const ENV_DEFAULTS = {
             : 0.5,
   retries:     Number.isFinite(+process.env.LLM_RETRIES) ? +process.env.LLM_RETRIES
             : (Number.isFinite(+settings?.llm?.retries) ? +settings.llm.retries : 2),
+  timeoutMs:   Number.isFinite(+process.env.LLM_TIMEOUT_MS) ? +process.env.LLM_TIMEOUT_MS : 25000,
   maxTokens: {
     nano: Number.isFinite(+settings?.llm?.maxTokens?.nano) ? +settings.llm.maxTokens.nano
         : Number.isFinite(+process.env.LLM_MAX_TOKENS_NANO) ? +process.env.LLM_MAX_TOKENS_NANO
@@ -39,6 +43,7 @@ const ENV_DEFAULTS = {
         : 2048,
   },
 };
+
 const ENV_STAGE_VARS = {
   recepcao: "LLM_MODEL_RECEPCAO",
   qualificacao: "LLM_MODEL_QUALIFICACAO",
@@ -48,8 +53,8 @@ const ENV_STAGE_VARS = {
   posvenda: "LLM_MODEL_POSVENDA",
 };
 
-// Tradução GPT-5→GPT-4o
-function translateModel(name) {
+// ---------- Tradução automática GPT-5 → compat atual (4o) ----------
+export function translateModel(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return n;
   if (n === "gpt-5" || n === "gpt-5-full" || n === "gpt-5-pro") return "gpt-4o";
@@ -58,24 +63,28 @@ function translateModel(name) {
   return name;
 }
 
-// Seleção
+// ---------- Seleção de modelo por estágio ----------
 export function pickModelForStage(stageRaw) {
   const stage = resolveStageKey(stageRaw);
 
+  // 1) YAML específico por bot
   const fromYaml = settings?.models_by_stage?.[stage];
   if (settings?.flags?.useModelsByStage && fromYaml) return fromYaml;
 
+  // 2) ENV global (Railway)
   const envKey = ENV_STAGE_VARS[stage];
   const fromEnv = envKey ? process.env[envKey] : undefined;
   if (settings?.flags?.fallbackToGlobal && fromEnv) return fromEnv;
 
+  // 3) YAML global_models
   const fromGlobalYaml = settings?.global_models?.[stage];
   if (settings?.flags?.fallbackToGlobal && fromGlobalYaml) return fromGlobalYaml;
 
+  // 4) Fallback
   return "gpt-5-nano";
 }
 
-// Tokens
+// ---------- Heurística de max_tokens ----------
 function defaultMaxTokensForModel(modelName = "") {
   const m = String(modelName).toLowerCase();
   if (m.includes("nano")) return ENV_DEFAULTS.maxTokens.nano;
@@ -83,41 +92,60 @@ function defaultMaxTokensForModel(modelName = "") {
   return ENV_DEFAULTS.maxTokens.full;
 }
 
-// Cliente
+// ---------- Cliente OpenAI (lazy) ----------
 let openai = null;
 function getOpenAI() {
-  if (!openai) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  if (!openai) {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
   return openai;
 }
 
-// Call
+// ---------- callLLM com retries e backoff ----------
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
+  if ((ENV_DEFAULTS.provider || "openai") !== "openai") {
+    throw new Error(`Provider "${ENV_DEFAULTS.provider}" não suportado neste módulo.`);
+  }
+
   const rawModel = model || pickModelForStage(stage);
   const chosenModel = translateModel(rawModel);
-
   const temp = typeof temperature === "number" ? temperature : ENV_DEFAULTS.temperature;
   const mt   = Number.isFinite(+maxTokens) ? +maxTokens : defaultMaxTokensForModel(chosenModel);
 
   const client = getOpenAI();
   let lastErr;
+
   for (let attempt = 0; attempt <= ENV_DEFAULTS.retries; attempt++) {
     try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), ENV_DEFAULTS.timeoutMs);
+
       const res = await client.chat.completions.create({
         model: chosenModel,
         temperature: temp,
         max_tokens: mt,
         messages: [
           ...(system ? [{ role: "system", content: system }] : []),
-          { role: "user", content: prompt || "" },
+          { role: "user", content: String(prompt || "") },
         ],
+        signal: controller.signal,
       });
+
+      clearTimeout(t);
+
       const text = res?.choices?.[0]?.message?.content?.trim() || "";
       return { model: chosenModel, text };
     } catch (e) {
       lastErr = e;
+      // pequeno backoff exponencial
       const backoff = Math.min(1000 * (2 ** attempt), 4000);
       await new Promise(r => setTimeout(r, backoff));
     }
   }
+  // Log controlado (deixa o caller decidir fallback)
+  // eslint-disable-next-line no-console
+  console.error("[LLM][error]", lastErr?.status || "", lastErr?.message || lastErr);
   throw lastErr;
 }
+
+export default { callLLM, pickModelForStage, translateModel };
