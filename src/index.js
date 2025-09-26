@@ -1,16 +1,26 @@
-﻿// src/index.js — Matrix IA 2.0 (versão compacta + blindagens)
-// - Gating de hooks
+﻿// src/index.js — Matrix IA 2.0 (compacto + blindagens + multi-serviço)
+// - Gating de hooks (core neutro; cada bot pluga só sua pasta)
 // - Runner resiliente de flows (__handle/handle | obj.run | default function)
 // - Sanitização de links com whitelist (settings.guardrails.allowed_links)
-// - Anti-rajada de saída
-// - Orchestrator opcional
+// - Anti-rajada de saída (reply_dedupe_ms)
+// - Outbox (Redis) com fallback para envio direto
+// - Orchestrator opcional (core neutro)
+// - WhatsApp QR/health/ops (forçar novo QR, logout+reset sessão)
 
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 
-import { init as wppInit, adapter, isReady as wppReady, getQrDataURL } from "./adapters/whatsapp/index.js";
+import {
+  init as wppInit,
+  adapter,
+  isReady as wppReady,
+  getQrDataURL,
+  forceNewQr,
+  logoutAndReset,
+} from "./adapters/whatsapp/index.js";
+
 import { createOutbox } from "./core/queue.js";
 import { stopOutboxWorkers } from "./core/queue/dispatcher.js";
 
@@ -66,9 +76,9 @@ let DIRECT_SEND   = envB(process.env.DIRECT_SEND, true);
 const GAP_PER_TO  = envN(process.env.QUEUE_OUTBOX_MIN_GAP_MS, 2500);
 
 // ========= Outbox (Redis) =========
-const REDIS_URL   = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || "";
+const REDIS_URL    = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || "";
 const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || "default"}`;
-const OUTBOX_CONC = envN(process.env.QUEUE_OUTBOX_CONCURRENCY, 1);
+const OUTBOX_CONC  = envN(process.env.QUEUE_OUTBOX_CONCURRENCY, 1);
 
 const outbox = await createOutbox({ topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONC, redisUrl: REDIS_URL });
 await outbox.start(async (job) => {
@@ -194,22 +204,19 @@ async function tryTTS(text) {
 
 // ========= Flow runner (resiliente) =========
 function pickHandle(flowsMod) {
-  // 1) handle direto
   if (typeof flowsMod?.__handle === "function") return flowsMod.__handle;
   if (typeof flowsMod?.handle   === "function") return flowsMod.handle;
   if (typeof flowsMod?.default?.handle === "function") return flowsMod.default.handle;
   return null;
 }
 function pickUnit(flowsMod, intent) {
-  // 2) objeto por intent (greet/qualify/offer/close/...)
   return flowsMod?.[intent] || flowsMod?.greet || flowsMod?.default || null;
 }
 async function runFlows({ from, text, state }) {
-  const wantAudio = false; // trocara para true se quiser TTS nesta camada
+  const wantAudio = false;
   let used = "none";
   let reply = "";
 
-  // (A) handler global
   const handle = pickHandle(flows);
   if (handle) {
     try {
@@ -225,11 +232,9 @@ async function runFlows({ from, text, state }) {
     }
   }
 
-  // (B) unidade: aceita objeto com .run OU função default direta
   const intent = intentOf(text);
   let unit = pickUnit(flows, intent);
 
-  // objeto com run
   if (unit && typeof unit.run === "function") {
     try {
       await unit.run({
@@ -243,7 +248,6 @@ async function runFlows({ from, text, state }) {
     }
   }
 
-  // função default (export default function(ctx){...})
   if (typeof unit === "function") {
     try {
       const out = await unit({
@@ -266,7 +270,7 @@ async function deliver({ to, text, wantAudio=false }) {
   const clean = prepText(text);
   if (!clean) return;
   if (shouldDedupeOut(to, clean)) return;
-  // áudio opcional
+
   const audio = await tryTTS(clean);
   if (audio?.buffer) {
     await enqueueOrDirect({ to, kind: "audio", payload: { buffer: audio.buffer, mime: audio.mime || "audio/ogg", fallbackText: clean } });
@@ -283,7 +287,6 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   const persist = async ()=> { try { await saveSession(BOT_ID, from, state); } catch {} };
 
   try {
-    // idempotência por message.id
     const id = (()=>{ try { return raw?.key?.id || ""; } catch { return ""; } })();
     if (id) {
       if (processedIds.has(id)) return "";
@@ -325,7 +328,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await persist(); return "";
     }
 
-    // 2) ORCHESTRATOR (se não confinado)
+    // 2) ORCHESTRATOR
     const flowOnly = !!settings?.flags?.flow_only;
     if (!flowOnly) {
       try {
@@ -365,9 +368,8 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       }
     }
 
-    // 4) Nudge curto (evita silêncio) ——— PATCH 🔧
+    // 4) Nudge curto (evita silêncio)
     {
-      // usa opening_named SOMENTE se já houver nome; renderiza placeholders antes de enviar
       const haveName = !!(state?.profile?.name);
       const ctx = { profile: state?.profile || {}, product: settings?.product || {} };
       const tpl = haveName
@@ -395,8 +397,24 @@ function requireOps(req,res,next){
   next();
 }
 
-app.get("/health", (_req,res)=> res.json({ ok:true, ready:wppReady(), bot:BOT_ID, env:process.env.NODE_ENV||"production",
-  ops:{ intake:INTAKE_ON, send:SEND_ON, direct:DIRECT_SEND } }));
+app.get("/health", (_req,res)=> res.json({
+  ok:true,
+  ready:wppReady(),
+  bot:BOT_ID,
+  adapter:"baileys",
+  env:process.env.NODE_ENV||"production",
+  outbox:{ topic: OUTBOX_TOPIC, backend: outbox.backend(), connected: outbox.isConnected() },
+  ops:{ intake:INTAKE_ON, send:SEND_ON, direct:DIRECT_SEND }
+}));
+
+app.get("/wpp/health", (_req,res)=> res.json({
+  ok:true,
+  ready:wppReady(),
+  session: process.env.WPP_SESSION || "default",
+  auth_dir: process.env.WPP_AUTH_DIR || "/app/baileys-auth-v2",
+  device: process.env.WPP_DEVICE || "Matrix",
+  topic: OUTBOX_TOPIC
+}));
 
 app.get("/wpp/qr", async (req,res)=>{
   try{
@@ -405,7 +423,7 @@ app.get("/wpp/qr", async (req,res)=>{
     const view = String(req.query.view||"");
     if (view === "img") {
       res.setHeader("Content-Type","text/html; charset=utf-8");
-      return res.send(`<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff"><img src="${dataURL}" width="320" height="320"/></body></html>`);
+      return res.send(`<!doctype html><html><body style="margin:0;display:grid;place-items:center;height:100vh;background:#0b0b12;color:#fff;font-family:system-ui"><img src="${dataURL}" width="320" height="320"/><p style="opacity:.7">Atualize para QR novo se expirar.</p></body></html>`);
     }
     if (view === "png") {
       const b64 = dataURL.split(",")[1]; const buf = Buffer.from(b64,"base64");
@@ -416,7 +434,22 @@ app.get("/wpp/qr", async (req,res)=>{
 });
 app.get("/qr", (_req,res)=> res.redirect(302, "/wpp/qr?view=img"));
 
-app.get("/ops/mode", (req,res)=> { const set = String(req.query.set||"").toLowerCase(); if (set==="direct") DIRECT_SEND=true; if (set==="outbox") DIRECT_SEND=false; res.json({ ok:true, direct:DIRECT_SEND, backend: outbox.backend() }); });
+// === OPs utilitários (multi-serviço) ===
+app.post("/_ops/force-qr", requireOps, async (_req,res)=>{
+  try { const forced = await forceNewQr(); res.json({ ok:true, forced }); }
+  catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); }
+});
+app.post("/_ops/logout-reset", requireOps, async (_req,res)=>{
+  try { await logoutAndReset(); res.json({ ok:true }); }
+  catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); }
+});
+
+app.get("/ops/mode", (req,res)=> {
+  const set = String(req.query.set||"").toLowerCase();
+  if (set==="direct") DIRECT_SEND=true;
+  if (set==="outbox") DIRECT_SEND=false;
+  res.json({ ok:true, direct:DIRECT_SEND, backend: outbox.backend() });
+});
 app.get("/ops/status", (_req,res)=> res.json({ ok:true, intake:INTAKE_ON, send:SEND_ON, direct:DIRECT_SEND }));
 
 app.post("/wpp/send", limiter, async (req,res)=>{

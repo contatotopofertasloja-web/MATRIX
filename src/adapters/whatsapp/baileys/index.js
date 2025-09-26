@@ -16,7 +16,7 @@ function pick(fn) { return B?.[fn] || B?.default?.[fn] || null; }
 function pickMakeWASocket() {
   return pick("makeWASocket") ||
          (typeof B?.default === "function" ? B.default : null) ||
-         (typeof B === "function" ? B : null);
+         (typeof B === "function" ? B : null)
 }
 const makeWASocket               = pickMakeWASocket();
 const useMultiFileAuthState      = pick("useMultiFileAuthState");
