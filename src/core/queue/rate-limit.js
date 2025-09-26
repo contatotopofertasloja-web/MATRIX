@@ -22,5 +22,9 @@ export async function allowSend({ topic, ratePerSec = 0.5 }) {
   const secLived = TTL_SEC - (ttl < 0 ? 0 : ttl);
   const allowed = Math.floor(Math.min(capacity, secLived * refillPerSec + 1));
 
-  return used <= allowed;
+  const ok = used <= allowed;
+  if (!ok) {
+    console.warn(`[rate-limit/redis] BLOCK topic=${topic} used=${used} allowed=${allowed}`);
+  }
+  return ok;
 }

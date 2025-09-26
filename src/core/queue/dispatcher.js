@@ -21,18 +21,21 @@ export async function enqueueOutbox({ topic, to, content, meta = {} }) {
   if (!ctrl?.publish) throw new Error('enqueueOutbox: outbox não inicializado');
   if (!to) throw new Error('enqueueOutbox: "to" obrigatório');
   const { kind, payload } = normalizeContent(content);
+  console.log(`[outbox/enqueue] topic=${topic} to=${to} kind=${kind} preview=${String(payload?.text||payload?.caption||"").slice(0,50)}`);
   await ctrl.publish({ to, kind, payload, meta: { ...(meta || {}) } });
 }
 
 export async function startOutboxWorkers(handler) {
   const ctrl = _getGlobalOutboxController();
   if (!ctrl?.start) throw new Error('startOutboxWorkers: outbox não inicializado');
+  console.log("[outbox] iniciando workers…");
   await ctrl.start(handler);
 }
 
 export async function stopOutboxWorkers() {
   const ctrl = _getGlobalOutboxController();
   if (!ctrl?.stop) return;
+  console.log("[outbox] parando workers…");
   await ctrl.stop();
 }
 

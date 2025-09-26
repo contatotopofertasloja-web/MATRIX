@@ -3,9 +3,10 @@
 // ⚠️ A foto de abertura é enviada pelo flow/index.js (ensureOpeningPhotoOnce).
 
 import {
-  remember, recall, ensureProfile, tagReply, normalizeSettings,
+  ensureProfile, tagReply, normalizeSettings,
   callUser, filledSummary
 } from "./_state.js";
+import { remember, recall } from "../../../../src/core/memory.js";
 
 function guessName(t = "") {
   const s = String(t || "").trim();
@@ -25,12 +26,20 @@ export default async function greet(ctx = {}) {
   const maybe = guessName(text);
   if (maybe) {
     state.profile.name = maybe;
-    try { await remember(jid, { profile: state.profile }); } catch {}
+    try {
+      await remember(jid, { profile: state.profile });
+    } catch (e) {
+      console.warn("[greet.remember]", e?.message);
+    }
   } else {
     try {
       const saved = await recall(jid);
-      if (saved?.profile?.name && !state.profile.name) state.profile.name = saved.profile.name;
-    } catch {}
+      if (saved?.profile?.name && !state.profile.name) {
+        state.profile.name = saved.profile.name;
+      }
+    } catch (e) {
+      console.warn("[greet.recall]", e?.message);
+    }
   }
 
   const name = callUser(state);

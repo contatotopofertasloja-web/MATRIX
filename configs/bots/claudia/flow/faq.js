@@ -1,5 +1,8 @@
 // configs/bots/claudia/flow/faq.js
+// Perguntas frequentes (FAQ) integradas à memória unificada
+
 import { callUser, tagReply, normalizeSettings } from "./_state.js";
+import { recall } from "../../../../src/core/memory.js";
 
 function norm(s = "") { return String(s || "").toLowerCase(); }
 
@@ -21,11 +24,23 @@ export function match(text = "", _settings = {}) {
 }
 
 export default async function faq(ctx) {
-  const { text = "", settings, state } = ctx;
+  const { jid, text = "", settings, state = {} } = ctx;
   state.turns = (state.turns || 0) + 1;
 
   const S = normalizeSettings(settings);
   const t = norm(text);
+
+  // recupera nome da memória unificada
+  try {
+    const saved = await recall(jid);
+    if (saved?.profile) {
+      state.profile = { ...(state.profile || {}), ...saved.profile };
+    }
+  } catch (e) {
+    console.warn("[faq.recall]", e?.message);
+  }
+
+  const name = callUser(state);
 
   // Entrega / SP
   if (/entrega(s)?|frete|prazo|s[ãa]o paulo|sp\b/.test(t)) {
@@ -34,7 +49,7 @@ export default async function faq(ctx) {
     return { reply: tagReply(S, msg, "flow/faq"), next: "oferta" };
   }
 
-  // Pagamentos (PIX, cartão, COD)
+  // Pagamentos
   if (/pix|cart[aã]o|boleto|pagamento|na entrega/.test(t)) {
     const msg = `Temos **COD** (paga quando recebe). No site, rola **PIX** e **cartão** também. Quer que eu te envie o **link**?`;
     return { reply: tagReply(S, msg, "flow/faq"), next: "fechamento" };
@@ -47,11 +62,11 @@ export default async function faq(ctx) {
   }
   if (/empresa|voc[eê]s s[aã]o quem|nome da empresa/.test(t)) {
     const empresa = S.product.store_name || "TopOfertas";
-    return { reply: tagReply(S, `Somos a **${empresa}** 🧡. Posso te ajudar a decidir se combina com teu cabelo?`, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, `Somos a **${empresa}** 🧡. Posso te ajudar a decidir se combina com teu cabelo, ${name || "amiga"}?`, "flow/faq"), next: "oferta" };
   }
   if (/hor[aá]rio|atendem|funciona at[eé] quando|que horas voc[eê]s abrem|fecha/.test(t)) {
     const hours = S.product.opening_hours || "06:00–21:00";
-    return { reply: tagReply(S, `Atendemos **${hours} (BRT)**, ${callUser(state)}. Quer aproveitar e tirar uma dúvida agora?`, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, `Atendemos **${hours} (BRT)**, ${name || "querida"}. Quer aproveitar e tirar uma dúvida agora?`, "flow/faq"), next: "oferta" };
   }
 
   // Promo / garantia / uso & rendimento / volume
@@ -83,9 +98,9 @@ export default async function faq(ctx) {
 
   // Áudio
   if (/audio|áudio|mandar\s*voz/.test(t)) {
-    return { reply: tagReply(S, `Se preferir, te mando um **áudio** com o resumo rapidinho. Quer?`, "flow/faq"), next: "oferta" };
+    return { reply: tagReply(S, `Se preferir, te mando um **áudio** com o resumo rapidinho. Quer, ${name || "amiga"}?`, "flow/faq"), next: "oferta" };
   }
 
   // fallback
-  return { reply: tagReply(S, `Posso te ajudar com as principais dúvidas (uso, prazo, garantia, parcelamento). O que você prefere saber primeiro?`, "flow/faq"), next: "oferta" };
+  return { reply: tagReply(S, `Posso te ajudar com as principais dúvidas (uso, prazo, garantia, parcelamento). O que você prefere saber primeiro, ${name || "querida"}?`, "flow/faq"), next: "oferta" };
 }

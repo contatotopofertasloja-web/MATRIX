@@ -110,7 +110,18 @@ export function buildPrompt({ stage, message }) {
     `Responda conforme as regras acima. Termine com: "${carimbo}".`,
   ].join('\n');
 
-  return { system: sys, user: finalUser };
+  console.log(`[prompts] buildPrompt stage=${stageKey} msgPreview=${user.slice(0,40)}`);
+
+  return { system: sys, user: finalUser, postprocess: (txt) => postprocessReply(txt, stageKey) };
 }
 
-export default { buildPrompt };
+export function postprocessReply(text = "", stage = "recepcao") {
+  const tag = suffixTag(stage);
+  let out = String(text || "").trim();
+  if (!out.endsWith(tag)) {
+    out = `${out} ${tag}`;
+  }
+  return out;
+}
+
+export default { buildPrompt, postprocessReply };

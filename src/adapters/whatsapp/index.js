@@ -1,6 +1,6 @@
 ﻿// src/adapters/whatsapp/index.js
 // Ponte do WhatsApp: expõe init/isReady/QR e repassa a API do Baileys adapter.
-// Mantém compat com o que já integramos no index do app.
+// + logs de init/disconnect para debug
 
 import * as baileys from './baileys/index.js';
 
@@ -9,39 +9,44 @@ let _lastQrDataURL = null;
 
 export async function init(opts = {}) {
   const { onQr } = opts || {};
+  console.log("[wpp/init] iniciando adapter");
   await baileys.init({
-    onReady: () => { _ready = true; _lastQrDataURL = null; },
+    onReady: () => {
+      _ready = true; _lastQrDataURL = null;
+      console.log("[wpp/init] pronto e pareado");
+    },
     onQr: async (dataURL) => {
       _lastQrDataURL = dataURL || null;
+      console.log("[wpp/init] QR atualizado");
       if (typeof onQr === 'function') onQr(_lastQrDataURL);
     },
-    onDisconnect: () => { _ready = false; },
+    onDisconnect: (reason) => {
+      _ready = false;
+      console.warn("[wpp/init] desconectado:", reason);
+    },
   });
 }
 
 export function isReady() { return _ready; }
 
 export async function getQrDataURL() {
-  if (_ready) return null;                  // já pareado
+  if (_ready) return null;
   return _lastQrDataURL || await baileys.getQrDataURL();
 }
 
-// Força um novo QR quando app ainda não está pareado
 export async function forceNewQr() {
   _lastQrDataURL = null;
-  const ok = await baileys.forceRefreshQr();
-  return ok;
+  console.log("[wpp/init] forçando novo QR");
+  return await baileys.forceRefreshQr();
 }
 
-// Logout + reset total de sessão (para sessão corrompida)
 export async function logoutAndReset() {
-  _ready = false;
-  _lastQrDataURL = null;
+  _ready = false; _lastQrDataURL = null;
+  console.warn("[wpp/init] logout + reset solicitado");
   await baileys.logoutAndReset();
   return true;
 }
 
-// Espelha a API do adapter
 export const adapter = {
   onMessage: baileys.adapter.onMessage,
   sendMessage: baileys.adapter.sendMessage,

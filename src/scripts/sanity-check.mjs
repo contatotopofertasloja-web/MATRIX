@@ -1,86 +1,45 @@
-// scripts/sanity-check.mjs
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-import yaml from "yaml";
+// Sanity check do NLU — roda classificações rápidas em frases comuns.
+// Uso: NLU_DEBUG=1 node src/scripts/sanity-check.mjs
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { classify, suggestNextStage } from "../core/nlu.js";
 
-// Caminho do settings.yaml da Cláudia
-const SETTINGS_PATH = path.resolve(
-  __dirname,
-  "../configs/bots/claudia/settings.yaml"
-);
+// (Opcional) carrega .env se você usa
+try { await import("dotenv/config"); } catch {}
 
-function fail(msg) {
-  console.error("✖", msg);
-  process.exitCode = 1;
+const SAMPLES = [
+  // saudações
+  "oi", "boa tarde", "olá claudia",
+
+  // preço / oferta
+  "quanto custa?", "tem promoção?", "qual o valor?",
+
+  // link / fechar
+  "me manda o link", "quero comprar", "finalizar pedido",
+
+  // FAQ (seu faq.yaml ajuda aqui também)
+  "tem parcelamento?", "qual o nome da empresa?", "até que horas atendem?", "quando chega?",
+
+  // objeções e dúvidas
+  "tá caro", "tenho alergia", "isso funciona mesmo?",
+
+  // uso / volume
+  "como aplica?", "quantas vezes rende?", "tem quantos ml?",
+
+  // pós-venda / encerramento
+  "obrigada", "valeu", "tchau"
+];
+
+function pad(str, len=18) {
+  const s = String(str);
+  return s.length >= len ? s.slice(0, len-1) + "…" : s.padEnd(len, " ");
 }
-function ok(msg) {
-  console.log("✔", msg);
+
+console.log("\n=== NLU Sanity Check ===\n");
+for (const phrase of SAMPLES) {
+  const res = await classify(phrase);
+  const next = suggestNextStage(res.intent);
+  console.log(
+    `> ${pad(phrase, 28)} | intent=${pad(res.intent, 16)} score=${(res.score||0).toFixed(2)} next=${next}`
+  );
 }
-function ensure(cond, msg) {
-  if (!cond) fail(msg);
-  else ok(msg);
-}
-function isNonEmptyString(s) {
-  return typeof s === "string" && s.trim().length > 0;
-}
-
-function loadYaml(p) {
-  const raw = fs.readFileSync(p, "utf8");
-  return yaml.parse(raw);
-}
-
-(function main() {
-  console.log("== Sanity Check :: settings.yaml ==");
-
-  ensure(fs.existsSync(SETTINGS_PATH), `Arquivo encontrado: ${SETTINGS_PATH}`);
-  const settings = loadYaml(SETTINGS_PATH);
-
-  // Bot info
-  ensure(isNonEmptyString(settings?.bot_id), "bot_id definido");
-  ensure(isNonEmptyString(settings?.persona_name), "persona_name definido");
-  ensure(isNonEmptyString(settings?.language), "language definido");
-
-  // Produto
-  ensure(isNonEmptyString(settings?.product?.name), "product.name definido");
-  ensure(Number.isFinite(+settings?.product?.price_original), "price_original numérico");
-  ensure(Number.isFinite(+settings?.product?.price_target), "price_target numérico");
-
-  // Links principais
-  ensure(isNonEmptyString(settings?.product?.checkout_link), "checkout_link definido");
-  ensure(isNonEmptyString(settings?.product?.site_url), "site_url definido");
-
-  // Guardrails
-  const min = Number(settings?.guardrails?.price_min);
-  const max = Number(settings?.guardrails?.price_max);
-  const target = Number(settings?.product?.price_target);
-  ensure(Number.isFinite(min) && Number.isFinite(max) && min < max, "price_min < price_max");
-  ensure(target >= min && target <= max, "price_target dentro do range");
-
-  // Allowed links
-  const allowed = settings?.guardrails?.allowed_links || [];
-  ensure(Array.isArray(allowed) && allowed.length > 0, "allowed_links não vazio");
-  ["{{checkout_link}}", "{{site_url}}"].forEach(ph => {
-    ensure(allowed.some(x => String(x).includes(ph)), `allowed_links contém ${ph}`);
-  });
-
-  // Models by stage
-  const mbs = settings?.models_by_stage || {};
-  ["recepcao","qualificacao","oferta","objeções","fechamento","posvenda"].forEach(st => {
-    ensure(isNonEmptyString(mbs[st]), `models_by_stage.${st} definido`);
-  });
-
-  // Flags
-  ensure(!!settings?.flags?.useModelsByStage, "flags.useModelsByStage = true");
-  ensure(!!settings?.flags?.fallbackToGlobal, "flags.fallbackToGlobal = true");
-
-  // Mensagens
-  ensure(Array.isArray(settings?.messages?.opening), "messages.opening array ok");
-  ensure(Array.isArray(settings?.messages?.offer_templates), "messages.offer_templates array ok");
-  ensure(Array.isArray(settings?.messages?.closing), "messages.closing array ok");
-
-  console.log("\n✅ Sanity check finalizado.");
-})();
+console.log("\nDica: defina NLU_DEBUG=1 para ver no console se o acerto veio de regex interna ou de gatilhos do faq.yaml.\n");

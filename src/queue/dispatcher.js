@@ -13,15 +13,22 @@ const OUTBOX_RETRY_DELAY_MS  = Number(process.env.OUTBOX_RETRY_DELAY_MS || 1000)
 const OUTBOX_DLQ_ENABLED     = String(process.env.OUTBOX_DLQ_ENABLED || "true").toLowerCase() === "true";
 
 async function sendFn(jid, content) {
-  if (content && typeof content === "object" && content.imageUrl) {
-    const { imageUrl, caption = "", allowLink = false, allowPrice = false } = content;
-    await wpp.sendImage(jid, imageUrl, caption, { allowLink, allowPrice });
-    return;
+  try {
+    if (content && typeof content === "object" && content.imageUrl) {
+      const { imageUrl, caption = "", allowLink = false, allowPrice = false } = content;
+      console.log(`[outbox/send] image to=${jid} caption=${caption.slice(0,40)}`);
+      await wpp.sendImage(jid, imageUrl, caption, { allowLink, allowPrice });
+      return;
+    }
+    const text = typeof content === "string" ? content : String(content?.text ?? "");
+    const allowLink  = !!content?.allowLink;
+    const allowPrice = !!content?.allowPrice;
+    console.log(`[outbox/send] text to=${jid} preview=${text.slice(0,60)}`);
+    await wpp.sendMessage(jid, { text, allowLink, allowPrice });
+  } catch (e) {
+    console.warn("[outbox/send] erro:", e?.message || e);
+    throw e;
   }
-  const text = typeof content === "string" ? content : String(content?.text ?? "");
-  const allowLink  = !!content?.allowLink;
-  const allowPrice = !!content?.allowPrice;
-  await wpp.sendMessage(jid, { text, allowLink, allowPrice });
 }
 
 export async function enqueueText(to, text, meta = {}) {
@@ -30,6 +37,7 @@ export async function enqueueText(to, text, meta = {}) {
 export async function enqueuePayload(to, payload, meta = {}) {
   return enqueueOutbox({ topic: OUTBOX_TOPIC, to, content: payload, meta });
 }
+
 export async function start() {
   await startOutboxWorkers({
     topic: OUTBOX_TOPIC,
@@ -44,6 +52,7 @@ export async function start() {
   });
   console.log(`[outbox] iniciado topic=${OUTBOX_TOPIC} conc=${OUTBOX_CONCURRENCY} rps=${OUTBOX_RATE_PER_SEC}`);
 }
+
 export async function size() { return queueSize(OUTBOX_TOPIC); }
 
 export function mountHealthCheck(app) {

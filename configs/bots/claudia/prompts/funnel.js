@@ -1,8 +1,31 @@
 // configs/bots/claudia/prompts/funnel.js
 // O orquestrador SÓ pode falar usando estas frases.
 // Você pode A/B testar adicionando/removendo variações por etapa.
+// Agora com pickFunnelLine(stage, settings) para substituir placeholders + carimbar.
 
-export default {
+function render(tpl = "", settings = {}) {
+  const p = settings?.product || {};
+  return String(tpl || "")
+    .replace(/\{\{price_target\}\}/g, p.price_target ?? "")
+    .replace(/\{\{checkout_link\}\}/g, p.checkout_link ?? "")
+    .trim();
+}
+
+function suffix(stage) {
+  return ` (prompts/funnel#${stage})`;
+}
+
+function pick(stage, settings = {}) {
+  const list = funnel[stage] || [];
+  if (!list.length) return "";
+  const idx = Math.floor(Math.random() * list.length);
+  const raw = list[idx];
+  const out = render(raw, settings) + suffix(stage);
+  console.log(`[funnel] stage=${stage} variant=${idx} textPreview=${out.slice(0,60)}`);
+  return out;
+}
+
+export const funnel = {
   // 1) GREET — foto de abertura sai automática; aqui, 1 linha objetiva:
   greet: [
     "Oi, amor 💖 Eu sou a Cláudia! Seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?",
@@ -35,3 +58,9 @@ export default {
     "Tudo certinho por aqui ✅ Assim que o pedido sair, te aviso. E te mando também o passo a passo de uso.",
   ],
 };
+
+export function pickFunnelLine(stage, settings) {
+  return pick(stage, settings);
+}
+
+export default funnel;

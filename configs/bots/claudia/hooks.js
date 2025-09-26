@@ -2,9 +2,10 @@
 // Hooks da Cláudia. Core neutro; aqui só expomos utilidades.
 // >>> Fallback passa a ser OPT-IN via flags.disable_hooks_fallback === false.
 // >>> Revisado com anti-rajada (gate temporal + dedupe hash) para evitar rajadas.
+// >>> Agora usa memória unificada (src/core/memory.js).
 
 import { buildPrompt } from "./prompts/index.js";
-import { recall, remember } from "./flow/_state.js";
+import { recall, remember } from "../../../src/core/memory.js";
 
 // === Helpers de anti-rajada/dedupe ===
 function hashStr(s = "") {
@@ -26,12 +27,13 @@ async function shouldSendFallback(jid, reply, settings) {
     const lastAt = saved?.__last_fb_at || 0;
 
     if (lastH === h && (now - lastAt) < windowMs) {
-      return false; // supressão de rajada
+      console.log(`[hooks] supressão de rajada jid=${jid} hash=${h}`);
+      return false; // já mandou recentemente
     }
 
     await remember(jid, { __last_fb_hash: h, __last_fb_at: now });
-  } catch {
-    // fallback silencioso em caso de erro
+  } catch (e) {
+    console.warn("[hooks.shouldSendFallback]", e?.message);
   }
   return true;
 }
@@ -48,7 +50,8 @@ export const hooks = {
       const p = buildPrompt({ stage, message, settings });
       if (!p) return null;
       return { system: p.system, user: p.user, postprocess: p.postprocess };
-    } catch {
+    } catch (e) {
+      console.warn("[hooks.safeBuildPrompt]", e?.message);
       return null;
     }
   },
@@ -70,13 +73,17 @@ export const hooks = {
   async fallbackText({ stage, settings = {}, jid }) {
     const flags = settings?.flags || {};
     if (flags.flow_only === true) return null;
-    if (flags.disable_hooks_fallback !== false) return null; // default: desliga
+    if (flags.disable_hooks_fallback !== false) return null; // default: desligado
     if (String(stage || "").toLowerCase() === "greet") return null;
 
     const reply = "Consigo te orientar certinho! Me diz rapidinho o tipo do seu cabelo (liso, ondulado, cacheado ou crespo)? (hooks)";
 
     const ok = await shouldSendFallback(jid, reply, settings);
-    return ok ? reply : null;
+    if (ok) {
+      console.log(`[hooks] fallback disparado jid=${jid} stage=${stage}`);
+      return reply;
+    }
+    return null;
   },
 };
 
