@@ -1,17 +1,20 @@
 // src/utils/polish.js
-// Utilitários neutros de polimento de resposta
-// - Nunca quebra com texto vazio
-// - Remove termos proibidos (ex.: "assistente virtual")
-// - Encurta respostas muito longas
-// - Suaviza tom e evita ironia
-// - Normaliza espaços e quebras de linha
+// Utilitários neutros de polimento/sanitização
+// - sanitizeOutbound: limpa texto antes de enviar (links/preço/whitespace/limite)
+// - polishReply: embeleza respostas geradas (fallback por estágio, tom, etc.)
+// - consolidateBubbles: garante 1–2 bolhas curtas
 
+// ==== Configs simples ====
+const MAX_CHARS = Number(process.env.POLISH_MAX_CHARS || '450'); // limite de uma bolha curta
+
+// Palavras/expressões proibidas (nunca mencionar IA/assistente)
 const FORBIDDEN_PATTERNS = [
   /\bassistente(?:\s+virtual)?\b/gi,
   /\bIA\b/gi,
   /\bintelig[eê]ncia artificial\b/gi,
 ];
 
+// Tons ríspidos/irônicos comuns
 const RUDE_TONES = [
   /calma[,!.\s]/i,
   /você não entendeu/i,
@@ -20,26 +23,19 @@ const RUDE_TONES = [
   /isso virou/i,
 ];
 
-const MAX_CHARS = Number(process.env.POLISH_MAX_CHARS || '450'); // 1 bolha curta
-
+// ==== Helpers básicos ====
 function stripForbidden(s) {
   let out = String(s || '');
   for (const rx of FORBIDDEN_PATTERNS) out = out.replace(rx, '');
-  // Remove espaços duplos deixados por remoções
-  out = out.replace(/\s{2,}/g, ' ').trim();
-  return out;
+  return out.replace(/\s{2,}/g, ' ').trim();
 }
-
 function softenTone(s) {
   let out = String(s || '');
   for (const rx of RUDE_TONES) out = out.replace(rx, '');
-  // pequenas suavizações
-  out = out
+  return out
     .replace(/\b(nao|não)\b\s*(tem|sei)/gi, 'posso te explicar rapidinho')
     .replace(/\b(pera|calma)\b/gi, 'claro');
-  return out;
 }
-
 function normalizeWhitespace(s) {
   return String(s || '')
     .replace(/\r/g, '')
@@ -48,18 +44,54 @@ function normalizeWhitespace(s) {
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
-
 function truncate(s, max = MAX_CHARS) {
   const str = String(s || '');
   if (str.length <= max) return str;
   return str.slice(0, max - 1).trimEnd() + '…';
 }
+function stripCodeFences(s = '') {
+  const t = String(s).trim();
+  if (!t.startsWith('```')) return t;
+  return t.replace(/^```[a-z0-9]*\s*/i, '').replace(/```$/,'').trim();
+}
 
+// ==== Sanitização de saída (para qualquer canal) ====
+// options:
+//  - allowLink: mantém URLs; senão, oculta como [link removido]
+//  - allowPrice: mantém valores monetários; senão, normaliza (ex.: "R$ 170" -> "R$ ***")
+export function sanitizeOutbound(text, { allowLink = false, allowPrice = false } = {}) {
+  let out = stripCodeFences(String(text || ''));
+
+  // Remove/mascara links se não permitido
+  if (!allowLink) {
+    out = out.replace(/https?:\/\/\S+/gi, '[link removido]');
+  }
+
+  // Mascara preços se não permitido (R$ 170, 170,00; 170.00; etc.)
+  if (!allowPrice) {
+    out = out
+      // R$ 170,00 | R$170 | R$ 1.234,56
+      .replace(/\bR\$\s?\d{1,3}(\.\d{3})*(,\d{2})?\b/g, 'R$ ***')
+      // 170,00 | 1.234,56 (quando claramente seguido de "reais", "R$", "por", etc.)
+      .replace(/\b(\d{1,3}(\.\d{3})*(,\d{2})?)\s*(reais|rs|r\$|por)?\b/gi, (m, num, _g, _c, tail) => {
+        return tail ? '***' : m; // só troca quando há alta chance de ser preço
+      });
+  }
+
+  // Nunca menciona IA/assistente; remove tons ruins; normaliza espaço; corta
+  out = stripForbidden(out);
+  out = softenTone(out);
+  out = normalizeWhitespace(out);
+  out = truncate(out);
+
+  return out;
+}
+
+// ==== Polimento de respostas geradas (LLM/flows) ====
 export function polishReply(text, { stage, settings } = {}) {
-  // Nunca quebra
   let out = String(text || '').trim();
 
-  // Se veio vazio do LLM/flow, cria fallback simpático por estágio
+  // Fallbacks por estágio (se vier vazio)
   if (!out) {
     switch (String(stage || '')) {
       case 'recepcao':
@@ -82,13 +114,13 @@ export function polishReply(text, { stage, settings } = {}) {
     }
   }
 
-  // Guardrails simples (respeita settings, mas sem cheiros de bot)
+  // Guardrails e acabamento
   out = stripForbidden(out);
   out = softenTone(out);
   out = normalizeWhitespace(out);
   out = truncate(out);
 
-  // Opcional: reforço do CTA por estágio (sem forçar a cada mensagem)
+  // CTA gentil em oferta/fechamento (sem forçar todo o tempo)
   if (/^oferta$|^fechamento$/.test(String(stage || '')) && !/\blink\b|\bcheckout\b|\bpedido\b/i.test(out)) {
     out += '\n\nSe preferir, já te mando o link do pedido. 👍';
   }
@@ -96,14 +128,13 @@ export function polishReply(text, { stage, settings } = {}) {
   return out;
 }
 
-// Ajuda a consolidar múltiplas linhas em bolhas seguras
+// Consolida múltiplas strings em até 2 bolhas seguras
 export function consolidateBubbles(lines = []) {
   const arr = Array.isArray(lines) ? lines : [String(lines || '')];
   const safe = arr
     .map((l) => truncate(normalizeWhitespace(stripForbidden(l || ''))))
     .filter((l) => l && l.trim());
-  // Política do core: 1–2 bolhas no máximo aqui; mais que isso, faça no flow.
   return safe.slice(0, 2);
 }
 
-export default { polishReply, consolidateBubbles };
+export default { sanitizeOutbound, polishReply, consolidateBubbles };
