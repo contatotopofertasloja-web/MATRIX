@@ -16,30 +16,35 @@ function extractName(msg = '') {
 export default async function greet({ userId, text, settings }) {
   const price = settings?.product?.price_target ?? settings?.product?.promo_price ?? 150;
   const msg = String(text || '');
-  const st = await recall(userId);
+  let st = await recall(userId);
 
   // Nome
   if (!st.name) {
     const name = extractName(msg);
-    if (name) await remember(userId, { name });
+    if (name) {
+      await remember(userId, { name });
+      st = await recall(userId);
+    }
   }
 
   // Tipo de cabelo
   if (!st.hair) {
-    if (/liso/i.test(msg))        await remember(userId, { hair: 'liso' });
-    else if (/ondulad[ao]/i.test(msg)) await remember(userId, { hair: 'ondulado' });
-    else if (/cachead[ao]/i.test(msg)) await remember(userId, { hair: 'cacheado' });
-    else if (/crespo/i.test(msg))      await remember(userId, { hair: 'crespo' });
+    if (/liso/i.test(msg))              await remember(userId, { hair: 'liso' });
+    else if (/ondulad[ao]/i.test(msg))  await remember(userId, { hair: 'ondulado' });
+    else if (/cachead[ao]/i.test(msg))  await remember(userId, { hair: 'cacheado' });
+    else if (/crespo/i.test(msg))       await remember(userId, { hair: 'crespo' });
+
+    // Recarrega o estado após salvar para evitar loop
+    st = await recall(userId);
   }
 
-  const cur = await recall(userId);
-  const namePart = cur.name ? ` ${cur.name}` : '';
+  const namePart = st.name ? ` ${st.name}` : '';
 
-  if (!cur.name) {
+  if (!st.name) {
     return `Oi! 💖 Sou a Maria. Pra te atender certinho, como você prefere que eu te chame?`;
   }
 
-  if (!cur.hair) {
+  if (!st.hair) {
     return `Ótimo${namePart}! Me diz rapidinho: seu cabelo é liso, ondulado, cacheado ou crespo?`;
   }
 

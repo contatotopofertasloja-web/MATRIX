@@ -1,14 +1,10 @@
 // configs/bots/claudia/flow/greet.js
-// Saudação idempotente com variante curta quando já sabemos o nome.
-// A foto de abertura é enviada uma vez pelo index.
-
 import {
   ensureProfile, tagReply, normalizeSettings,
   callUser, filledSummary
 } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
 
-// renderização simples de templates {{ path.to.value }}
 function get(obj, path) {
   return String(path||"").split(".").reduce((acc,k)=> (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
 }
@@ -18,7 +14,6 @@ function expandTpl(str, ctx) {
     return v == null ? "" : String(v);
   });
 }
-
 function guessName(t = "") {
   const s = String(t || "").trim();
   const m = s.match(/\b(meu\s*nome\s*é|me\s*chamo|sou\s+[oa])\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,})/i);
@@ -33,7 +28,6 @@ export default async function greet(ctx = {}) {
   state.turns = (state.turns || 0) + 1;
   ensureProfile(state);
 
-  // captura/recupera nome
   const maybe = guessName(text);
   if (maybe) {
     state.profile.name = maybe;

@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/offer.js
-// Oferta personalizada + objeções + preço/link/entrega, com memória unificada.
+// Oferta + objeções + preço/link/entrega.
 
 import { callUser, tagReply, normalizeSettings } from "./_state.js";
 import { recall, remember } from "../../../../src/core/memory.js";
@@ -13,16 +13,14 @@ const RX = {
 };
 
 function pitch(state, S) {
-  const parts = [];
   const p = state?.profile || {};
+  const parts = [];
   if (p.hair_type) parts.push(`para cabelo **${p.hair_type}**`);
   if (p.goal) parts.push(`focando em **${p.goal}**`);
-  if (p.had_prog_before != null) {
+  if (p.had_prog_before != null)
     parts.push(p.had_prog_before ? "ótimo pra quem **já fez**" : "seguro pra **primeira aplicação**");
-  }
   return parts.length ? parts.join(" · ") : "com efeito de alinhamento e brilho";
 }
-
 function deliveryLine(S) {
   const c = S.product.delivery_sla.capitals_hours;
   const o = S.product.delivery_sla.others_hours;
@@ -34,17 +32,11 @@ export default async function offer(ctx = {}) {
   const S = normalizeSettings(settings);
   state.turns = (state.turns || 0) + 1;
 
-  // carrega perfil salvo em memória unificada
   try {
     const saved = await recall(jid);
-    if (saved?.profile) {
-      state.profile = { ...(state.profile || {}), ...saved.profile };
-    }
-  } catch (e) {
-    console.warn("[offer.recall]", e?.message);
-  }
+    if (saved?.profile) state.profile = { ...(state.profile || {}), ...saved.profile };
+  } catch (e) { console.warn("[offer.recall]", e?.message); }
 
-  // objeções
   if (RX.OBJECTION_PRICE.test(text)) {
     const ans = `Entendo 👍 Comparando com salão, **sai bem mais em conta** e você usa em casa.
 De **R$${S.product.price_original}** por **R$${S.product.price_target}**.
@@ -62,7 +54,6 @@ Passo a passo: aplicar, agir **40 min**, enxaguar e finalizar (escova/chapinha).
     return tagReply(S, ans, "flow/offer#objection_effect");
   }
 
-  // preço ou link direto
   if (RX.PRICE.test(text)) {
     const ans = `Condição hoje: de **R$${S.product.price_original}** por **R$${S.product.price_target}**.
 ${deliveryLine(S)} Quer o **link seguro** pra finalizar?`;
@@ -72,24 +63,15 @@ ${deliveryLine(S)} Quer o **link seguro** pra finalizar?`;
     const link = S.product.checkout_link;
     const ans = `Aqui o **checkout seguro**: ${link}
 ${deliveryLine(S)} Forma: **COD (paga na entrega)**.`;
-    return {
-      reply: tagReply(S, ans, "flow/offer#link"),
-      next: undefined,
-      meta: { allowLink: true },
-    };
+    // ✅ retorna diretamente o padrão do flow (sem aninhar tagReply)
+    return tagReply(S, ans, "flow/offer#link");
   }
 
-  // oferta personalizada
   const name = callUser(state);
   const msg = `${name ? name + ", " : ""}pelo que você me contou, recomendo a **${S.product.name}** ${pitch(state, S)}.
 De **R$${S.product.price_original}** por **R$${S.product.price_target}**. Te envio o **link seguro** pra finalizar?`;
 
-  // persiste perfil atualizado
-  try {
-    await remember(jid, { profile: state.profile });
-  } catch (e) {
-    console.warn("[offer.remember]", e?.message);
-  }
+  try { await remember(jid, { profile: state.profile }); } catch (e) { console.warn("[offer.remember]", e?.message); }
 
   return tagReply(S, msg, "flow/offer#pitch");
 }

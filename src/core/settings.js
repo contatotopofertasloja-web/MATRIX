@@ -13,11 +13,15 @@ function env(name, def) {
   return v === undefined || v === null || v === '' ? def : v;
 }
 
-// BOT / PATHS
 export const BOT_ID = env('BOT_ID', 'claudia');
-const BOT_SETTINGS_PATH = path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml');
 
-// Aliases → chave canônica
+// Caminhos candidatos (evita o bug do “configs/configs”)
+const CANDIDATES = [
+  path.join(ROOT, 'configs', 'bots', BOT_ID, 'settings.yaml'),
+  path.join(ROOT, 'configs', 'configs', 'bots', BOT_ID, 'settings.yaml'),
+];
+let BOT_SETTINGS_PATH = CANDIDATES.find(p => fs.existsSync(p)) || CANDIDATES[0];
+
 const STAGE_KEY_ALIASES = new Map([
   ['recepção','recepcao'], ['recepcao','recepcao'], ['greet','recepcao'], ['saudacao','recepcao'], ['saudação','recepcao'], ['start','recepcao'], ['hello','recepcao'],
   ['qualificação','qualificacao'], ['qualificacao','qualificacao'], ['qualify','qualificacao'],
@@ -26,12 +30,7 @@ const STAGE_KEY_ALIASES = new Map([
   ['fechamento','fechamento'], ['close','fechamento'], ['checkout','fechamento'], ['closing','fechamento'],
   ['pós-venda','posvenda'], ['posvenda','posvenda'], ['postsale','posvenda'], ['pos_venda','posvenda'], ['pós_venda','posvenda'],
 ]);
-
-function normalizeStageKey(k) {
-  if (!k) return k;
-  const base = String(k).trim().toLowerCase();
-  return STAGE_KEY_ALIASES.get(base) || base;
-}
+const normalizeStageKey = (k) => (k ? (STAGE_KEY_ALIASES.get(String(k).trim().toLowerCase()) || String(k).trim().toLowerCase()) : k);
 function normalizeModelsByStage(map) {
   const out = {};
   if (map && typeof map === 'object') {
@@ -49,20 +48,17 @@ const GLOBAL_MODELS = {
   fechamento:   env('LLM_MODEL_FECHAMENTO',   'gpt-5-mini'),
   posvenda:     env('LLM_MODEL_POSVENDA',     'gpt-5-nano'),
 };
-
 const FLAGS = {
   useModelsByStage:   env('USE_MODELS_BY_STAGE', 'true') === 'true',
   fallbackToGlobal:   env('FALLBACK_TO_GLOBAL_MODELS', 'true') === 'true',
   force_core_prompts: env('PROMPTS_FORCE_CORE', '') === '1',
 };
-
 const AUDIO = {
   asrProvider: env('ASR_PROVIDER', 'openai'),
   asrModel:    env('ASR_MODEL',    'whisper-1'),
   ttsProvider: env('TTS_PROVIDER', 'none'),
   ttsVoice:    env('TTS_VOICE',    'alloy'),
 };
-
 const LLM_DEFAULTS = {
   provider:    env('LLM_PROVIDER', 'openai'),
   temperature: Number(env('LLM_TEMPERATURE', '0.5')),
@@ -75,7 +71,6 @@ const LLM_DEFAULTS = {
   retries: Number(env('LLM_RETRIES', '2')),
 };
 
-// Defaults caso YAML ausente
 let fileSettings = {
   bot_id: BOT_ID,
   persona_name: 'Cláudia',
@@ -84,7 +79,6 @@ let fileSettings = {
   flags: { has_cod: true, send_opening_photo: true },
 };
 
-// Carrega settings.yaml da bot
 try {
   if (fs.existsSync(BOT_SETTINGS_PATH)) {
     const text = fs.readFileSync(BOT_SETTINGS_PATH, 'utf8');
@@ -99,7 +93,6 @@ try {
   console.warn('[SETTINGS] Falha ao ler YAML:', e?.message || e);
 }
 
-// Exporta unificado
 export const settings = {
   botId: BOT_ID,
   ...fileSettings,
