@@ -7,6 +7,7 @@
 // - Orchestrator plugado (core neutro) ✅
 // - WhatsApp QR/health/ops (forçar novo QR, logout+reset sessão)
 // - (+) DEBUG: /wpp/debug, /wpp/last, /_ops/clear-debug (inspeção fromMe/remoteJid/participant)
+// - (+) Métricas no /health: queue/sink/backoffMs
 
 import express from "express";
 import cors from "cors";
@@ -31,6 +32,7 @@ import { intentOf } from "./core/intent.js";
 import { callLLM } from "./core/llm.js";
 import { getBotHooks } from "./core/bot-registry.js";
 import { orchestrate } from "./core/orchestrator.js";
+import { flushMetricsNow, getQueueSize, getSink, getBackoffMs } from "./core/metrics/middleware.js";
 
 // ========= Bootstrap resiliente (raiz OU configs/) =========
 let loadBotConfig = () => ({});
@@ -299,7 +301,6 @@ async function deliver({ to, text, wantAudio=false }) {
 // ========= (NOVO) Roteia uma action do orquestrador → envio/outbox =========
 async function routeAction(a, toFallback) {
   if (!a) return;
-  // normaliza campos (core usa {type:'text'}; alguns módulos usam {kind:'text'})
   const kind = (a.kind || a.type || "text").toLowerCase();
   const to   = String(a.to || toFallback || "").trim();
   if (!to) return;
@@ -391,7 +392,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await persist(); return "";
     }
 
-    // 2) ORCHESTRATOR — ✅ agora usando { actions } do core
+    // 2) ORCHESTRATOR — usa { actions } do core
     const flowOnly = !!settings?.flags?.flow_only;
     if (!flowOnly) {
       try {
@@ -463,7 +464,8 @@ app.get("/health", (_req,res)=> res.json({
   adapter:"baileys",
   env:process.env.NODE_ENV||"production",
   outbox:{ topic: OUTBOX_TOPIC, backend: outbox.backend(), connected: outbox.isConnected() },
-  ops:{ intake:INTAKE_ON, send:SEND_ON, direct:DIRECT_SEND }
+  ops:{ intake:INTAKE_ON, send:SEND_ON, direct:DIRECT_SEND },
+  metrics:{ queue:getQueueSize(), sink:getSink(), backoffMs:getBackoffMs() }
 }));
 
 app.get("/wpp/health", (_req,res)=> res.json({
@@ -568,7 +570,6 @@ app.post("/webhook/payment", async (req,res)=>{
 await wppInit({ onQr: ()=>{} });
 const server = app.listen(PORT, HOST, ()=> console.log(`[HTTP] Matrix bot (${BOT_ID}) on http://${HOST}:${PORT}`));
 
-import { flushMetricsNow } from "./core/metrics/middleware.js";
 async function shutdown(sig){
   console.log("[shutdown]", sig);
   try { await stopOutboxWorkers(); } catch {}

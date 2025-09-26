@@ -1,10 +1,13 @@
 // src/adapters/whatsapp/baileys/index.js
 // Adapter Baileys com QR exposto, áudio end-to-end e compat de legado.
 // + logs para debug em Railway
+// + FIXES: ignora ecos (fromMe e self JID) e status@broadcast
+// + extração de texto robusta
 
 import * as qrcode from "qrcode";
 import fs from "node:fs/promises";
 import path from "node:path";
+// ✅ agora existe o named export sanitizeOutbound no utils/polish.js
 import { sanitizeOutbound } from "../../../utils/polish.js";
 
 // Import dinâmico
@@ -152,6 +155,23 @@ export const adapter = {
   },
 };
 
+// --- helpers inbound ---
+function extractText(msg = {}) {
+  const m = msg.message || {};
+  return (
+    m.conversation ||
+    m.extendedTextMessage?.text ||
+    m.imageMessage?.caption ||
+    m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
+    m.buttonsResponseMessage?.selectedDisplayText ||
+    m.templateButtonReplyMessage?.selectedDisplayText ||
+    m.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    ""
+  );
+}
+function isStatusBroadcast(jid = "") { return String(jid).startsWith("status@"); }
+
 // Boot/Reboot
 async function boot() {
   if (_booting) return;
@@ -197,15 +217,36 @@ async function boot() {
       }
     });
 
-    sock.ev.on("messages.upsert", async ({ messages }) => {
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
       const m = messages?.[0];
       if (!m || !_onMessageHandler) return;
-      const from = m.key?.remoteJid || "";
-      const hasMedia = !!m.message?.imageMessage || !!m.message?.audioMessage || !!m.message?.videoMessage || !!m.message?.documentMessage || !!m.message?.stickerMessage;
-      const text = m.message?.conversation || m.message?.extendedTextMessage?.text || "";
+
+      // 1) corta ecos explícitos
+      if (m.key?.fromMe) return;
+
+      // 2) corta mensagens cujo remoteJid é da PRÓPRIA conta (eco sem fromMe)
+      const selfIdRaw = sock?.user?.id || "";         // ex: "55619...:1@s.whatsapp.net"
+      const selfBare  = selfIdRaw.split(":")[0];      // "55619..."
+      const from      = m.key?.remoteJid || "";
+      if (!from) return;
+      if (selfBare && from.includes(selfBare)) return;
+
+      // 3) ignora status/broadcast
+      if (isStatusBroadcast(from)) return;
+
+      const hasMedia =
+        !!m.message?.imageMessage ||
+        !!m.message?.audioMessage ||
+        !!m.message?.videoMessage ||
+        !!m.message?.documentMessage ||
+        !!m.message?.stickerMessage;
+
+      const text = extractText(m);
+
       console.log(`[wpp/inbound] from=${from} textPreview=${String(text).slice(0,60)}`);
+
       try {
-        await _onMessageHandler({ from, text, hasMedia, raw: m });
+        await _onMessageHandler({ from, text, hasMedia, raw: m, upsertType: type || null });
       } catch (e) {
         console.error("[onMessage handler]", e?.message || e);
       }

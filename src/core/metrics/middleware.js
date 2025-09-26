@@ -2,19 +2,9 @@
 // Coletor de métricas neutro do core (SEM “cheiro” de bot).
 // - Seguro por padrão (no-op se não configurado)
 // - Fila interna com backoff exponencial + jitter
-// - Sinks: console | http (webhook)
-// - API mínima: captureFromActions(actions, context)
-//
-// Uso (já integrado no orquestrador):
-//   import { captureFromActions } from "./metrics/middleware.js";
-//   await captureFromActions(actions, { botId, jid, stage, variant, askedPrice, askedLink });
-//
-// ENV OPCIONAIS:
-//   METRICS_SINK=console|http|none        (default: console em DEV, none em PROD se não definido)
-//   METRICS_WEBHOOK_URL=https://...       (para sink http)
-//   METRICS_BATCH_MAX=50                  (default: 50)
-//   METRICS_FLUSH_MS=1500                 (default: 1500ms)
-//   METRICS_DEBUG=true|false              (logs de debug)
+// - Sinks: console | http (webhook) | none
+// - API: captureFromActions(actions, context)
+// - Getters para /health: getQueueSize(), getSink(), getBackoffMs()
 
 const IS_PROD = process.env.NODE_ENV === "production";
 const SINK = (process.env.METRICS_SINK || (IS_PROD ? "none" : "console")).toLowerCase();
@@ -44,7 +34,7 @@ function simpleHash(s) {
   return (h >>> 0).toString(36);
 }
 
-// -------- Actions -> Eventos --------
+// -------- Actions -> Eventos (formato pronto p/ painel) --------
 function summarizeActions(actions = [], ctx = {}) {
   const out = [];
   const base = {
@@ -57,7 +47,6 @@ function summarizeActions(actions = [], ctx = {}) {
     askedLink: !!ctx.askedLink,
   };
 
-  // Evento sintético de inbound (opcional)
   if (ctx._inboundMessage) {
     out.push({
       ...base,
@@ -71,14 +60,15 @@ function summarizeActions(actions = [], ctx = {}) {
     const meta = a.meta || {};
     const evBase = { ...base, stage: meta.stage || base.stage, variant: meta.variant || base.variant };
 
-    if (a.kind === "text") {
-      out.push({ ...evBase, type: "action_text", length: String(a.text || "").length });
-    } else if (a.kind === "image") {
-      out.push({ ...evBase, type: "action_image", hasCaption: !!a.caption });
-    } else if (a.kind === "audio" || a.kind === "voice") {
-      out.push({ ...evBase, type: "action_audio", voice: a.kind === "voice" });
+    const kind = (a.kind || a.type || "text").toLowerCase();
+    if (kind === "text") {
+      out.push({ ...evBase, type: "action_text", length: String(a.text || a.payload?.text || "").length });
+    } else if (kind === "image") {
+      out.push({ ...evBase, type: "action_image", hasCaption: !!(a.caption || a.payload?.caption) });
+    } else if (kind === "audio" || kind === "voice") {
+      out.push({ ...evBase, type: "action_audio", voice: kind === "voice" });
     } else {
-      out.push({ ...evBase, type: "action_other", kind: a.kind || "unknown" });
+      out.push({ ...evBase, type: "action_other", kind });
     }
   }
 
@@ -118,7 +108,7 @@ async function flush() {
     if (!batch.length) { backoffMs = 0; return; }
 
     if (SINK === "none") {
-      if (DEBUG) console.log("[metrics] sink=none (descartado)", { count: batch.length });
+      if (DEBUG) console.log("[metrics] sink=none (drop)", { count: batch.length });
       backoffMs = 0; return;
     }
 
@@ -141,7 +131,7 @@ async function flush() {
       backoffMs = 0; return;
     }
 
-    if (DEBUG) console.warn("[metrics] sink desconhecido:", SINK, "— descartando");
+    if (DEBUG) console.warn("[metrics] sink desconhecido:", SINK, "— drop");
     backoffMs = 0;
   } catch (err) {
     console.error("[metrics] flush erro:", err?.message || err);
@@ -176,7 +166,7 @@ export async function flushMetricsNow() {
   catch (e) { console.warn("[metrics] flushMetricsNow:", e?.message || e); }
 }
 
-// -------- Getters p/ health --------
+// -------- Getters p/ /health --------
 export function getQueueSize() { return queue.length; }
 export function getSink() { return SINK; }
 export function getBackoffMs() { return backoffMs; }

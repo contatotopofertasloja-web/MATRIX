@@ -1,36 +1,33 @@
 // configs/bots/maria/flow/offer.js
-// Confirma interesse, guarda sinal e pede CEP primeiro (disponibilidade por região).
+// Confirma interesse, guarda sinal e pede CEP (disponibilidade por região) — memória persistente.
 
-import { getState, setState } from './_state.js';
+import { recall, remember } from '../../../../src/core/memory.js';
 
 export function match(text = '') {
-  const t = String(text).toLowerCase();
+  const t = String(text || '');
   return /\b(preco|preço|valor|oferta|promo|quero|tenho\s*interesse|sim|ok|vamos|bora)\b/i.test(t);
 }
 
 export default async function offer({ userId, text, settings }) {
-  const st = getState(userId);
-  const name = st.name ? ` ${st.name}` : '';
   const price = settings?.product?.price_target ?? settings?.product?.promo_price ?? 150;
+  const st = await recall(userId);
 
-  // Se a pessoa respondeu "sim/ok/quero" marcamos interesse
+  // Marca interesse se houver sinal
   if (/\b(sim|quero|pode|ok|vamos|bora|tenho\s*interesse)\b/i.test(String(text))) {
-    setState(userId, { interested: true });
+    await remember(userId, { interested: true });
   }
 
-  // Se ainda não temos nome (chegou direto aqui), peça de forma objetiva
-  if (!st.name) {
+  if (!st?.name) {
     return `Pra eu te atender certinho, como você prefere que eu te chame?`;
   }
 
-  // Pergunta dados de forma fracionada: começamos pelo CEP (disponibilidade)
-  if (!st.cep) {
-    return `Perfeito${name}! 🙌 Antes de finalizar, me envia seu **CEP** pra eu confirmar a disponibilidade na sua região?`;
+  if (!st?.cep) {
+    return `Perfeito ${st.name}! 🙌 Antes de finalizar, me envia seu **CEP** pra eu confirmar a disponibilidade na sua região?`;
   }
 
-  // Se já tem CEP mas faltam dados, encaminha para fechamento
+  // Já tem CEP → pede endereço completo
   return [
-    `Legal${name}! Promo de **R$ ${price}** garantida.`,
+    `Legal ${st.name}! Promo de **R$ ${price}** garantida.`,
     `Me passa seu **endereço completo** (rua, número, bairro e cidade) para eu reservar?`,
     `Lembro: o pagamento é **na entrega (COD)**.`
   ].join(' ');
