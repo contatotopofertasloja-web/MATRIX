@@ -1,7 +1,7 @@
 // configs/bots/maria/flow/greet.js
-// Abertura objetiva, coleta de nome e tipo de cabelo (memória).
+// Greet da Maria — simples, sem “assistente virtual”, agora com memória persistente (core/memory).
 
-import { getState, setState } from './_state.js';
+import { recall, remember } from '../../../../src/core/memory.js';
 
 function extractName(msg = '') {
   const m1 = msg.match(/\b(meu\s+nome\s+é|sou|me\s+chamo)\s+([A-Za-zÀ-ÿ][\wÀ-ÿ'-]{1,})/i);
@@ -15,36 +15,38 @@ function extractName(msg = '') {
 
 export default async function greet({ userId, text, settings }) {
   const price = settings?.product?.price_target ?? settings?.product?.promo_price ?? 150;
-  const st = getState(userId);
   const msg = String(text || '');
+  const st = await recall(userId);
 
-  // Tenta capturar o nome, se ainda não temos
+  // Nome
   if (!st.name) {
     const name = extractName(msg);
-    if (name) setState(userId, { name });
+    if (name) await remember(userId, { name });
   }
 
-  // Tenta capturar tipo de cabelo se responder direto
+  // Tipo de cabelo
   if (!st.hair) {
-    if (/liso/i.test(msg)) setState(userId, { hair: 'liso' });
-    else if (/ondulad[ao]/i.test(msg)) setState(userId, { hair: 'ondulado' });
-    else if (/cachead[ao]/i.test(msg)) setState(userId, { hair: 'cacheado' });
-    else if (/crespo/i.test(msg)) setState(userId, { hair: 'crespo' });
+    if (/liso/i.test(msg))        await remember(userId, { hair: 'liso' });
+    else if (/ondulad[ao]/i.test(msg)) await remember(userId, { hair: 'ondulado' });
+    else if (/cachead[ao]/i.test(msg)) await remember(userId, { hair: 'cacheado' });
+    else if (/crespo/i.test(msg))      await remember(userId, { hair: 'crespo' });
   }
 
-  const namePart = getState(userId).name ? ` ${getState(userId).name}` : '';
-  if (!getState(userId).name) {
+  const cur = await recall(userId);
+  const namePart = cur.name ? ` ${cur.name}` : '';
+
+  if (!cur.name) {
     return `Oi! 💖 Sou a Maria. Pra te atender certinho, como você prefere que eu te chame?`;
   }
 
-  if (!getState(userId).hair) {
+  if (!cur.hair) {
     return `Ótimo${namePart}! Me diz rapidinho: seu cabelo é liso, ondulado, cacheado ou crespo?`;
   }
 
-  // Já tenho nome + tipo → avança com a oferta curta
+  // Já tenho nome + tipo → oferta curta
   return [
     `Perfeito${namePart}!`,
     `Hoje tenho autorização pra vender **5 unidades** no valor promocional de **R$ ${price}** (de R$ 197).`,
-    `Tenho interesse seu para garantir esse valor agora?`
+    `Tem interesse pra eu garantir esse valor agora?`
   ].join(' ');
 }

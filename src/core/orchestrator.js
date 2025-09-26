@@ -1,236 +1,283 @@
-// src/core/orchestrator.js — flows-first com lock/anti-rajada, persistência e métricas.
-// Agora com logs opcionais (ORCH_DEBUG=1) + fallback de NLU quando o flow não responder.
+// src/adapters/whatsapp/baileys/index.js
+// Adapter Baileys com QR exposto, áudio end-to-end e compat de legado.
+// + logs para debug em Railway
+// + FIX: ignora mensagens 'fromMe' (evita eco/loop e "bot mudo")
 
-import { getSession, saveSession, normalizeStage } from "./fsm.js";
-import settings from "./settings.js";
+import * as qrcode from "qrcode";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { sanitizeOutbound } from "../../../utils/polish.js";
 
-const BOT_ID = process.env.BOT_ID || settings?.bot_id || "claudia";
-const DEBUG  = ["1","true","yes","y","on"].includes(String(process.env.ORCH_DEBUG||"").toLowerCase());
+// Import dinâmico (whiskeysockets > adiwajshing)
+let B = null;
+try { B = await import("@whiskeysockets/baileys"); }
+catch { try { B = await import("@adiwajshing/baileys"); } catch { B = null; } }
 
-function dlog(...a){ if (DEBUG) console.log("[ORCH]", ...a); }
-
-// ---------- Concurrency / anti-rajada ----------
-const LOCK_MS = 8000;
-const DEBOUNCE_MS_INBOUND = 3500;
-const SAME_REPLY_MS = Number(settings?.flags?.reply_dedupe_ms) || 8000;
-
-const locks = new Map();
-function tryLock(key) {
-  const now = Date.now();
-  const last = locks.get(key) || 0;
-  if (now - last < LOCK_MS) return false;
-  locks.set(key, now);
-  return true;
+function pick(fn) { return B?.[fn] || B?.default?.[fn] || null; }
+function pickMakeWASocket() {
+  return pick("makeWASocket")
+      || (typeof B?.default === "function" ? B.default : null)
+      || (typeof B === "function" ? B : null);
 }
-function release(key) { locks.delete(key); }
+const makeWASocket               = pickMakeWASocket();
+const useMultiFileAuthState      = pick("useMultiFileAuthState");
+const fetchLatestBaileysVersion  = pick("fetchLatestBaileysVersion");
+const DisconnectReason           = pick("DisconnectReason");
+const downloadContentFromMessage = pick("downloadContentFromMessage");
 
-function shouldDebounceInbound(session, msg) {
-  const now = Date.now();
-  const lastTxt = session?.flags?.last_user_text || "";
-  const lastTs  = session?.flags?.last_user_ts || 0;
-  const same    = lastTxt === msg;
-  const close   = (now - lastTs) < DEBOUNCE_MS_INBOUND;
-  return same && close;
-}
-function markInbound(session, msg) {
-  session.flags = session.flags || {};
-  session.flags.last_user_text = msg;
-  session.flags.last_user_ts   = Date.now();
-}
-function shouldBlockSameReply(session, replyText) {
-  const now = Date.now();
-  const last = session?.flags?.last_reply_text || "";
-  const lastTs = session?.flags?.last_reply_ts || 0;
-  const same = last === replyText;
-  const close = (now - lastTs) < SAME_REPLY_MS;
-  return same && close;
-}
-function markReply(session, replyText) {
-  session.flags = session.flags || {};
-  session.flags.last_reply_text = replyText;
-  session.flags.last_reply_ts   = Date.now();
+if (typeof makeWASocket !== "function") {
+  throw new TypeError("[baileys] Pacote não encontrado ou incompatível");
 }
 
-// ---------- Helpers ----------
-function mapStageName(s) {
-  const k = String(s || "greet").toLowerCase();
-  if (k === "qualify") return "qualificacao";
-  if (k === "oferta" || k === "offer") return "offer";
-  if (k === "fechamento" || k === "close") return "close";
-  if (k === "posvenda" || k === "postsale") return "postsale";
-  if (k === "qualificacao") return "qualificacao";
-  return "greet";
+const {
+  WPP_AUTH_DIR        = "/app/baileys-auth-v2",
+  WPP_SESSION         = "claudia-main",
+  WPP_PRINT_QR        = "true",
+  SEND_TYPING         = "true",
+  TYPING_MS_PER_CHAR  = "35",
+  TYPING_MIN_MS       = "800",
+  TYPING_MAX_MS       = "4000",
+  TYPING_VARIANCE_PCT = "0.2",
+} = process.env;
+
+const bool = (v, d=false) => (v==null?d:["1","true","y","yes","on"].includes(String(v).trim().toLowerCase()));
+const num  = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+const PRINT_QR      = bool(WPP_PRINT_QR, true);
+const SEND_TYPING_B = bool(SEND_TYPING, true);
+const TYPING_PER    = num(TYPING_MS_PER_CHAR, 35);
+const TYPING_MIN    = num(TYPING_MIN_MS, 800);
+const TYPING_MAX    = num(TYPING_MAX_MS, 4000);
+const TYPING_VAR    = Math.max(0, Math.min(1, Number(TYPING_VARIANCE_PCT) || 0.2));
+
+let sock = null;
+let _isReady = false;
+let _lastQrText = null;
+let _onMessageHandler = null;
+let _booting = false;
+let _callbacks = { onReady:null, onQr:null, onDisconnect:null };
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function normalizeJid(input) {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (!digits) throw new Error("destinatário inválido");
+  return digits.endsWith("@s.whatsapp.net") ? digits : `${digits}@s.whatsapp.net`;
 }
-
-function allowedLinksFromSettings() {
-  const arr = settings?.guardrails?.allowed_links;
-  return Array.isArray(arr) ? arr : [];
+function typingDelay(chars = 12) {
+  const base = Math.min(TYPING_MAX, Math.max(TYPING_MIN, Math.round(TYPING_PER * chars)));
+  const jitter = Math.round(base * TYPING_VAR);
+  const delta = Math.floor(Math.random() * (2 * jitter + 1)) - jitter;
+  return Math.min(TYPING_MAX, Math.max(TYPING_MIN, base + delta));
 }
-
-function buildOutbox(actions, stage, variant=null) {
-  return {
-    publish: async (msg) => {
-      if (!msg) return;
-      const baseMeta = { stage, variant, source: `flow/${stage}`, allowedLinks: allowedLinksFromSettings() };
-
-      if (msg.kind === "image" || msg.type === "image") {
-        const url = msg.payload?.url || msg.url;
-        const caption = msg.payload?.caption || msg.caption || "";
-        if (url) actions.push({ kind: "image", url, caption, meta: baseMeta });
-        return;
-      }
-      if (msg.kind === "text" || typeof msg === "string" || msg.text || msg.payload?.text) {
-        const text = typeof msg === "string" ? msg : (msg.payload?.text || msg.text || "");
-        if (text) actions.push({ kind: "text", text, meta: { ...baseMeta, ...(msg.meta || {}) } });
-        return;
-      }
-    }
-  };
-}
-
-async function runFlow(botId, stage, ctxBase, actions) {
-  const file =
-    stage === "qualificacao" ? "qualify" :
-    stage === "offer"        ? "offer"   :
-    stage === "close"        ? "close"   :
-    stage === "postsale"     ? "postsale": "greet";
-
-  let fn = null;
+async function simulateTyping(jid, approxChars = 12) {
+  if (!SEND_TYPING_B || !sock) return;
   try {
-    const mod = await import(`../../configs/bots/${botId}/flow/${file}.js`);
-    fn = mod?.default || mod?.[file] || null;
-  } catch (e) {
-    dlog("import flow fail:", file, e?.message || e);
-    fn = null;
+    await sock.presenceSubscribe(jid);
+    await sleep(200);
+    await sock.sendPresenceUpdate("composing", jid);
+    await sleep(typingDelay(approxChars));
+  } catch {} finally {
+    try { await sock.sendPresenceUpdate("paused", jid); } catch {}
   }
-  if (!fn) return null;
-
-  const ctx = { ...ctxBase, meta: { variant: null } };
-
-  dlog("runFlow →", file, "| text=", (ctx.text||"").slice(0,60));
-  const res = await fn(ctx);
-  if (!res) return { res: null, file };
-
-  // propaga reply + meta do flow (ex.: allowLink)
-  if (res.reply) {
-    actions.push({
-      kind: "text",
-      text: String(res.reply || ""),
-      meta: {
-        stage: file,
-        variant: null,
-        source: `flow/${file}`,
-        allowedLinks: allowedLinksFromSettings(),
-        ...(res.meta || {}),
-      }
-    });
-  }
-  return { res, file };
 }
-
-async function rescueWithNLU(session, ctxBase, actions) {
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const c of stream) chunks.push(c);
+  return Buffer.concat(chunks);
+}
+async function getAudioBufferFromRaw(raw) {
   try {
-    const { classify, suggestNextStage } = await import("./nlu.js");
-    const cls = await classify(ctxBase.text || "");
-    const next = suggestNextStage(cls.intent);
-    const stage = mapStageName(next);
-    dlog("NLU rescue → intent=", cls.intent, "next=", next, "mapped=", stage);
-    if (!stage) return null;
-    return await runFlow(BOT_ID, stage, ctxBase, actions);
+    const audio = raw?.message?.audioMessage;
+    if (!audio || !downloadContentFromMessage) return null;
+    const stream = await downloadContentFromMessage(audio, "audio");
+    return await streamToBuffer(stream);
   } catch (e) {
-    dlog("NLU rescue failed:", e?.message || e);
+    console.warn("[baileys] getAudioBufferFromRaw", e?.message || e);
     return null;
   }
 }
 
-export async function orchestrate({ jid, text }) {
-  if (!tryLock(jid)) { dlog("lock-denied", jid); return []; }
-  const actions = [];
+export function isReady() { return _isReady && !!sock; }
+export async function getQrDataURL() {
+  if (!_lastQrText) return null;
+  try { return await qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 }); }
+  catch { return null; }
+}
+function finalizeOutbound(text, { allowPrice=false, allowLink=false } = {}) {
+  return sanitizeOutbound(String(text || ""), { allowPrice, allowLink });
+}
+
+export const adapter = {
+  onMessage(fn) { _onMessageHandler = typeof fn === "function" ? fn : null; },
+
+  async sendMessage(to, payload) {
+    if (!sock) throw new Error("WhatsApp não inicializado");
+    const jid   = normalizeJid(to);
+    const isObj = payload && typeof payload === "object" && !Buffer.isBuffer(payload);
+    const text  = isObj ? String(payload.text ?? "") : String(payload ?? "");
+    const approx = text?.length || 12;
+
+    await simulateTyping(jid, approx);
+
+    const allowPrice = isObj && !!payload.allowPrice;
+    const allowLink  = isObj && !!payload.allowLink;
+    const safeText   = finalizeOutbound(text, { allowPrice, allowLink });
+
+    console.log(`[wpp/sendMessage] to=${jid} preview=${safeText.slice(0,60)}`);
+    return sock.sendMessage(jid, isObj ? { ...payload, text: safeText } : { text: safeText });
+  },
+
+  async sendImage(to, url, caption = "", opts = {}) {
+    if (!sock) throw new Error("WhatsApp não inicializado");
+    const jid = normalizeJid(to);
+    const safeCap = finalizeOutbound(caption, { allowPrice: !!opts.allowPrice, allowLink: !!opts.allowLink });
+    console.log(`[wpp/sendImage] to=${jid} url=${url} captionPreview=${safeCap.slice(0,40)}`);
+    return sock.sendMessage(jid, { image: { url: String(url) }, caption: safeCap });
+  },
+
+  async sendAudio(to, buffer, { mime = "audio/ogg; codecs=opus", ptt = true } = {}) {
+    if (!sock) throw new Error("WhatsApp não inicializado");
+    const jid = normalizeJid(to);
+    console.log(`[wpp/sendAudio] to=${jid} bytes=${buffer?.length || 0}`);
+    return sock.sendMessage(jid, { audio: buffer, mimetype: mime, ptt: !!ptt });
+  },
+
+  async sendVoice(to, buffer, { mime = "audio/ogg; codecs=opus" } = {}) {
+    return this.sendAudio(to, buffer, { mime, ptt: true });
+  },
+
+  async getAudioBuffer(raw) { return await getAudioBufferFromRaw(raw); },
+  async downloadMedia(raw, { audioOnly = false } = {}) {
+    if (audioOnly) return await getAudioBufferFromRaw(raw);
+    return null;
+  },
+};
+
+// --- helpers de inbound ---
+function extractText(msg = {}) {
+  const m = msg.message || {};
+  return (
+    m.conversation
+    || m.extendedTextMessage?.text
+    || m.imageMessage?.caption
+    || m.videoMessage?.caption
+    || m.documentMessage?.caption
+    || m.buttonsResponseMessage?.selectedDisplayText
+    || m.templateButtonReplyMessage?.selectedDisplayText
+    || m.listResponseMessage?.singleSelectReply?.selectedRowId
+    || ""
+  );
+}
+function isStatusBroadcast(jid = "") { return String(jid).startsWith("status@"); }
+
+// Boot/Reboot
+async function boot() {
+  if (_booting) return;
+  _booting = true;
   try {
-    const session = await getSession({ botId: BOT_ID, userId: jid, createIfMissing: true });
-    session.flags = session.flags || {};
-    session.flow  = session.flow  || {};
+    const authDir = path.join(WPP_AUTH_DIR, WPP_SESSION);
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2,3000,0] }));
 
-    const msg = String(text || "");
-    if (shouldDebounceInbound(session, msg)) { dlog("debounce-inbound", msg); return []; }
-    markInbound(session, msg);
+    sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: PRINT_QR,
+      browser: ["Matrix IA 2.0", "Chrome", "10.0"],
+      syncFullHistory: false,
+    });
 
-    // 1) estágio atual
-    let stage = mapStageName(normalizeStage(session.stage));
-    dlog("IN", { jid, stage, msg });
-
-    // 2) roda flow do estágio
-    const outbox = buildOutbox(actions, stage, null);
-    const ctxBase = { settings, outbox, jid, state: session.flow, text: msg };
-    let flowRun = await runFlow(BOT_ID, stage, ctxBase, actions);
-
-    // 2.1) fallback por NLU se o flow não gerou nenhuma ação (evita "mudez")
-    if (!actions.length) {
-      dlog("no-actions → trying NLU rescue");
-      flowRun = await rescueWithNLU(session, ctxBase, actions) || flowRun;
-    }
-
-    // 3) fallback via hooks (exceto greet) — **opcional** e **não bloqueia** o flow
-    if (!actions.length) {
-      try {
-        const mod = await import(`../../configs/bots/${BOT_ID}/hooks.js`);
-        const botHooks = mod?.hooks || mod?.default?.hooks || null;
-        if (botHooks?.fallbackText && stage !== "greet") {
-          const fb = await botHooks.fallbackText({ stage, settings, jid });
-          if (fb && fb.trim()) {
-            actions.push({
-              kind: "text",
-              text: fb.trim(),
-              meta: { stage, source: "hooks", allowedLinks: allowedLinksFromSettings() }
-            });
-            dlog("hooks-fallback used");
-          }
+    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        _lastQrText = qr;
+        console.log("[wpp/qr] novo QR gerado");
+        try {
+          const dataURL = await qrcode.toDataURL(qr, { margin: 1, width: 300 });
+          if (typeof _callbacks.onQr === "function") _callbacks.onQr(dataURL);
+        } catch (e) {
+          console.warn("[baileys] QR toDataURL fail:", e?.message || e);
         }
-      } catch (e) { dlog("hooks error:", e?.message||e); }
-    }
+      }
+      if (connection === "open")  {
+        _isReady = true; _lastQrText = null;
+        console.log("[wpp] conexão aberta");
+        if (typeof _callbacks.onReady === "function") _callbacks.onReady();
+      }
+      if (connection === "close") {
+        _isReady = false;
+        const reason = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.reason;
+        console.warn("[wpp] conexão fechada:", reason);
+        if (typeof _callbacks.onDisconnect === "function") _callbacks.onDisconnect(reason);
+        if (reason !== DisconnectReason?.loggedOut) {
+          setTimeout(boot, 2000).unref();
+        }
+      }
+    });
 
-    // 4) fallback local — nudge curto
-    if (!actions.length) {
-      actions.push({
-        kind: "text",
-        text: "Consegue me contar rapidinho sobre seu cabelo? (liso, ondulado, cacheado ou crespo) 💛",
-        meta: { stage, source: "fallback", allowedLinks: allowedLinksFromSettings() }
-      });
-      dlog("local-fallback used");
-    }
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+      const m = messages?.[0];
+      if (!m || !_onMessageHandler) return;
 
-    // 5) avanço de estágio
-    if (flowRun?.res?.next) {
-      session.stage = mapStageName(flowRun.res.next);
-      dlog("NEXT (explicit):", flowRun.res.next, "→", session.stage);
-    } else {
-      const f = flowRun?.file;
-      if (f === "greet")        session.stage = "qualificacao";
-      else if (f === "qualify") session.stage = "offer";
-      else if (f === "offer")   session.stage = "close";
-      else if (f === "close")   session.stage = "postsale";
-      dlog("NEXT (default): file=", f, "→", session.stage);
-    }
+      // ✅ IGNORAR ecos do próprio número (evita loop e "bot mudo")
+      if (m.key?.fromMe) return;
 
-    // 6) anti-flood mesma resposta
-    const lastText = actions.find(a => a.kind === "text")?.text || "";
-    if (lastText && shouldBlockSameReply(session, lastText)) { dlog("dedupe-reply"); return []; }
-    if (lastText) markReply(session, lastText);
+      const from = m.key?.remoteJid || "";
+      // ✅ Ignora status/broadcast (não é conversa de cliente)
+      if (!from || isStatusBroadcast(from)) return;
 
-    // 7) persistência + métricas
-    await saveSession(session);
-    dlog("SAVE", { stage: session.stage, actions: actions.length });
+      // Se houver participante (grupos), usamos o remoteJid mesmo; o core trata o restante.
 
-    try {
-      const { captureFromActions } = await import("./metrics/middleware.js");
-      await captureFromActions(actions, { botId: BOT_ID, jid, stage: session.stage, variant: null });
-    } catch (e) { dlog("metrics skip:", e?.message||e); }
+      const hasMedia =
+        !!m.message?.imageMessage
+        || !!m.message?.audioMessage
+        || !!m.message?.videoMessage
+        || !!m.message?.documentMessage
+        || !!m.message?.stickerMessage;
 
-    dlog("OUT", actions.map(a => ({ kind:a.kind, preview: String(a.text||a.caption||"").slice(0,60), meta:a.meta })));
-    return actions;
+      const text = extractText(m);
+
+      console.log(`[wpp/inbound] from=${from} textPreview=${String(text || "").slice(0,60)}`);
+
+      try {
+        await _onMessageHandler({ from, text, hasMedia, raw: m });
+      } catch (e) {
+        console.error("[onMessage handler]", e?.message || e);
+      }
+    });
   } finally {
-    release(jid);
+    _booting = false;
   }
 }
 
-export default { orchestrate };
+export async function init({ onReady, onQr, onDisconnect } = {}) {
+  _callbacks = { onReady, onQr, onDisconnect };
+  await boot();
+}
+
+export async function stop() {
+  try { await sock?.logout?.(); } catch {}
+  try { await sock?.end?.(); } catch {}
+  sock = null; _isReady = false; _lastQrText = null;
+}
+
+export async function forceRefreshQr() {
+  if (_isReady) return false;
+  try { await stop(); } catch {}
+  await boot();
+  return true;
+}
+
+export async function logoutAndReset() {
+  try { await stop(); } catch {}
+  try {
+    const dir = path.join(WPP_AUTH_DIR, WPP_SESSION);
+    await fs.rm(dir, { recursive: true, force: true });
+  } catch {}
+  await boot();
+  return true;
+}
+
+export async function createBaileysClient() { await init(); return { sock, isReady, getQrDataURL, adapter }; }
+export default { init, stop, isReady, getQrDataURL, adapter, forceRefreshQr, logoutAndReset };

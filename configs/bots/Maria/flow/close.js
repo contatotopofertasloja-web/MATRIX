@@ -1,11 +1,10 @@
 // configs/bots/maria/flow/close.js
-// Recebe CEP/endereço, ratifica informações e confirma a reserva.
+// Recebe CEP/endereço, ratifica informações e confirma a reserva — memória persistente.
 
-import { getState, setState } from './_state.js';
+import { recall, remember } from '../../../../src/core/memory.js';
 
 export function match(text = '') {
   const t = String(text || '').toLowerCase();
-  // heurísticas: mensagens com muitos números (CEP/endereço), palavras de endereço, etc.
   if (/\b\d{5}-?\d{3}\b/.test(t)) return true; // CEP
   if (/\b(rua|av\.?|avenida|travessa|estrada|bairro|cidade|cep|n[ºo]|numero|número)\b/i.test(t)) return true;
   if (/\b(endereco|endereço)\b/i.test(t)) return true;
@@ -13,43 +12,42 @@ export function match(text = '') {
 }
 
 function extractCEP(msg = '') {
-  const m = msg.match(/\b(\d{5})-?(\d{3})\b/);
+  const m = String(msg).match(/\b(\d{5})-?(\d{3})\b/);
   return m ? `${m[1]}-${m[2]}` : null;
 }
 
 export default async function close({ userId, text, settings }) {
-  const st = getState(userId);
   const price = settings?.product?.price_target ?? settings?.product?.promo_price ?? 150;
   const link  = settings?.product?.checkout_link ?? settings?.product?.site_url ?? '';
+  const msg = String(text || '');
 
-  const cep = extractCEP(String(text || ''));
-  if (cep && !st.cep) setState(userId, { cep });
+  const st = await recall(userId);
 
-  // Endereço bruto (sem NLP pesada, MVP)
-  const maybeAddr = String(text || '').trim();
-  if (maybeAddr && /rua|av|avenida|bairro|cidade|n[ºo]|numero|número|cep/i.test(maybeAddr)) {
-    setState(userId, { address: maybeAddr });
+  // CEP
+  const cep = extractCEP(msg);
+  if (cep && !st?.cep) await remember(userId, { cep });
+
+  // Endereço (heurística simples)
+  if (/\b(rua|av|avenida|bairro|cidade|n[ºo]|numero|número|cep)\b/i.test(msg)) {
+    await remember(userId, { address: msg.trim() });
   }
 
-  const s = getState(userId);
-  const name = s.name ? ` ${s.name}` : '';
+  const cur = await recall(userId);
+  const namePart = cur?.name ? ` ${cur.name}` : '';
 
-  // Se ainda falta CEP
-  if (!s.cep) {
-    return `Show${name}! Me envia seu **CEP** pra eu checar a disponibilidade?`;
+  if (!cur?.cep) {
+    return `Show${namePart}! Me envia seu **CEP** pra eu checar a disponibilidade?`;
+    }
+
+  if (!cur?.address) {
+    return `CEP **${cur.cep}** anotado ✅ Agora me passa seu **endereço completo** (rua, número, bairro e cidade), por favor.`;
   }
 
-  // Se falta endereço
-  if (!s.address) {
-    return `CEP **${s.cep}** anotado ✅ Agora me passa seu **endereço completo** (rua, número, bairro e cidade), por favor.`;
-  }
+  // Reserva marcada
+  await remember(userId, { reserved: true });
 
-  // Reserva (MVP: marca como reservado)
-  setState(userId, { reserved: true });
-
-  // Resposta final com ratificação
   const lines = [
-    `Prontinho${name}! 🎉 O produto foi **reservado** para entrega na região do CEP **${s.cep}**.`,
+    `Prontinho${namePart}! 🎉 O produto foi **reservado** para entrega na região do CEP **${cur.cep}**.`,
     `Pagamento é **na entrega (COD)**. Nosso entregador vai entrar em contato para **agendar** a entrega.`,
     (link ? `Se preferir, aqui está o link seguro para acompanhar o pedido: ${link}` : ''),
     `Qualquer dúvida, estou à disposição. Posso ajudar em mais algo?`
