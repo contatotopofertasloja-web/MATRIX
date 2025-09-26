@@ -6,6 +6,7 @@
 // - Outbox (Redis) com fallback para envio direto
 // - Orchestrator opcional (core neutro)
 // - WhatsApp QR/health/ops (forçar novo QR, logout+reset sessão)
+// - (+) DEBUG: /wpp/debug, /wpp/last, /_ops/clear-debug (inspeção fromMe/remoteJid/participant)
 
 import express from "express";
 import cors from "cors";
@@ -202,6 +203,22 @@ async function tryTTS(text) {
   return null;
 }
 
+// ========= DEBUG BUFFER (para /wpp/debug) =========
+const DBG_MAX = 200;
+const dbgBuf = [];
+function dbgPush(row) {
+  const item = { ts: Date.now(), ...row };
+  dbgBuf.push(item);
+  if (dbgBuf.length > DBG_MAX) dbgBuf.splice(0, dbgBuf.length - DBG_MAX);
+  return item;
+}
+function requireOps(req,res,next){
+  const token = req.get("X-Ops-Token") || (req.query?.token ?? "");
+  if (!OPS_TOKEN) return res.status(403).json({ ok:false, error:"OPS_TOKEN unset" });
+  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok:false, error:"unauthorized" });
+  next();
+}
+
 // ========= Flow runner (resiliente) =========
 function pickHandle(flowsMod) {
   if (typeof flowsMod?.__handle === "function") return flowsMod.__handle;
@@ -293,6 +310,21 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       processedIds.add(id); setTimeout(()=> processedIds.delete(id), 180000).unref();
     }
 
+    // === DEBUG CAPTURE (sempre no início)
+    try {
+      const msgTypes = raw?.message ? Object.keys(raw.message) : [];
+      dbgPush({
+        kind: "inbound",
+        fromMe: !!raw?.key?.fromMe,
+        remoteJid: raw?.key?.remoteJid || "",
+        participant: raw?.key?.participant || null,
+        pushName: raw?.pushName || null,
+        hasMedia: !!hasMedia,
+        msgTypes,
+        preview: String(text || "").slice(0, 120),
+      });
+    } catch {}
+
     // mídia de abertura (1x)
     if (!sentOpening.has(from)) {
       try {
@@ -305,7 +337,12 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     }
 
     // ECHO
-    if (ECHO_MODE && text) { await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } }); await persist(); return ""; }
+    if (ECHO_MODE && text) { 
+      await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } }); 
+      dbgPush({ kind:"outbound", to: from, preview: `Echo: ${String(text).slice(0,120)}` });
+      await persist(); 
+      return ""; 
+    }
 
     // texto / ASR
     let msg = String(text || "").trim();
@@ -323,6 +360,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     const flowRes = await runFlows({ from, text: msg, state });
     if (flowRes.reply && flowRes.reply.trim()) {
       await deliver({ to: from, text: flowRes.reply });
+      dbgPush({ kind:"outbound", to: from, preview: String(flowRes.reply).slice(0,120), via: flowRes.used });
       lastSentAt.set(from, Date.now());
       trace({ from, text_in: msg, source: flowRes.used, preview: flowRes.reply.slice(0,120) });
       await persist(); return "";
@@ -339,10 +377,12 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
             else if (a.kind === "audio" && a.buffer) await enqueueOrDirect({ to: from, kind: "audio", payload: { buffer: a.buffer, mime: a.mime || "audio/ogg" } });
             else if (a.kind === "text" && a.text) await enqueueOrDirect({ to: from, payload: { text: prepText(a.text) } });
           }
+          dbgPush({ kind:"outbound", to: from, preview: "[array de ações]", via: "orchestrator[]" });
           lastSentAt.set(from, Date.now()); await persist(); return "";
         }
         if (out && String(out).trim()) {
           await deliver({ to: from, text: out });
+          dbgPush({ kind:"outbound", to: from, preview: String(out).slice(0,120), via: "orchestrator" });
           lastSentAt.set(from, Date.now()); await persist(); return "";
         }
       } catch (e) { console.warn("[orchestrator]", e?.message || e); }
@@ -356,6 +396,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
           const { text: fb } = await callLLM({ stage: "qualify", system: built.system, prompt: built.user });
           if (fb && String(fb).trim()) {
             await deliver({ to: from, text: fb });
+            dbgPush({ kind:"outbound", to: from, preview: String(fb).slice(0,120), via: "hooks/LLM" });
             lastSentAt.set(from, Date.now()); await persist(); return "";
           }
         }
@@ -364,6 +405,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       const fb = await hooks?.fallbackText?.({ stage: "error", message: msg, settings });
       if (fb && String(fb).trim()) {
         await deliver({ to: from, text: fb });
+        dbgPush({ kind:"outbound", to: from, preview: String(fb).slice(0,120), via: "hooks/fallback" });
         lastSentAt.set(from, Date.now()); await persist(); return "";
       }
     }
@@ -380,6 +422,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       const nudge = prepText(rendered || fallback);
 
       await enqueueOrDirect({ to: from, payload: { text: nudge } });
+      dbgPush({ kind:"outbound", to: from, preview: String(nudge).slice(0,120), via: "nudge" });
       lastSentAt.set(from, Date.now()); await persist(); return "";
     }
   } catch (e) {
@@ -390,12 +433,6 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
 
 // ========= Rotas HTTP =========
 const limiter = rateLimit({ windowMs: 60000, max: 60, standardHeaders: true, legacyHeaders: false });
-function requireOps(req,res,next){
-  const token = req.get("X-Ops-Token") || (req.query?.token ?? "");
-  if (!OPS_TOKEN) return res.status(403).json({ ok:false, error:"OPS_TOKEN unset" });
-  if (String(token) !== String(OPS_TOKEN)) return res.status(401).json({ ok:false, error:"unauthorized" });
-  next();
-}
 
 app.get("/health", (_req,res)=> res.json({
   ok:true,
@@ -434,6 +471,21 @@ app.get("/wpp/qr", async (req,res)=>{
 });
 app.get("/qr", (_req,res)=> res.redirect(302, "/wpp/qr?view=img"));
 
+// === DEBUG endpoints ===
+app.get("/wpp/debug", requireOps, (req,res)=>{
+  const lim = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
+  const data = dbgBuf.slice(-lim).reverse();
+  res.json({ ok:true, total: dbgBuf.length, items: data });
+});
+app.get("/wpp/last", requireOps, (_req,res)=>{
+  const last = dbgBuf.length ? dbgBuf[dbgBuf.length - 1] : null;
+  res.json({ ok:true, last });
+});
+app.post("/_ops/clear-debug", requireOps, (_req,res)=>{
+  dbgBuf.splice(0, dbgBuf.length);
+  res.json({ ok:true, cleared:true });
+});
+
 // === OPs utilitários (multi-serviço) ===
 app.post("/_ops/force-qr", requireOps, async (_req,res)=>{
   try { const forced = await forceNewQr(); res.json({ ok:true, forced }); }
@@ -460,6 +512,7 @@ app.post("/wpp/send", limiter, async (req,res)=>{
     if (text) {
       const clean = prepText(text);
       if (!shouldDedupeOut(to, clean)) { await enqueueOrDirect({ to, payload:{ text: clean } }); markOut(to, clean); }
+      dbgPush({ kind:"outbound", to, preview: clean.slice(0,120), via: "manual-send" });
     }
     res.json({ ok:true });
   } catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); }
@@ -480,6 +533,7 @@ app.post("/webhook/payment", async (req,res)=>{
           send: async (jid, text)=> {
             const clean = prepText(text);
             if (!shouldDedupeOut(jid, clean)) { await enqueueOrDirect({ to: jid, payload:{ text: clean } }); markOut(jid, clean); }
+            dbgPush({ kind:"outbound", to: jid, preview: clean.slice(0,120), via: "webhook/payment" });
           }
         });
       } catch {}
