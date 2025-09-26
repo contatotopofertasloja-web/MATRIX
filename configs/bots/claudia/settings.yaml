@@ -1,81 +1,133 @@
-﻿bot_id: claudia
-persona_name: "Cláudia"
-language: "pt-BR"
+﻿// src/core/settings.js — loader neutro de settings por BOT_ID
+// - Sem “configs/configs”
+// - Suporte a CONFIGS_ROOT (opcional) e .yaml/.yml
+// - Normaliza models_by_stage e flags globais
 
-product:
-  name: "Progressiva Vegetal"
-  store_name: "TopOfertas"
-  price_original: 197
-  price_target: 170
-  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
-  site_url: "https://tpofertas.com/collections/cod-todos"
-  coupon_code: "TOP-AGO2025-PROGRVG-150"
-  coupon_post_payment_only: true
-  refund_days_after_delivery: 7
-  volume_ml: 500
-  delivery_sla:
-    capitals_hours: 24
-    others_hours: 72
-  how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
-    Para maior durabilidade, finalize com escova/chapinha.
-  upsell_flatiron:
-    enabled: true
-    pitch: "Se quiser, te indico uma chapinha com ótimo custo-benefício para potencializar o efeito."
-  opening_hours: "06h às 21h (escala variável)"
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import YAML from "yaml";
 
-media:
-  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const ROOT       = path.resolve(__dirname, "..", "..");
 
-messages:
-  opening:
-    - "Oi! Eu sou a Cláudia da *{{ product.store_name }}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?"
-  opening_named:
-    - "Oi, {{ profile.name }}! Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?"
-  applications_hint: "2–4 aplicações (varia com comprimento)"
-  duration_hint: "de 2 a 3 meses"
+function env(name, dflt) {
+  const v = process.env[name];
+  return v == null || v === "" ? dflt : v;
+}
 
-marketing:
-  sold_count: 40000
+export const BOT_ID = env("BOT_ID", "claudia");
 
-promotions:
-  raffle:
-    enabled: false
-    teaser: "Comprando este mês você participa do nosso sorteio de prêmios. Quer que eu te explique rapidinho?"
+// Permite customizar a raiz das configs via ENV (ex.: "/app/configs")
+const CONFIGS_ROOT = path.resolve(env("CONFIGS_ROOT", path.join(ROOT, "configs")));
 
-flags:
-  has_cod: true
-  reply_dedupe_ms: 90000        # janela do anti-rajada de SAÍDA (core/index)
-  send_opening_photo: true
-  disable_opening_hook: true
-  disable_hooks_fallback: true   # não cair em hooks se orquestrador falhar
-  flow_only: true                # usar só flows enquanto ajustamos o orchestrator
-  guardrails_strict: true
-  use_telemetry: true
-  use_thompson: true
-  allow_audio_in: true
-  allow_audio_out: false
-  small_talk_soften: true
-  useModelsByStage: true
-  fallbackToGlobal: true
-  debug_log_router: false
+// Candidatos para settings do bot
+const CANDIDATES = [
+  path.join(CONFIGS_ROOT, "bots", BOT_ID, "settings.yaml"),
+  path.join(CONFIGS_ROOT, "bots", BOT_ID, "settings.yml"),
+];
 
-models_by_stage:
-  recepcao: "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta: "gpt-5-mini"
-  objecoes: "gpt-5"
-  fechamento: "gpt-5"
-  posvenda: "gpt-5-nano"
+function readYamlIfExists(p) {
+  if (!fs.existsSync(p)) return null;
+  try {
+    const text = fs.readFileSync(p, "utf8");
+    return YAML.parse(text) || {};
+  } catch (e) {
+    console.warn("[SETTINGS] Falha ao ler YAML:", p, e?.message || e);
+    return {};
+  }
+}
 
-typing:
-  ms_per_char: 35
-  min_ms: 800
-  max_ms: 5000
+function normalizeStageKey(k) {
+  const map = new Map([
+    ["recepção","recepcao"], ["recepcao","recepcao"], ["greet","recepcao"], ["saudacao","recepcao"], ["saudação","recepcao"], ["start","recepcao"], ["hello","recepcao"],
+    ["qualificação","qualificacao"], ["qualificacao","qualificacao"], ["qualify","qualificacao"],
+    ["oferta","oferta"], ["offer","oferta"], ["apresentação","oferta"], ["apresentacao","oferta"], ["pitch","oferta"],
+    ["objeções","objecoes"], ["objecoes","objecoes"], ["objection","objecoes"], ["negociação","objecoes"], ["negociacao","objecoes"], ["objection_handling","objecoes"],
+    ["fechamento","fechamento"], ["close","fechamento"], ["checkout","fechamento"], ["closing","fechamento"],
+    ["pós-venda","posvenda"], ["posvenda","posvenda"], ["postsale","posvenda"], ["pos_venda","posvenda"], ["pós_venda","posvenda"],
+  ]);
+  const s = String(k || "").trim().toLowerCase();
+  return map.get(s) || s;
+}
+function normalizeModelsByStage(map) {
+  const out = {};
+  if (map && typeof map === "object") {
+    for (const [k, v] of Object.entries(map)) out[normalizeStageKey(k)] = String(v || "").trim();
+  }
+  return out;
+}
 
-guardrails:
-  allowed_links:
-    - "{{ product.checkout_link }}"
-    - "{{ product.site_url }}"
-    # redundância segura: literal do checkout para evitar corte se o template não expandir
-    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+// Defaults “razão social” do core (neutro)
+const GLOBAL_MODELS = {
+  recepcao:     env("LLM_MODEL_RECEPCAO",     "gpt-5-nano"),
+  qualificacao: env("LLM_MODEL_QUALIFICACAO", "gpt-5-nano"),
+  oferta:       env("LLM_MODEL_OFERTA",       "gpt-5-mini"),
+  objecoes:     env("LLM_MODEL_OBJECOES",     "gpt-5"),
+  fechamento:   env("LLM_MODEL_FECHAMENTO",   "gpt-5-mini"),
+  posvenda:     env("LLM_MODEL_POSVENDA",     "gpt-5-nano"),
+};
+
+const FLAGS = {
+  useModelsByStage:   env("USE_MODELS_BY_STAGE", "true") === "true",
+  fallbackToGlobal:   env("FALLBACK_TO_GLOBAL_MODELS", "true") === "true",
+  force_core_prompts: env("PROMPTS_FORCE_CORE", "") === "1",
+};
+
+const AUDIO = {
+  asrProvider: env("ASR_PROVIDER", "openai"),
+  asrModel:    env("ASR_MODEL",    "whisper-1"),
+  ttsProvider: env("TTS_PROVIDER", "none"),
+  ttsVoice:    env("TTS_VOICE",    "alloy"),
+};
+
+const LLM_DEFAULTS = {
+  provider:    env("LLM_PROVIDER", "openai"),
+  temperature: Number(env("LLM_TEMPERATURE", "0.5")),
+  timeouts: { defaultMs: Number(env("LLM_TIMEOUT_MS", "25000")) },
+  maxTokens: {
+    nano: Number(env("LLM_MAX_TOKENS_NANO", "512")),
+    mini: Number(env("LLM_MAX_TOKENS_MINI", "1024")),
+    full: Number(env("LLM_MAX_TOKENS_FULL", "2048")),
+  },
+  retries: Number(env("LLM_RETRIES", "2")),
+};
+
+// Carrega primeiro caminho que existir
+let loaded = null;
+let usedPath = null;
+for (const p of CANDIDATES) {
+  const obj = readYamlIfExists(p);
+  if (obj) { loaded = obj; usedPath = p; break; }
+}
+
+if (loaded) {
+  if (loaded.models_by_stage) loaded.models_by_stage = normalizeModelsByStage(loaded.models_by_stage);
+  console.log(`[SETTINGS] Carregado: ${usedPath}`);
+} else {
+  console.warn(`[SETTINGS] Arquivo não encontrado. Esperado em uma destas rotas:`);
+  for (const p of CANDIDATES) console.warn(" -", p);
+  loaded = {};
+}
+
+// Defaults mínimos
+const fileDefaults = {
+  bot_id: BOT_ID,
+  persona_name: "Cláudia",
+  product: { price_original: 197, price_target: 170, checkout_link: "", coupon_code: "" },
+  models_by_stage: {},
+  flags: { has_cod: true, send_opening_photo: true },
+};
+
+export const settings = {
+  botId: BOT_ID,
+  ...fileDefaults,
+  ...loaded,
+  llm: LLM_DEFAULTS,
+  flags: { ...fileDefaults.flags, ...(loaded.flags || {}), ...FLAGS },
+  audio: AUDIO,
+  global_models: GLOBAL_MODELS,
+};
+
+export default settings;

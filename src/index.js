@@ -1,6 +1,6 @@
 ﻿// src/index.js — Matrix IA 2.0 (compacto + blindagens + multi-serviço)
 // - Gating de hooks (core neutro; cada bot pluga só sua pasta)
-// - Runner resiliente de flows (__handle/handle | obj.run | default function)
+// - Runner resiliente de flows (__handle/handle | obj.run | default function | pickFlow)
 // - Sanitização de links com whitelist (settings.guardrails.allowed_links)
 // - Anti-rajada de saída (reply_dedupe_ms)
 // - Outbox (Redis) com fallback para envio direto
@@ -90,10 +90,9 @@ await outbox.start(async (job) => {
 });
 
 // ========= Flows / Hooks =========
-const flows = await loadFlows(BOT_ID);
-const hooks = await getBotHooks();
-// Gating global de hooks (só liga se disable_hooks_fallback === false)
-const HOOKS_ON = settings?.flags?.disable_hooks_fallback === false;
+const flows = await loadFlows(BOT_ID);           // carrega flows da pasta da BOT atual
+const hooks = await getBotHooks();               // hooks opcionais da BOT
+const HOOKS_ON = settings?.flags?.disable_hooks_fallback === false; // gating global de hooks
 
 // ========= Trace leve =========
 const TRACE_MAX = 800;
@@ -231,16 +230,52 @@ function pickHandle(flowsMod) {
 function pickUnit(flowsMod, intent) {
   return flowsMod?.[intent] || flowsMod?.greet || flowsMod?.default || null;
 }
+
+// ⚠️ NOVO: suporta pickFlow() do módulo da bot (se existir). Mantém compat com run/handle/fn.
 async function runFlows({ from, text, state }) {
   const wantAudio = false;
   let used = "none";
   let reply = "";
 
+  // 0) pickFlow → decide handler dinamicamente (string, função, ou objeto com run)
+  if (typeof flows?.pickFlow === "function") {
+    try {
+      const selected = await flows.pickFlow(text, settings);
+      let unit = null;
+      if (typeof selected === "string")      unit = flows?.[selected] || flows?.default || null;
+      else if (typeof selected === "function") unit = selected;
+      else if (selected && typeof selected.run === "function") unit = selected;
+
+      if (unit) {
+        if (typeof unit.run === "function") {
+          await unit.run({
+            jid: from, userId: from, text, settings, state,
+            send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
+          });
+          used = `flow/pickFlow.run`;
+          return { used, reply: "" };
+        }
+        if (typeof unit === "function") {
+          const out = await unit({
+            jid: from, userId: from, text, settings, state,
+            send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
+          });
+          reply = out?.reply || (typeof out === "string" ? out : "");
+          used = `flow/pickFlow.fn`;
+          return { used, reply };
+        }
+      }
+    } catch (e) {
+      console.warn("[flow.pickFlow]", e?.message || e);
+    }
+  }
+
+  // 1) handle/__handle
   const handle = pickHandle(flows);
   if (handle) {
     try {
       const out = await handle({
-        jid: from, text, settings, state,
+        jid: from, userId: from, text, settings, state,
         send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
       });
       reply = out?.reply || "";
@@ -251,13 +286,14 @@ async function runFlows({ from, text, state }) {
     }
   }
 
+  // 2) intent → obj.run / função default
   const intent = intentOf(text);
   let unit = pickUnit(flows, intent);
 
   if (unit && typeof unit.run === "function") {
     try {
       await unit.run({
-        jid: from, text, settings, state,
+        jid: from, userId: from, text, settings, state,
         send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
       });
       used = `flow/${unit.name || intent}`;
@@ -270,7 +306,7 @@ async function runFlows({ from, text, state }) {
   if (typeof unit === "function") {
     try {
       const out = await unit({
-        jid: from, text, settings, state,
+        jid: from, userId: from, text, settings, state,
         send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
       });
       reply = out?.reply || "";
@@ -382,7 +418,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     const last = lastSentAt.get(from) || 0;
     if (Date.now() - last < GAP_PER_TO) { await persist(); return ""; }
 
-    // 1) FLOW (resiliente)
+    // 1) FLOW (resiliente) — agora com pickFlow + alias userId
     const flowRes = await runFlows({ from, text: msg, state });
     if (flowRes.reply && flowRes.reply.trim()) {
       await deliver({ to: from, text: flowRes.reply });
