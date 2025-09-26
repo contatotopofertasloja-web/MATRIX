@@ -1,47 +1,37 @@
 // configs/bots/maria/flow/offer.js
-// Etapa: oferta. Informa preço e oferece link, respeitando guardrails.
+// Confirma interesse, guarda sinal e pede CEP primeiro (disponibilidade por região).
 
-import { settings } from '../../../../src/core/settings.js';
-
-export const id = 'offer';
-export const stage = 'oferta';
-
-function clampPrice(p) {
-  const min = Number(settings?.guardrails?.price_min ?? 0);
-  const max = Number(settings?.guardrails?.price_max ?? Number.POSITIVE_INFINITY);
-  return Math.max(min || 0, Math.min(max || p, p));
-}
+import { getState, setState } from './_state.js';
 
 export function match(text = '') {
   const t = String(text).toLowerCase();
-  return /(preco|preço|valor|quanto custa|link|checkout)/i.test(t);
+  return /\b(preco|preço|valor|oferta|promo|quero|tenho\s*interesse|sim|ok|vamos|bora)\b/i.test(t);
 }
 
-export async function run(ctx = {}) {
-  const target = Number(settings?.product?.price_target ?? 170);
-  const price = clampPrice(target);
-  const link = settings?.product?.checkout_link || '';
+export default async function offer({ userId, text, settings }) {
+  const st = getState(userId);
+  const name = st.name ? ` ${st.name}` : '';
+  const price = settings?.product?.price_target ?? settings?.product?.promo_price ?? 150;
 
-  const offerTpls = settings?.messages?.offer_templates || [
-    `Consigo por R$${price} 🛒 Te mando o link do checkout?`,
-  ];
-
-  // Se cliente já pedir link explicitamente, já manda junto
-  const askedLink = /(link|checkout|comprar|fechar)/i.test(String(ctx?.text || ''));
-
-  if (askedLink && link) {
-    return {
-      text: `Promo: R$${price}. Aqui está o link seguro: ${link}`,
-      nextStage: 'fechamento',
-      actions: ['send_price', 'send_link'],
-    };
+  // Se a pessoa respondeu "sim/ok/quero" marcamos interesse
+  if (/\b(sim|quero|pode|ok|vamos|bora|tenho\s*interesse)\b/i.test(String(text))) {
+    setState(userId, { interested: true });
   }
 
-  return {
-    text: offerTpls[0].replace('{{price_target}}', price),
-    nextStage: 'fechamento',
-    actions: ['send_price'],
-  };
-}
+  // Se ainda não temos nome (chegou direto aqui), peça de forma objetiva
+  if (!st.name) {
+    return `Pra eu te atender certinho, como você prefere que eu te chame?`;
+  }
 
-export default { id, stage, match, run };
+  // Pergunta dados de forma fracionada: começamos pelo CEP (disponibilidade)
+  if (!st.cep) {
+    return `Perfeito${name}! 🙌 Antes de finalizar, me envia seu **CEP** pra eu confirmar a disponibilidade na sua região?`;
+  }
+
+  // Se já tem CEP mas faltam dados, encaminha para fechamento
+  return [
+    `Legal${name}! Promo de **R$ ${price}** garantida.`,
+    `Me passa seu **endereço completo** (rua, número, bairro e cidade) para eu reservar?`,
+    `Lembro: o pagamento é **na entrega (COD)**.`
+  ].join(' ');
+}

@@ -1,5 +1,5 @@
 // configs/bots/maria/prompts/index.js
-// Constrói o prompt da Maria por etapa, com guardrails leves.
+// Builder de prompt da Maria: simples, direto, sem “assistente virtual”.
 
 const STAGE_ALIASES = {
   recepcao:     ['recepcao', 'recepção', 'greet', 'hello', 'saudacao', 'saudação', 'start'],
@@ -18,48 +18,78 @@ function normalizeStage(stage) {
   return 'recepcao';
 }
 
-export function buildPrompt({ stage, message }) {
+/**
+ * buildPrompt({ stage, message, settings, faq })
+ * - stage: etapa presumida (ex.: 'greet', 'offer', 'close', etc.)
+ * - message: texto do usuário
+ * - settings: (opcional) objeto carregado do settings.yaml da Maria
+ * - faq: (opcional) conteúdo já parseado do faq.yaml (se você quiser injetar no system)
+ */
+export function buildPrompt({ stage, message, settings, faq } = {}) {
   const st = normalizeStage(stage);
   const user = String(message || '');
 
-  const COMMON_RULES = [
-    'Você é Maria, vendedora simpática e objetiva. PT-BR.',
-    'Um único produto. Não invente preços, links ou políticas.',
-    'Se pedirem preço → informe com clareza e ofereça link.',
-    'Se perguntarem como usar → responda em até 3 linhas, simples.',
-    'Se houver objeção → responda com segurança, sem prometer o que não temos.',
-    'Use frases curtas, humanizadas, sem parágrafos longos.',
-  ];
+  // Extratos úteis do settings (não quebra se vier vazio)
+  const price  = settings?.product?.price_target ?? settings?.product?.price ?? '';
+  const link   = settings?.product?.checkout_link ?? settings?.product?.site_url ?? '';
+  const hasCOD = settings?.flags?.has_cod ?? true;
 
+  // Guardrails essenciais para a Maria
+  const COMMON_RULES = [
+    // Identidade & tom
+    'Você é Maria, vendedora simpática e objetiva. PT-BR. Nunca diga que é uma “assistente virtual”.',
+    'Responda sempre em frases curtas e diretas, como conversa de WhatsApp. Evite blocos grandes.',
+    // Conteúdo permitido
+    'Fale apenas sobre o produto atual e políticas existentes. Não invente preços, descontos, prazos ou links.',
+    // Oferta & checkout
+    'Quando o cliente perguntar preço/valor, informe o preço do settings e ofereça o link seguro do checkout.',
+    hasCOD ? 'Explique que o pagamento é na entrega (COD) quando for pertinente.' : '',
+    // Modo de uso
+    'Se pedirem “como usar”, responda em até 3 linhas, simples e passo-a-passo.',
+    // Acessibilidade (cliente com baixa instrução)
+    'Ao perguntar sobre o cabelo, ofereça opções objetivas: liso, ondulado, cacheado ou crespo.',
+    // Postura
+    'Se houver objeção, responda com segurança e convide educadamente para seguir ao checkout.',
+  ].filter(Boolean);
+
+  // Regras por etapa — ultra curtas
   let stageRules = [];
   if (st === 'recepcao') {
     stageRules = [
-      'Objetivo: entender rapidamente o tipo de cabelo (liso/ondulado/cacheado/crespo).',
-      'Faça 1 pergunta clara; se o cliente já deu a info, avance.',
+      'Pergunte de forma objetiva o tipo de cabelo (liso/ondulado/cacheado/crespo); se o cliente já disse, avance para a recomendação.',
     ];
   } else if (st === 'qualificacao') {
     stageRules = [
-      'Aprofunde com 1–2 perguntas: frizz/volume? já fez progressiva? resultado desejado?',
+      'Faça no máximo 2 perguntas relevantes (ex.: frizz ou volume; já fez progressiva; resultado desejado).',
     ];
   } else if (st === 'oferta') {
     stageRules = [
-      'Apresente o preço-alvo e ofereça o link. Não crie desconto novo.',
+      'Informe o preço e ofereça o link do checkout em 1 frase.',
+      'Não crie descontos novos: use apenas o que existe no settings.',
     ];
   } else if (st === 'objecoes') {
     stageRules = [
-      'Responda objetivamente à objeção e convide para seguir ao checkout.',
+      'Responda a dúvida/objeção de forma objetiva e convide para finalizar o pedido.',
     ];
   } else if (st === 'fechamento') {
     stageRules = [
-      'Instrua pagamento na entrega (COD) e reforce que o link é seguro.',
+      'Finalize com o link do checkout e lembre (de forma curta) sobre pagamento na entrega.',
     ];
   } else if (st === 'posvenda') {
     stageRules = [
-      'Agradeça pagamento, confirme acompanhamento de entrega e ofereça ajuda.',
+      'Agradeça o pagamento, informe acompanhamento da entrega e ofereça ajuda no uso.',
     ];
   }
 
-  const system = [...COMMON_RULES, ...stageRules].join(' ');
+  // Dicas dinâmicas (se o settings vier)
+  const DYNAMIC_HINTS = [];
+  if (price) DYNAMIC_HINTS.push(`Preço do settings: R$ ${price} (não invente outros valores).`);
+  if (link)  DYNAMIC_HINTS.push(`Link oficial do checkout/site: ${link} (use apenas este).`);
+
+  // (Opcional) Você pode injetar alguns itens do FAQ como contexto curto
+  // Ex.: primeiras 2 Q&As mais comuns. Aqui mantemos enxuto para não poluir o prompt.
+
+  const system = [...COMMON_RULES, ...stageRules, ...DYNAMIC_HINTS].join(' ');
   return { system, user };
 }
 

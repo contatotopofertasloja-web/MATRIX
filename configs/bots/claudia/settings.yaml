@@ -49,7 +49,7 @@ flags:
   send_opening_photo: true
   disable_opening_hook: true
   disable_hooks_fallback: true   # <<< DESLIGADO por padrão (antes estava false)
-  flow_only: false
+  flow_only: true
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true

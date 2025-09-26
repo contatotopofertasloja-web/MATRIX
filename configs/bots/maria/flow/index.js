@@ -1,45 +1,33 @@
 // configs/bots/maria/flow/index.js
+// Router mínimo da Maria: greet → offer → close, com fallback simples.
+// Prioriza fechamento quando detectar CEP/endereço.
+
 import greet from './greet.js';
-import qualify from './qualify.js';
-import offer from './offer.js';
-import close from './close.js';
-import postsale from './postsale.js';
-import faq from './faq.js';
+import offer, { match as matchOffer } from './offer.js';
+import close, { match as matchClose } from './close.js';
+import { getState, setState } from './_state.js';
 
-function stripAccents(s = '') {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+function norm(s = '') {
+  return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
-function clean(text = '') {
-  return stripAccents(String(text || '').toLowerCase()).replace(/\s+/g, ' ').trim();
-}
-
-const RX = {
-  postsale: /\b(paguei|pagamento\s*feito|pago|comprovante|finalizei|finalizado)\b/i,
-  close:    /\b(checkout|finalizar|finaliza(r)?|fechar|fechamento|compra(r)?|carrinho|manda\s*o\s*link|quero\s*comprar)\b/i,
-  offer:    /\b(preco|preço|quanto\s*custa|valor|desconto|promo(cao|ção)|oferta)\b/i,
-  greet:    /\b(oi|ol[áa]|ola|bom\s*dia|boa\s*tarde|boa\s*noite|hey|fala|eai|e\s*a[ií])\b/i,
-};
-
-export const ordered = [greet, qualify, offer, close, postsale, faq];
 
 export function pickFlow(text = '', settings = {}) {
-  const t = clean(text);
+  const t = norm(text);
 
-  if (RX.postsale.test(t)) return postsale;
-  if (RX.close.test(t))    return close;
-  if (RX.offer.test(t))    return offer;
+  // 1) Se mensagem parece endereço/CEP → close
+  if (matchClose(text)) return close;
 
-  if (typeof faq.match === 'function' && faq.match(text, settings)) return faq;
+  // 2) Sinais de oferta/interesse → offer
+  if (matchOffer(text)) return offer;
 
-  if (typeof qualify.match === 'function' && qualify.match(text)) return qualify;
-  if (RX.greet.test(t) || t.length <= 12) return greet;
-
-  for (const f of [qualify, faq, offer, close, postsale, greet]) {
-    try {
-      if (typeof f?.match === 'function' && f.match(text, settings)) return f;
-    } catch {}
-  }
+  // 3) Fallback para greet (coleta nome/tipo e dispara oferta curta)
   return greet;
 }
 
-export default ordered;
+// Compat com loader: exportar objeto de handlers
+export default {
+  greet,
+  offer,
+  close,
+  pickFlow,
+};
