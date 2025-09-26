@@ -1,12 +1,23 @@
 // configs/bots/claudia/flow/greet.js
 // Saudação idempotente com variante curta quando já sabemos o nome.
-// ⚠️ A foto de abertura é enviada pelo flow/index.js (ensureOpeningPhotoOnce).
+// A foto de abertura é enviada uma vez pelo index.
 
 import {
   ensureProfile, tagReply, normalizeSettings,
   callUser, filledSummary
 } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
+
+// renderização simples de templates {{ path.to.value }}
+function get(obj, path) {
+  return String(path||"").split(".").reduce((acc,k)=> (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
+}
+function expandTpl(str, ctx) {
+  return String(str||"").replace(/{{\s*([^}]+)\s*}}/g, (_,p) => {
+    const v = get(ctx, p.trim());
+    return v == null ? "" : String(v);
+  });
+}
 
 function guessName(t = "") {
   const s = String(t || "").trim();
@@ -22,39 +33,34 @@ export default async function greet(ctx = {}) {
   state.turns = (state.turns || 0) + 1;
   ensureProfile(state);
 
-  // captura nome
+  // captura/recupera nome
   const maybe = guessName(text);
   if (maybe) {
     state.profile.name = maybe;
-    try {
-      await remember(jid, { profile: state.profile });
-    } catch (e) {
-      console.warn("[greet.remember]", e?.message);
-    }
+    try { await remember(jid, { profile: state.profile }); } catch (e) { console.warn("[greet.remember]", e?.message); }
   } else {
     try {
       const saved = await recall(jid);
-      if (saved?.profile?.name && !state.profile.name) {
-        state.profile.name = saved.profile.name;
-      }
-    } catch (e) {
-      console.warn("[greet.recall]", e?.message);
-    }
+      if (saved?.profile?.name && !state.profile.name) state.profile.name = saved.profile.name;
+    } catch (e) { console.warn("[greet.recall]", e?.message); }
   }
 
   const name = callUser(state);
   const haveAny = filledSummary(state);
   const rat = haveAny.length ? `Anotei: ${haveAny.join(" · ")}. ` : "";
 
-  const openingNamed =
+  const openingNamedTpl =
     S.messages?.opening_named?.[0] ||
-    `${rat}Oi, ${name}! Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
+    `${rat}Oi, {{ profile.name }}! Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
 
-  const openingGeneric =
+  const openingTpl =
     S.messages?.opening?.[0] ||
-    `Oi! Eu sou a Cláudia da *${S.product.store_name}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
+    `Oi! Eu sou a Cláudia da *{{ product.store_name }}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?`;
 
-  const reply = name ? openingNamed : openingGeneric;
+  const ctxTpl = { profile: state.profile || {}, product: S.product || {} };
+  const reply = name
+    ? expandTpl(openingNamedTpl, ctxTpl)
+    : expandTpl(openingTpl, ctxTpl);
 
   return tagReply(S, reply, "flow/greet");
 }

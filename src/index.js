@@ -365,10 +365,21 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       }
     }
 
-    // 4) Nudge curto (evita silêncio)
-    const nudge = (settings?.messages?.opening_named?.[0] || settings?.messages?.opening?.[0] || "Consegue me dizer rapidinho: seu cabelo é liso, ondulado, cacheado ou crespo?");
-    await enqueueOrDirect({ to: from, payload: { text: nudge } });
-    lastSentAt.set(from, Date.now()); await persist(); return "";
+    // 4) Nudge curto (evita silêncio) ——— PATCH 🔧
+    {
+      // usa opening_named SOMENTE se já houver nome; renderiza placeholders antes de enviar
+      const haveName = !!(state?.profile?.name);
+      const ctx = { profile: state?.profile || {}, product: settings?.product || {} };
+      const tpl = haveName
+        ? (settings?.messages?.opening_named?.[0] || "")
+        : (settings?.messages?.opening?.[0] || "");
+      const rendered = tpl ? expandTpl(tpl, ctx) : "";
+      const fallback = "Consegue me dizer rapidinho: seu cabelo é liso, ondulado, cacheado ou crespo?";
+      const nudge = prepText(rendered || fallback);
+
+      await enqueueOrDirect({ to: from, payload: { text: nudge } });
+      lastSentAt.set(from, Date.now()); await persist(); return "";
+    }
   } catch (e) {
     console.error("[onMessage]", e);
     return "";
