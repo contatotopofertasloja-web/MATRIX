@@ -6,6 +6,7 @@
 // - Faz polish seguro do texto
 // - Persiste contexto de sessão (best-effort)
 // - Retorna uma lista de "actions" para o index/router enviar
+// - (Opcional) Captura métricas se src/core/metrics/middleware.js existir
 
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
@@ -22,6 +23,15 @@ try {
   // segue sem persistência explícita
 }
 
+// métricas opcionais (no-op se ausente)
+let captureFromActions = async (_ctx, _actions) => {};
+try {
+  const mm = await import('./metrics/middleware.js');
+  captureFromActions = mm?.captureFromActions || captureFromActions;
+} catch {
+  // sem métricas, tudo ok
+}
+
 // prompts específicos por bot (opcional)
 let buildPrompt = null;
 try {
@@ -33,29 +43,39 @@ try {
 
 const DEFAULT_FALLBACK = 'Dei uma travadinha aqui, pode repetir? 💕';
 
+// mapeia intents para chaves canônicas do core/llm (compat com settings)
 function stageFromIntent(intention) {
-  // mapeia intents para chaves canônicas do core/llm (compat com settings)
   const t = String(intention || '').toLowerCase();
-  if (/qualify|qualifica/.test(t))   return 'qualificacao';
-  if (/offer|oferta|pitch/.test(t))  return 'oferta';
-  if (/objection|obj(e|é)coes?/.test(t)) return 'objecoes';
-  if (/close|checkout|fechamento/.test(t)) return 'fechamento';
-  if (/post|after|p[oó]s-?venda|pos-?venda/.test(t)) return 'posvenda';
-  if (/delivery|entrega/.test(t))    return 'entrega';
-  if (/payment|pagamento/.test(t))   return 'pagamento';
+
+  if (/qualify|qualifica/.test(t))                        return 'qualificacao';
+  if (/offer|oferta|pitch/.test(t))                       return 'oferta';
+  if (/objection|obj(e|é)coes?/.test(t))                  return 'objecoes';
+  if (/close|checkout|fechamento/.test(t))                return 'fechamento';
+  if (/post|after|p[oó]s-?venda|pos-?venda/.test(t))      return 'posvenda';
+
+  // intents auxiliares (não obrigatórias, mas úteis p/ prompt)
+  if (/delivery|entrega/.test(t))                         return 'entrega';
+  if (/payment|pagamento/.test(t))                        return 'pagamento';
   if (/features|modo|como usar|caracter[ií]sticas/.test(t)) return 'features';
+
   return 'recepcao';
 }
 
-// API principal
-// ctx esperado: { session, from, text, meta }
-// retorna: { actions: [ { type:'text'|'image', to, text|url|caption } ], stage, intent }
+/**
+ * API principal
+ * @param {Object} ctx
+ *   - session: obj mutável de sessão (opcional)
+ *   - from: jid/telefone do cliente
+ *   - text: mensagem de entrada
+ *   - meta: { variant?, stageHint? ... } metadados do pipeline
+ * @returns {Promise<{ actions: Array, stage: string, intent: string }>}
+ */
 export async function orchestrate(ctx = {}) {
   const { session = {}, from = '', text = '', meta = {} } = ctx;
 
   // 1) Intenção e estágio
   const intent = intentOf(text || '');
-  const stage  = stageFromIntent(intent);
+  const stage  = stageFromIntent(meta?.stageHint || intent);
 
   // 2) Carrega flows da bot (dinâmico; neutro no core)
   let flows = {};
@@ -68,29 +88,41 @@ export async function orchestrate(ctx = {}) {
   // 3) Tenta flow dedicado do estágio primeiro
   let reply = '';
   const flowHandler =
-    flows?.[stage] ||
-    flows?.[intent?.toLowerCase?.()] ||
-    null;
+    (flows && (flows[stage] || flows[intent?.toLowerCase?.()] || flows?.handle)) || null;
 
   try {
     if (typeof flowHandler === 'function') {
       const out = await flowHandler({
         userId: from,
         text: String(text || ''),
-        context: { session, meta, stage, intent },
+        context: { session, meta, stage, intent, settings },
+        send: (_to, _msg) => {
+          // flows podem implementar envio direto; aqui mantemos neutro
+        },
       });
       if (typeof out === 'string') reply = out;
+      else if (out && typeof out === 'object' && typeof out.reply === 'string') reply = out.reply;
     }
 
     // 4) Se o flow não resolveu, usa prompts/LLM
     if (!reply) {
       if (typeof buildPrompt === 'function') {
-        const { system, user } = buildPrompt({
-          stage,
-          intent,
-          message: String(text || ''),
-          settings,
-        }) || {};
+        let system = '';
+        let user   = '';
+        try {
+          const built = buildPrompt({
+            stage,
+            intent,
+            message: String(text || ''),
+            settings,
+            meta,
+          }) || {};
+          system = built.system || '';
+          user   = built.user   || '';
+        } catch (bpErr) {
+          console.warn('[orchestrator] buildPrompt falhou:', bpErr?.message || bpErr);
+        }
+
         const llm = await callLLM({ stage, system, prompt: user });
         reply = llm?.text || '';
       } else {
@@ -112,25 +144,48 @@ export async function orchestrate(ctx = {}) {
   }
 
   // 5) Polish seguro (nunca deixa quebrar)
-  const polished = polishReply(reply, { stage, settings });
+  let polished = '';
+  try {
+    polished = polishReply(reply, { stage, settings });
+  } catch (polErr) {
+    console.warn('[orchestrator] polishReply falhou:', polErr?.message || polErr);
+    polished = reply || '';
+  }
 
-  // 6) Constrói actions (sempre 1 bolha no core; se quiser multi-bolha, flows podem quebrar)
-  const lines = consolidateBubbles(polished ? [polished] : [DEFAULT_FALLBACK]);
-  const actions = lines.map((line) => ({
+  // 6) Constrói actions (sempre 1+ bolhas; flows podem quebrar em múltiplas)
+  const bubbles = consolidateBubbles(polished ? [polished] : [DEFAULT_FALLBACK]);
+  const actions = bubbles.map((line) => ({
     type: 'text',
     to: from,
     text: line,
-    meta: { stage, intent, botId: BOT_ID },
+    meta: {
+      stage,
+      intent,
+      botId: BOT_ID,
+      // preserva metadados úteis (ex.: A/B)
+      variant: meta?.variant || null,
+    },
   }));
 
   // 7) Persiste estado (best-effort)
   try {
-    session.lastStage = stage;
+    session.lastStage  = stage;
     session.lastIntent = intent;
-    session.updatedAt = Date.now();
+    session.updatedAt  = Date.now();
     await saveSession(session);
   } catch (e) {
     console.warn('[orchestrator] saveSession falhou:', e?.message || e);
+  }
+
+  // 8) (Opcional) Captura métricas (no-op se middleware ausente)
+  try {
+    await captureFromActions(
+      { botId: BOT_ID, from, stage, intent, variant: meta?.variant || null },
+      actions
+    );
+  } catch (e) {
+    // nunca quebra o fluxo por causa de métricas
+    console.warn('[orchestrator] metrics.captureFromActions falhou:', e?.message || e);
   }
 
   return { actions, stage, intent };

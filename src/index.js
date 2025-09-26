@@ -4,7 +4,7 @@
 // - Sanitização de links com whitelist (settings.guardrails.allowed_links)
 // - Anti-rajada de saída (reply_dedupe_ms)
 // - Outbox (Redis) com fallback para envio direto
-// - Orchestrator opcional (core neutro)
+// - Orchestrator plugado (core neutro) ✅
 // - WhatsApp QR/health/ops (forçar novo QR, logout+reset sessão)
 // - (+) DEBUG: /wpp/debug, /wpp/last, /_ops/clear-debug (inspeção fromMe/remoteJid/participant)
 
@@ -296,6 +296,31 @@ async function deliver({ to, text, wantAudio=false }) {
   markOut(to, clean);
 }
 
+// ========= (NOVO) Roteia uma action do orquestrador → envio/outbox =========
+async function routeAction(a, toFallback) {
+  if (!a) return;
+  // normaliza campos (core usa {type:'text'}; alguns módulos usam {kind:'text'})
+  const kind = (a.kind || a.type || "text").toLowerCase();
+  const to   = String(a.to || toFallback || "").trim();
+  if (!to) return;
+
+  if (kind === "image" && a.url) {
+    await enqueueOrDirect({ to, kind: "image", payload: { url: a.url, caption: a.caption || "" } });
+    return;
+  }
+  if (kind === "audio" && (a.buffer || a.payload?.buffer)) {
+    const buf = a.buffer || a.payload?.buffer;
+    const mime = a.mime || a.payload?.mime || "audio/ogg";
+    await enqueueOrDirect({ to, kind: "audio", payload: { buffer: buf, mime } });
+    return;
+  }
+  const txt = a.text || a.payload?.text || "";
+  if (txt && !shouldDedupeOut(to, txt)) {
+    await enqueueOrDirect({ to, kind: "text", payload: { text: prepText(txt) } });
+    markOut(to, txt);
+  }
+}
+
 // ========= Handler principal (onMessage) =========
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!INTAKE_ON) return "";
@@ -366,23 +391,20 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await persist(); return "";
     }
 
-    // 2) ORCHESTRATOR
+    // 2) ORCHESTRATOR — ✅ agora usando { actions } do core
     const flowOnly = !!settings?.flags?.flow_only;
     if (!flowOnly) {
       try {
-        const out = await orchestrate({ jid: from, text: msg, stageHint: intentOf(msg), botSettings: settings });
-        if (Array.isArray(out) && out.length) {
-          for (const a of out) {
-            if (a.kind === "image" && a.url) await enqueueOrDirect({ to: from, kind: "image", payload: { url: a.url, caption: a.caption || "" } });
-            else if (a.kind === "audio" && a.buffer) await enqueueOrDirect({ to: from, kind: "audio", payload: { buffer: a.buffer, mime: a.mime || "audio/ogg" } });
-            else if (a.kind === "text" && a.text) await enqueueOrDirect({ to: from, payload: { text: prepText(a.text) } });
-          }
-          dbgPush({ kind:"outbound", to: from, preview: "[array de ações]", via: "orchestrator[]" });
-          lastSentAt.set(from, Date.now()); await persist(); return "";
-        }
-        if (out && String(out).trim()) {
-          await deliver({ to: from, text: out });
-          dbgPush({ kind:"outbound", to: from, preview: String(out).slice(0,120), via: "orchestrator" });
+        const { actions = [] } = await orchestrate({
+          session: state,
+          from,
+          text: msg,
+          meta: { stageHint: intentOf(msg), settings }
+        });
+
+        if (Array.isArray(actions) && actions.length) {
+          for (const a of actions) await routeAction(a, from);
+          dbgPush({ kind:"outbound", to: from, preview: "[actions]", via: "orchestrator[]" });
           lastSentAt.set(from, Date.now()); await persist(); return "";
         }
       } catch (e) { console.warn("[orchestrator]", e?.message || e); }
