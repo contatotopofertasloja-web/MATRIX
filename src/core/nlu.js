@@ -25,7 +25,10 @@ const RX = {
   duration: /\b(dura|tempo|mes(es)?)\b/i,
   volume: /\b(\d+\s*ml|ml|mili|tamanho\s+do\s+frasco|frasco)/i,
   howToUse: /\b(como\s+usa(r)?|modo\s+de\s+uso|aplicar)\b/i,
-  objections_price: /\b(caro|car[oa]|muito\s+alto|poderia\s+baixar)\b/i,
+
+  // ⬇️ Ampliada: cobre "tá caro", "esta caro", "tá muito caro", "valor alto" etc.
+  objections_price: /\b((t[áa]\s*)?(muito\s*)?car[oa]|est[áa]\s*car[oa]|preç|valor\s*alto)\b/i,
+
   audio: /\b(áudio|audio|mandar\s+voz|posso\s+enviar\s+áudio)/i,
   negativity: /\b(burra|idiota|merd|porra|droga|vac[aai]|ot[aá]ria?|incompetente)\b/i,
   thanks: /\b(obrigad[oa]|valeu|gratid[aã]o)\b/i,
@@ -54,7 +57,7 @@ const INTENTS = {
   THANKS: "thanks",
   GOODBYE: "goodbye",
   ADDRESS_DATA: "address_data",
-  FAQ: "faq",            // <— novo intent para o faq.yaml
+  FAQ: "faq",
   SMALL_TALK: "small_talk",
 };
 
@@ -77,7 +80,7 @@ const ORDER = [
   ["ADDRESS_DATA", "address"],
   ["THANKS", "thanks"],
   ["GOODBYE", "goodbye"],
-  // FAQ dinâmico entra aqui, antes de GREETING/SMALL_TALK (se houver YAML)
+  ["OBJECTION_PRICE", "objections_price"], // ← garante que objeção de preço seja capturada cedo
   ["FAQ", "__faq_dyn"],
   ["GREETING", "greeting"],
 ];
@@ -86,7 +89,6 @@ const ORDER = [
 let _faqLoaded = false;
 
 function findFaqYamlPath(botId) {
-  // suporta duas localizações usuais
   const candidates = [
     path.join(process.cwd(), "configs", "bots", botId, "prompts", "faq.yaml"),
     path.join(process.cwd(), "configs", "bots", botId, "faq.yaml"),
@@ -96,17 +98,13 @@ function findFaqYamlPath(botId) {
   }
   return null;
 }
-
 function toRegexSafe(s) {
-  // cria regex tolerante a acentos e variações simples
-  // substitui espaços por \s+, escapa pontuação básica
   const esc = String(s || "")
     .trim()
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     .replace(/\s+/g, "\\s+");
   return new RegExp(esc, "i");
 }
-
 async function loadFaqTriggersIfAny() {
   if (_faqLoaded) return;
   const botId = BOT_ID || "default";
@@ -114,11 +112,7 @@ async function loadFaqTriggersIfAny() {
   if (!file) { _faqLoaded = true; return; }
 
   let YAML = null;
-  try {
-    // dependência opcional
-    YAML = (await import("yaml")).default;
-  } catch { /* sem yaml, seguimos sem FAQ dinâmico */ }
-
+  try { YAML = (await import("yaml")).default; } catch {}
   if (!YAML) { _faqLoaded = true; return; }
 
   try {
@@ -126,24 +120,19 @@ async function loadFaqTriggersIfAny() {
     const doc = YAML.parse(raw);
     const cats = doc && doc.categories;
     const rxList = [];
-
     if (cats && typeof cats === "object") {
       for (const cat of Object.values(cats)) {
         const triggers = Array.isArray(cat?.triggers) ? cat.triggers : [];
-        for (const t of triggers) {
-          try { rxList.push(toRegexSafe(t)); } catch {}
-        }
+        for (const t of triggers) { try { rxList.push(toRegexSafe(t)); } catch {} }
       }
     }
     if (rxList.length) {
-      RX.__faq_dyn = rxList; // guarda como lista de regex
+      RX.__faq_dyn = rxList;
       if (DEBUG) console.log(`[NLU] FAQ YAML carregado (${rxList.length} gatilhos) de ${file}`);
     }
   } catch (e) {
     if (DEBUG) console.warn("[NLU] Falha ao ler faq.yaml:", e?.message || e);
-  } finally {
-    _faqLoaded = true;
-  }
+  } finally { _faqLoaded = true; }
 }
 
 // ========================= API pública =========================
@@ -151,7 +140,6 @@ export async function classify(text = "") {
   const t = String(text || "").trim();
   if (!t) return { intent: INTENTS.SMALL_TALK, score: 0.1, entities: {} };
 
-  // tenta carregar os triggers do YAML na primeira chamada
   if (!_faqLoaded) { await loadFaqTriggersIfAny(); }
 
   for (const [label, rxKey] of ORDER) {
@@ -176,15 +164,10 @@ export async function classify(text = "") {
     }
   }
 
-  // fallback
   if (DEBUG) console.log(`[NLU] fallback -> SMALL_TALK phrase="${t.slice(0,60)}"`);
   return { intent: INTENTS.SMALL_TALK, score: 0.3, entities: {} };
 }
 
-/**
- * Sugestões de transição por intent (opcional).
- * O orquestrador pode usar isso como hint.
- */
 export function suggestNextStage(intent) {
   switch (intent) {
     case INTENTS.GREETING: return "recepcao";
@@ -200,14 +183,14 @@ export function suggestNextStage(intent) {
     case INTENTS.DURATION:
     case INTENTS.VOLUME:
     case INTENTS.HOW_TO_USE:
-    case INTENTS.FAQ: // <— FAQ leva pra oferta/explicação curta
+    case INTENTS.FAQ:
       return "oferta";
     case INTENTS.OBJECTION_PRICE: return "objecoes";
     case INTENTS.AUDIO: return "oferta";
     case INTENTS.ADDRESS_DATA: return "fechamento";
     case INTENTS.THANKS:
     case INTENTS.GOODBYE: return "posvenda";
-    case INTENTS.NEGATIVITY: return "oferta"; // responder neutro e redirecionar
+    case INTENTS.NEGATIVITY: return "oferta";
     default: return "qualificacao";
   }
 }

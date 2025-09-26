@@ -46,6 +46,7 @@ categories:
       - "rende quantas aplicacoes"
       - "quantas vezes consigo usar"
       - "quanto dura o frasco"
+      - "quantas vezes rende"
     answers:
       - "O frasco de *{{product.volume_ml}}ml* rende de 3 até 10 aplicações (depende do volume e comprimento). O alinhamento costuma durar *2–3 meses* com os cuidados certos. (faq.yaml)"
 
@@ -56,6 +57,7 @@ categories:
       - "alergia"
       - "formol"
       - "mecha"
+      - "tenho alergia"
     answers:
       - "A *{{product.name}}* é livre de formol adicionado. Recomendamos sempre fazer um *teste de mecha* — especialmente se o couro cabeludo for sensível. (faq.yaml)"
 
@@ -65,9 +67,12 @@ categories:
       - "como usar"
       - "aplicar"
       - "aplicacao"
+      - "como aplica"
+      - "isso funciona mesmo"
     answers:
       - "É simples: lave, aplique e deixe agir ~40min; enxágue. Para maior durabilidade, finalize com escova/chapinha (opcional). (faq.yaml)"
       - "Modo rápido: aplique, deixe agir 40 min, enxágue e finalize como preferir. (faq.yaml)"
+      - "Sim 💚 funciona de verdade! O efeito de alinhamento/liso dura até 3 meses com manutenção adequada. (faq.yaml)"
 
   entrega:
     triggers:
@@ -75,5 +80,6 @@ categories:
       - "quanto tempo chega"
       - "demora"
       - "quando recebo"
+      - "quando chega"
     answers:
       - "Entrega rápida: **{{product.delivery_sla.capitals_hours}}h** em capitais e **{{product.delivery_sla.others_hours}}h** demais regiões. (faq.yaml)"
