@@ -7,6 +7,8 @@ product:
   store_name: "TopOfertas"
   price_original: 197
   price_target: 170
+  price_promo_day: 150        # ← adicionado para evitar undefined no offer
+  promo_day_quota: 5
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
@@ -44,13 +46,13 @@ promotions:
     teaser: "Comprando este mês você participa do nosso sorteio de prêmios. Quer que eu te explique rapidinho?"
 
 flags:
-  debug_labels: false
+  debug_labels: true            # ← para visualizar [flow/<stage>]
   has_cod: true
-  reply_dedupe_ms: 90000        # janela do anti-rajada de SAÍDA (core/index)
+  reply_dedupe_ms: 90000        # janela anti-rajada (saída)
   send_opening_photo: true
   disable_opening_hook: true
-  disable_hooks_fallback: true   # não cair em hooks se orquestrador falhar
-  flow_only: true                # usar só flows enquanto ajustamos o orchestrator
+  disable_hooks_fallback: true  # não cair em hooks se orquestrador falhar
+  flow_only: true               # usar só flows enquanto ajustamos
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
@@ -78,5 +80,4 @@ guardrails:
   allowed_links:
     - "{{ product.checkout_link }}"
     - "{{ product.site_url }}"
-    # redundância segura: literal do checkout para evitar corte se o template não expandir
     - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"

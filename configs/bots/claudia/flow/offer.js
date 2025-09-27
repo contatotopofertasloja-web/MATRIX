@@ -1,10 +1,25 @@
 // configs/bots/claudia/flow/offer.js
-// Oferta completa: preços (197/170/150), cobertura COD por CEP+Cidade, coleta de dados, recap, (opcional) webhook Logzz,
-// e fallback Coinzz (R$170) com checkout 100% seguro + frete grátis.
-// Mantém carimbos via meta.tag (visíveis se settings.flags.debug_labels=true no index).
+// Oferta completa: preços (197/170/150), cobertura COD por CEP+Cidade, coleta,
+// recap, (opcional) webhook Logzz e fallback Coinzz (R$170).
+// Sempre retorna meta.tag para os carimbos.
 
 import { normalizeSettings, tagReply } from "./_state.js";
 import { recall, remember } from "../../../../src/core/memory.js";
+
+// ===================== Helpers de meta/tag e defaults =====================
+function TAG(text, id) { return { reply: tagReply({}, text, id), meta: { tag: id } }; }
+
+const SAFE = (S) => ({
+  original: Number(S?.product?.price_original ?? 197),
+  target: Number(S?.product?.price_target ?? 170),
+  promoDay: Number(S?.product?.price_promo_day ?? 150),
+  quota: Number(S?.product?.promo_day_quota ?? 5),
+  capH: Number(S?.product?.delivery_sla?.capitals_hours ?? 24),
+  othH: Number(S?.product?.delivery_sla?.others_hours ?? 72),
+  prepaidPrice: Number(S?.fallback?.prepaid_price ?? S?.product?.price_target ?? 170),
+  partner: S?.fallback?.prepaid_partner || "Coinzz",
+  link: S?.fallback?.prepaid_link || S?.product?.checkout_link || ""
+});
 
 // ===================== Regex e utilitários =====================
 const RX = {
@@ -15,7 +30,6 @@ const RX = {
   OBJECTION_SAFETY: /\b(anvisa|seguran[çc]a|golpe|fraude|registro)\b/i,
   OBJECTION_PRICE: /\b(caro|caro demais|muito caro|car[ao])\b/i,
 
-  // Parsers
   PHONE: /(\+?\d{2}\s*)?(\(?\d{2}\)?\s*)?\d{4,5}[-\s.]?\d{4}/,
   CEP: /(\d{5})[-\s.]?(\d{3})/,
   NUMBER: /\b(n[úu]mero|nº|no\.?|num\.?)\s*[:\-]?\s*(\d{1,6})\b|\b(\d{1,6})(?:\s*(?:,|\-|\/)?\s*(?:casa|res|resid|n[úu]mero))?/i,
@@ -58,7 +72,6 @@ function firstName(full = "") {
   const p = String(full).trim().split(/\s+/);
   return p[0] || "";
 }
-function tag(text, tagId) { return tagReply({}, text, tagId); }
 
 // ===================== Cobertura (arquivo JSON) =====================
 let _coverageCache = null;
@@ -165,6 +178,8 @@ async function postToLogzz(S, payload = {}) {
 export default async function offer(ctx = {}) {
   const { jid = "", state = {}, text = "", settings = {} } = ctx;
   const S = normalizeSettings(settings);
+  const P = SAFE(S);
+
   const t = String(text || "").trim();
   const lower = t.toLowerCase();
 
@@ -175,29 +190,31 @@ export default async function offer(ctx = {}) {
   if (RX.OBJECTION_SAFETY.test(lower)) {
     const msg = `Pode ficar tranquila 💚 Nossa Progressiva Vegetal é **100% livre de formol**, regularizada e segura, com mais de **${S?.marketing?.sold_count || 40000}** clientes satisfeitas. ` +
                 `E o melhor: o pagamento é **somente na entrega (COD)**, direto ao entregador. Aceitamos **cartões** e até **${S?.payments?.installments_max || 12}x** *(juros dependem da bandeira)*.`;
-    return tag(msg, "flow/offer#objection_safety");
+    return TAG(msg, "flow/offer#objection_safety");
   }
   if (RX.OBJECTION_PRICE.test(lower)) {
     const msg = `Entendo 👍 Comparando com salão, sai bem mais em conta e você faz em casa no seu tempo.\n` +
-                `Hoje de **R$ ${S.product.price_original},00** por **R$ ${S.product.price_target},00** — e tenho **${S.product.promo_day_quota || 5} unidades do dia a R$ ${S.product.price_promo_day},00**.\n` +
-                `Quer que eu verifique o **R$ ${S.product.price_promo_day},00** no seu endereço com **pagamento só na entrega**?`;
-    return tag(msg, "flow/offer#objection_price");
+                `Hoje de **R$ ${P.original},00** por **R$ ${P.target},00** — e tenho **${P.quota} unidades do dia a R$ ${P.promoDay},00**.\n` +
+                `Quer que eu verifique o **R$ ${P.promoDay},00** no seu endereço com **pagamento só na entrega**?`;
+    return TAG(msg, "flow/offer#objection_price");
   }
 
   // 1) Preço / Link
   if (RX.PRICE.test(lower)) {
     state.stage = FLOW.ASK_CEP_CITY;
-    const msg = `Ótima pergunta 💚\n` +
-      `- Preço cheio: **R$ ${S.product.price_original},00**\n` +
-      `- Promo do dia: **R$ ${S.product.price_target},00**\n` +
-      `- E temos **${S.product.promo_day_quota || 5} unidades relâmpago por R$ ${S.product.price_promo_day},00** 🎉\n\n` +
-      `Quer que eu verifique se a condição de **R$ ${S.product.price_promo_day},00** está liberada pra você, com **pagamento só na entrega**? ` +
-      `A entrega é rápida: **até ${S.product.delivery_sla.capitals_hours}h nas capitais** e **até ${S.product.delivery_sla.others_hours}h nas demais localidades**.`;
-    return tag(msg, "flow/offer#price");
+    const msg = `Ótima pergunta 💚
+- Preço cheio: **R$ ${P.original},00**
+- Promo do dia: **R$ ${P.target},00**
+- E temos **${P.quota} unidades relâmpago por R$ ${P.promoDay},00** 🎉
+
+Quer que eu verifique se a condição de **R$ ${P.promoDay},00** está liberada pra você, com **pagamento só na entrega**?
+A entrega é rápida: **até ${P.capH}h nas capitais** e **até ${P.othH}h nas demais localidades**.`;
+    return TAG(msg, "flow/offer#price");
   }
   if (RX.LINK.test(lower)) {
-    const msg = `Aqui está o link seguro para finalizar pelo site oficial:\n${S.product.checkout_link}`;
-    return tag(msg, "flow/offer#link");
+    const msg = `Aqui está o link seguro para finalizar pelo site oficial:
+${S?.product?.checkout_link || P.link}`;
+    return TAG(msg, "flow/offer#link");
   }
 
   // 2) Caminho R$150 → pedir CEP + Cidade
@@ -206,11 +223,11 @@ export default async function offer(ctx = {}) {
 
     if (!ck.cep) {
       state.stage = FLOW.ASK_CEP_CITY;
-      return tag(`Pode me enviar o seu **CEP** (ex.: 00000-000) e a **cidade**? · [Precisamos checar a cobertura do COD R$ ${S.product.price_promo_day}]`, "flow/offer#ask_cep_city");
+      return TAG(`Pode me enviar o seu **CEP** (ex.: 00000-000) e a **cidade**? · [Precisamos checar a cobertura do COD R$ ${P.promoDay}]`, "flow/offer#ask_cep_city");
     }
     if (!ck.city) {
       state.stage = FLOW.ASK_CEP_CITY;
-      return tag(`Obrigada! Agora me diga a **cidade** (ex.: Brasília/DF).`, "flow/offer#ask_city");
+      return TAG(`Obrigada! Agora me diga a **cidade** (ex.: Brasília/DF).`, "flow/offer#ask_city");
     }
 
     // Checar cobertura
@@ -219,12 +236,12 @@ export default async function offer(ctx = {}) {
     ck.coverage = res;
 
     if (res.ok) {
-      ck.price = Number(S.product.price_promo_day || 150);
+      ck.price = P.promoDay;
       ck.method = "COD";
       state.stage = FLOW.COLLECT_NAME;
-      return tag(
-        `Perfeito! Esse endereço tem **R$ ${ck.price},00 no pagamento na entrega (COD)** ✅\n` +
-        `Pra registrar, me confirma seu **nome completo**, por favor.`,
+      return TAG(
+        `Perfeito! Esse endereço tem **R$ ${ck.price},00 no pagamento na entrega (COD)** ✅
+Pra registrar, me confirma seu **nome completo**, por favor.`,
         "flow/offer#coverage_ok"
       );
     }
@@ -233,21 +250,19 @@ export default async function offer(ctx = {}) {
     state.stage = FLOW.COVERAGE_BLOCKED;
 
     if (res.reason === "city_not_found" || res.reason === "city_policy_deny") {
-      return tag(
-        `Infelizmente ainda não conseguimos atender a sua região com o pagamento na entrega 😕\n` +
-        `Mas não te deixo na mão 💚 Você pode receber pelos **Correios com frete grátis**, valor de **R$ ${S?.fallback?.prepaid_price || 170},00**, ` +
-        `via checkout **100% seguro** no nosso parceiro **${S?.fallback?.prepaid_partner || "Coinzz"}**.\n` +
-        `Quer que eu te envie o **link oficial** pra finalizar?`,
+      return TAG(
+        `Infelizmente ainda não conseguimos atender a sua região com o pagamento na entrega 😕
+Mas não te deixo na mão 💚 Você pode receber pelos **Correios com frete grátis**, valor de **R$ ${P.prepaidPrice},00**, via checkout **100% seguro** no nosso parceiro **${P.partner}**.
+Quer que eu te envie o **link oficial** pra finalizar?`,
         "flow/offer#city_not_covered"
       );
     }
 
     // Cidade atendida mas CEP bloqueado
-    const fp = Number(S?.fallback?.prepaid_price || S.product.price_target || 170);
-    return tag(
-      `Para esse endereço o **pagamento na entrega (COD)** não está disponível 😕\n` +
-      `Mas consigo te atender por **R$ ${fp},00** com **frete grátis pelos Correios**, via parceiro **${S?.fallback?.prepaid_partner || "Coinzz"}** (checkout 100% seguro).\n` +
-      `Quer que eu te envie o **link oficial** agora pra finalizar?`,
+    return TAG(
+      `Para esse endereço o **pagamento na entrega (COD)** não está disponível 😕
+Mas consigo te atender por **R$ ${P.prepaidPrice},00** com **frete grátis pelos Correios**, via parceiro **${P.partner}** (checkout 100% seguro).
+Quer que eu te envie o **link oficial** agora pra finalizar?`,
       "flow/offer#coverage_blocked"
     );
   }
@@ -255,21 +270,19 @@ export default async function offer(ctx = {}) {
   // 3) Fallback Coinzz quando coverage bloqueado
   if (state.stage === FLOW.COVERAGE_BLOCKED) {
     if (RX.YES.test(lower)) {
-      const link = S?.fallback?.prepaid_link || S.product.checkout_link;
-      const price = Number(S?.fallback?.prepaid_price || S.product.price_target || 170);
       state.stage = null;
-      return tag(
-        `Aqui está: ${link}\n` +
-        `Checkout **100% seguro** pelo ${S?.fallback?.prepaid_partner || "parceiro"}, valor **R$ ${price},00**, com **frete grátis pelos Correios**.`,
+      return TAG(
+        `Aqui está: ${P.link}
+Checkout **100% seguro** pelo ${P.partner}, valor **R$ ${P.prepaidPrice},00**, com **frete grátis pelos Correios**.`,
         "flow/offer#prepaid_link"
       );
     }
     if (RX.NO.test(lower)) {
       state.stage = null;
-      return tag(`Sem problema 💚 Posso te mandar mais detalhes do produto ou retomamos quando preferir.`, "flow/offer#prepaid_declined");
+      return TAG(`Sem problema 💚 Posso te mandar mais detalhes do produto ou retomamos quando preferir.`, "flow/offer#prepaid_declined");
     }
-    return tag(
-      `Quer receber o **link oficial** (${S?.fallback?.prepaid_partner || "Coinzz"}) para finalizar por **R$ ${S?.fallback?.prepaid_price || S.product.price_target},00** com **frete grátis pelos Correios**?`,
+    return TAG(
+      `Quer receber o **link oficial** (${P.partner}) para finalizar por **R$ ${P.prepaidPrice},00** com **frete grátis pelos Correios**?`,
       "flow/offer#prepaid_offer_repeat"
     );
   }
@@ -280,7 +293,7 @@ export default async function offer(ctx = {}) {
   if (state.stage === FLOW.COLLECT_NAME || want("name", state)) {
     if (!ck.name) {
       state.stage = FLOW.COLLECT_NAME;
-      return tag(`Perfeito 💚 Me diga seu **nome completo**, por favor.`, "flow/offer#address_name");
+      return TAG(`Perfeito 💚 Me diga seu **nome completo**, por favor.`, "flow/offer#address_name");
     }
     state.stage = FLOW.COLLECT_PHONE;
   }
@@ -288,7 +301,7 @@ export default async function offer(ctx = {}) {
   if (state.stage === FLOW.COLLECT_PHONE || want("phone", state)) {
     if (!ck.phone) {
       state.stage = FLOW.COLLECT_PHONE;
-      return tag(`Obrigado, ${firstName(ck.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
+      return TAG(`Obrigado, ${firstName(ck.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
     }
     state.stage = FLOW.COLLECT_NUMBER;
   }
@@ -296,7 +309,7 @@ export default async function offer(ctx = {}) {
   if (state.stage === FLOW.COLLECT_NUMBER || want("number", state)) {
     if (!ck.number) {
       state.stage = FLOW.COLLECT_NUMBER;
-      return tag(`Anotado. Qual o **número da residência**?`, "flow/offer#address_number");
+      return TAG(`Anotado. Qual o **número da residência**?`, "flow/offer#address_number");
     }
     state.stage = FLOW.COLLECT_APTREF;
   }
@@ -304,7 +317,7 @@ export default async function offer(ctx = {}) {
   if (state.stage === FLOW.COLLECT_APTREF || want("aptref", state)) {
     if (!ck.apt && !ck.reference) {
       state.stage = FLOW.COLLECT_APTREF;
-      return tag(`Tem **apartamento** (bloco/apto)? E algum **ponto de referência** que ajude o entregador? (Se não tiver, pode dizer "não")`, "flow/offer#address_aptref");
+      return TAG(`Tem **apartamento** (bloco/apto)? E algum **ponto de referência** que ajude o entregador? (Se não tiver, pode dizer "não")`, "flow/offer#address_aptref");
     }
     state.stage = FLOW.RECAP;
   }
@@ -313,10 +326,11 @@ export default async function offer(ctx = {}) {
   if (state.stage === FLOW.RECAP || want("recap", state)) {
     const rec = recapText(ck);
     state.stage = FLOW.CONFIRMING;
-    return tag(
-      `Perfeito${ck.name ? `, ${firstName(ck.name)}` : ""}! Só pra garantir que anotei **tudo certinho**:\n` +
-      `${rec}\n\n` +
-      `Está **correto**? Se quiser ajustar algo, me diga o que mudar (ex.: “trocar telefone” ou “sem referência”).`,
+    return TAG(
+      `Perfeito${ck.name ? `, ${firstName(ck.name)}` : ""}! Só pra garantir que anotei **tudo certinho**:
+${rec}
+
+Está **correto**? Se quiser ajustar algo, me diga o que mudar (ex.: “trocar telefone” ou “sem referência”).`,
       "flow/offer#recap"
     );
   }
@@ -330,7 +344,7 @@ export default async function offer(ctx = {}) {
         const payload = {
           customer: { name: ck.name, phone: ck.phone },
           address: { cep: ck.cep, city: ck.city, number: ck.number, apt: ck.apt, reference: ck.reference },
-          value: ck.price || Number(S.product.price_promo_day || 150),
+          value: ck.price || P.promoDay,
           payment: "COD",
           notes: "Promo do dia via WhatsApp",
           jid
@@ -339,43 +353,46 @@ export default async function offer(ctx = {}) {
         logzzOk = !!res?.ok;
       }
 
-      const prazoCap = S.product?.delivery_sla?.capitals_hours || 24;
-      const prazoOut = S.product?.delivery_sla?.others_hours || 72;
+      const prazoCap = P.capH;
+      const prazoOut = P.othH;
       const parcelas = S?.payments?.installments_max || 12;
 
       state.stage = null;
-      return tag(
-        (logzzOk
-          ? `Pedido **registrado** 🎉 `
-          : `Tudo certo com seus dados 💚 `) +
-        `${ck.name ? `${firstName(ck.name)}, ` : ""}o **entregador** vai te chamar no WhatsApp para combinar o melhor horário.\n\n` +
-        `• **Pagamento só na entrega (COD)** — direto com o entregador\n` +
-        `• Aceitamos **cartões** e parcelamos em até **${parcelas}x** *(eventual juros depende da bandeira)*\n` +
-        `• Prazo de entrega: **até ${prazoCap}h** em capitais e **até ${prazoOut}h** nas demais localidades\n\n` +
-        `Qualquer dúvida, fico aqui com você 💚`,
+      return TAG(
+        (logzzOk ? `Pedido **registrado** 🎉 ` : `Tudo certo com seus dados 💚 `) +
+        `${ck.name ? `${firstName(ck.name)}, ` : ""}o **entregador** vai te chamar no WhatsApp para combinar o melhor horário.
+
+• **Pagamento só na entrega (COD)** — direto com o entregador
+• Aceitamos **cartões** e parcelamos em até **${parcelas}x** *(eventual juros depende da bandeira)*
+• Prazo de entrega: **até ${prazoCap}h** em capitais e **até ${prazoOut}h** nas demais localidades
+
+Qualquer dúvida, fico aqui com você 💚`,
         "flow/offer#confirmed_cod"
       );
     }
 
     if (RX.NO.test(lower)) {
       state.stage = FLOW.RECAP;
-      return tag(`Claro! Me diga o que precisa ajustar (ex.: “corrigir telefone”, “nº da casa é 152”, “sem referência”).`, "flow/offer#recap_edit");
+      return TAG(`Claro! Me diga o que precisa ajustar (ex.: “corrigir telefone”, “nº da casa é 152”, “sem referência”).`, "flow/offer#recap_edit");
     }
 
     const rec = recapText(ck);
-    return tag(
-      `Confere pra mim:\n${rec}\n\nPosso **registrar agora** e pedir pro entregador te chamar no WhatsApp?`,
+    return TAG(
+      `Confere pra mim:
+${rec}
+
+Posso **registrar agora** e pedir pro entregador te chamar no WhatsApp?`,
       "flow/offer#recap_repeat"
     );
   }
 
   // 5) Fallback genérico
   state.stage = FLOW.ASK_CEP_CITY;
-  return tag(
-    `A Progressiva Vegetal serve para **todos os tipos de cabelo** e **hidrata profundamente enquanto alinha**.\n` +
-    `Hoje temos: **R$ ${S.product.price_original},00**, **R$ ${S.product.price_target},00**, e **R$ ${S.product.price_promo_day},00** (COD mediante cobertura).\n` +
-    `Quer que eu verifique o **R$ ${S.product.price_promo_day},00** com **pagamento só na entrega**?\n` +
-    `Entregas em **até ${S.product.delivery_sla.capitals_hours}h** nas capitais e **até ${S.product.delivery_sla.others_hours}h** nas demais.`,
+  return TAG(
+    `A Progressiva Vegetal serve para **todos os tipos de cabelo** e **hidrata profundamente enquanto alinha**.
+Hoje temos: **R$ ${P.original},00**, **R$ ${P.target},00**, e **R$ ${P.promoDay},00** (COD mediante cobertura).
+Quer que eu verifique o **R$ ${P.promoDay},00** com **pagamento só na entrega**?
+Entregas em **até ${P.capH}h** nas capitais e **até ${P.othH}h** nas demais.`,
     "flow/offer#fallback"
   );
 }
