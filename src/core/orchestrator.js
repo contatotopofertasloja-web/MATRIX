@@ -1,12 +1,8 @@
 // src/core/orchestrator.js
-// Orquestrador neutro do funil (greet → qualify → offer → objection → close → post_sale)
-// - Escolhe estágio (intent)
-// - Gera prompt (prompts da bot) OU chama flow dedicado (se existir)
-// - Chama LLM (core/llm.js) com compat 5.x ⇄ 4.x
-// - Faz polish seguro do texto
-// - Persiste contexto de sessão (best-effort)
-// - Retorna uma lista de "actions" para o index/router enviar
-// - (Opcional) Captura métricas se src/core/metrics/middleware.js existir
+// Orquestrador neutro + amigável a flows, sem depender de flags ausentes.
+// - Se flags.flow_only === true → usa só flows (sem LLM).
+// - Carimbo [flow/...] visível por padrão (assume debug_labels=true se não existir).
+// - Mantém tudo em try/catch e não quebra se métricas/outbox estiverem indisponíveis.
 
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
@@ -14,79 +10,76 @@ import { settings, BOT_ID } from './settings.js';
 import { loadFlows } from './flow-loader.js';
 import { polishReply, consolidateBubbles } from '../utils/polish.js';
 
-// persistência opcional (no-op se ausente)
+// persistência (no-op se ausente)
 let saveSession = async (_s) => {};
 try {
   const mem = await import('./memory.js');
   saveSession = mem?.saveSession || saveSession;
-} catch {
-  // segue sem persistência explícita
-}
+} catch {}
 
-// métricas opcionais (no-op se ausente)
+// métricas (no-op se ausente)
 let captureFromActions = async (_ctx, _actions) => {};
 try {
   const mm = await import('./metrics/middleware.js');
   captureFromActions = mm?.captureFromActions || captureFromActions;
-} catch {
-  // sem métricas, tudo ok
-}
+} catch {}
 
 // prompts específicos por bot (opcional)
 let buildPrompt = null;
 try {
   const mod = await import(`../../configs/bots/${BOT_ID}/prompts/index.js`);
   buildPrompt = mod?.buildPrompt || mod?.default || null;
-} catch {
-  // se não existir, usamos flows ou fallback direto ao LLM com prompt simples
-}
+} catch {}
 
 const DEFAULT_FALLBACK = 'Dei uma travadinha aqui, pode repetir? 💕';
 
-// mapeia intents para chaves canônicas do core/llm (compat com settings)
 function stageFromIntent(intention) {
   const t = String(intention || '').toLowerCase();
-
   if (/qualify|qualifica/.test(t))                        return 'qualificacao';
   if (/offer|oferta|pitch/.test(t))                       return 'oferta';
   if (/objection|obj(e|é)coes?/.test(t))                  return 'objecoes';
   if (/close|checkout|fechamento/.test(t))                return 'fechamento';
   if (/post|after|p[oó]s-?venda|pos-?venda/.test(t))      return 'posvenda';
-
-  // intents auxiliares (não obrigatórias, mas úteis p/ prompt)
   if (/delivery|entrega/.test(t))                         return 'entrega';
   if (/payment|pagamento/.test(t))                        return 'pagamento';
   if (/features|modo|como usar|caracter[ií]sticas/.test(t)) return 'features';
-
   return 'recepcao';
 }
 
-/**
- * API principal
- * @param {Object} ctx
- *   - session: obj mutável de sessão (opcional)
- *   - from: jid/telefone do cliente
- *   - text: mensagem de entrada
- *   - meta: { variant?, stageHint? ... } metadados do pipeline
- * @returns {Promise<{ actions: Array, stage: string, intent: string }>}
- */
+// injeta carimbo visível quando debugLabels estiver ativo
+function withVisibleTag(text, tag, debugLabels) {
+  const has = /\[[a-z]+\/.+?\]/i.test(String(text || ''));
+  if (!debugLabels || !tag || has) return text;
+  return `[${tag}] ${text}`;
+}
+
 export async function orchestrate(ctx = {}) {
   const { session = {}, from = '', text = '', meta = {} } = ctx;
+
+  const flowOnly   = !!settings?.flags?.flow_only;
+  // NOVO: se flags.debug_labels não existir, assume TRUE (útil p/ testes)
+  const debugLabels =
+    (settings?.flags && Object.prototype.hasOwnProperty.call(settings.flags, 'debug_labels'))
+      ? !!settings.flags.debug_labels
+      : true;
 
   // 1) Intenção e estágio
   const intent = intentOf(text || '');
   const stage  = stageFromIntent(meta?.stageHint || intent);
 
-  // 2) Carrega flows da bot (dinâmico; neutro no core)
+  // 2) Carrega flows
   let flows = {};
   try {
-    flows = await loadFlows(BOT_ID); // { greet, qualify, offer, ... } se existirem
+    flows = await loadFlows(BOT_ID);
   } catch (e) {
     console.warn('[orchestrator] loadFlows falhou:', e?.message || e);
   }
 
-  // 3) Tenta flow dedicado do estágio primeiro
+  // 3) Executa flow do estágio
   let reply = '';
+  let replyMeta = null;
+  let actionsFromFlow = null;
+
   const flowHandler =
     (flows && (flows[stage] || flows[intent?.toLowerCase?.()] || flows?.handle)) || null;
 
@@ -95,79 +88,95 @@ export async function orchestrate(ctx = {}) {
       const out = await flowHandler({
         userId: from,
         text: String(text || ''),
+        settings,
         context: { session, meta, stage, intent, settings },
-        send: (_to, _msg) => {
-          // flows podem implementar envio direto; aqui mantemos neutro
-        },
+        send: (_to, _msg) => {}, // neutro
       });
-      if (typeof out === 'string') reply = out;
-      else if (out && typeof out === 'object' && typeof out.reply === 'string') reply = out.reply;
-    }
 
-    // 4) Se o flow não resolveu, usa prompts/LLM
-    if (!reply) {
-      if (typeof buildPrompt === 'function') {
-        let system = '';
-        let user   = '';
-        try {
-          const built = buildPrompt({
-            stage,
-            intent,
-            message: String(text || ''),
-            settings,
-            meta,
-          }) || {};
-          system = built.system || '';
-          user   = built.user   || '';
-        } catch (bpErr) {
-          console.warn('[orchestrator] buildPrompt falhou:', bpErr?.message || bpErr);
-        }
-
-        const llm = await callLLM({ stage, system, prompt: user });
-        reply = llm?.text || '';
-      } else {
-        // prompt mínimo (fallback) — neutro
-        const system =
-          'Você é uma atendente humana de vendas, simpática, objetiva e respeitosa. Nunca diga que é uma IA ou assistente virtual. Use português do Brasil.';
-        const prompt =
-          `Mensagem do cliente: "${String(text || '').trim()}". ` +
-          `Responda de forma breve e útil, no tom de consultora de vendas. ` +
-          `Se aplicável, peça um dos dados do funil (tipo de cabelo: liso/ondulado/cacheado/crespo; ou CEP; ou interesse).`;
-        const llm = await callLLM({ stage, system, prompt });
-        reply = llm?.text || '';
+      if (out && Array.isArray(out.actions)) {
+        actionsFromFlow = out.actions;
+      } else if (out && typeof out === 'object') {
+        if (typeof out.reply === 'string') reply = out.reply;
+        if (out.meta) replyMeta = out.meta;
+      } else if (typeof out === 'string') {
+        reply = out;
       }
     }
   } catch (err) {
-    // loga de forma clara para debug (sem vazar para cliente)
-    console.error('[orchestrator][llm/flow][error]', err?.status || '', err?.message || err);
-    reply = '';
+    console.error('[orchestrator][flow][error]', err?.message || err);
   }
 
-  // 5) Polish seguro (nunca deixa quebrar)
+  // 4) Fallback: LLM (se permitido) ou silêncio controlado
+  if (!reply && !actionsFromFlow) {
+    if (!flowOnly) {
+      try {
+        if (typeof buildPrompt === 'function') {
+          const built = (buildPrompt({
+            stage, intent, message: String(text || ''), settings, meta,
+          }) || {});
+          const llm = await callLLM({ stage, system: built.system || '', prompt: built.user || '' });
+          reply = llm?.text || '';
+        } else {
+          const system =
+            'Você é uma atendente humana de vendas, simpática, objetiva e respeitosa. Nunca diga que é uma IA. PT-BR.';
+          const prompt =
+            `Mensagem do cliente: "${String(text || '').trim()}". ` +
+            `Responda de forma breve e útil, no tom de consultora de vendas. ` +
+            `Se aplicável, peça um dado do funil (CEP+cidade; interesse; etc.).`;
+          const llm = await callLLM({ stage, system, prompt });
+          reply = llm?.text || '';
+        }
+      } catch (err) {
+        console.error('[orchestrator][llm][error]', err?.message || err);
+      }
+    } else {
+      reply = '';
+    }
+  }
+
+  // 5) Polish
   let polished = '';
   try {
-    polished = polishReply(reply, { stage, settings });
+    polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply;
   } catch (polErr) {
     console.warn('[orchestrator] polishReply falhou:', polErr?.message || polErr);
     polished = reply || '';
   }
 
-  // 6) Constrói actions (sempre 1+ bolhas; flows podem quebrar em múltiplas)
-  const bubbles = consolidateBubbles(polished ? [polished] : [DEFAULT_FALLBACK]);
-  const actions = bubbles.map((line) => ({
-    type: 'text',
-    to: from,
-    text: line,
-    meta: {
-      stage,
-      intent,
-      botId: BOT_ID,
-      // preserva metadados úteis (ex.: A/B)
-      variant: meta?.variant || null,
-    },
-  }));
+  // 6) Actions
+  let actions = [];
 
-  // 7) Persiste estado (best-effort)
+  if (actionsFromFlow && actionsFromFlow.length) {
+    actions = actionsFromFlow.map((a) => ({
+      type: a?.type || 'text',
+      to: a?.to || from,
+      text: withVisibleTag(a?.text || '', a?.meta?.tag || replyMeta?.tag, debugLabels),
+      meta: {
+        ...(a?.meta || {}),
+        stage,
+        intent,
+        botId: BOT_ID,
+      },
+    }));
+  } else {
+    const textOut = polished || DEFAULT_FALLBACK;
+    const bubbles = consolidateBubbles([
+      withVisibleTag(textOut, replyMeta?.tag, debugLabels),
+    ]);
+    actions = bubbles.map((line) => ({
+      type: 'text',
+      to: from,
+      text: line,
+      meta: {
+        stage,
+        intent,
+        botId: BOT_ID,
+        ...(replyMeta ? { tag: replyMeta.tag } : {}),
+      },
+    }));
+  }
+
+  // 7) Persistência (best-effort)
   try {
     session.lastStage  = stage;
     session.lastIntent = intent;
@@ -177,14 +186,13 @@ export async function orchestrate(ctx = {}) {
     console.warn('[orchestrator] saveSession falhou:', e?.message || e);
   }
 
-  // 8) (Opcional) Captura métricas (no-op se middleware ausente)
+  // 8) Métricas (nunca quebra)
   try {
     await captureFromActions(
       { botId: BOT_ID, from, stage, intent, variant: meta?.variant || null },
       actions
     );
   } catch (e) {
-    // nunca quebra o fluxo por causa de métricas
     console.warn('[orchestrator] metrics.captureFromActions falhou:', e?.message || e);
   }
 

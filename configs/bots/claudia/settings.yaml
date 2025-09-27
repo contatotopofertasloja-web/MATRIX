@@ -44,12 +44,13 @@ promotions:
     teaser: "Comprando este mês você participa do nosso sorteio de prêmios. Quer que eu te explique rapidinho?"
 
 flags:
+  debug_labels: false
   has_cod: true
   reply_dedupe_ms: 90000        # janela do anti-rajada de SAÍDA (core/index)
   send_opening_photo: true
   disable_opening_hook: true
   disable_hooks_fallback: true   # não cair em hooks se orquestrador falhar
-  flow_only: false                # usar só flows enquanto ajustamos o orchestrator
+  flow_only: true                # usar só flows enquanto ajustamos o orchestrator
   guardrails_strict: true
   use_telemetry: true
   use_thompson: true
