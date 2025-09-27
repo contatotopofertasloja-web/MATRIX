@@ -1,3 +1,6 @@
+// src/adapters/whatsapp/baileys/baileys.js
+// Variante compat: cache de QR, reset/force e API mínima.
+
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -7,19 +10,27 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import Pino from 'pino';
 import { toDataURL } from 'qrcode';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 let _sock = null;
 let _onMsgCb = null;
 let _stopRequested = false;
 let _lastQrText = null;
+let _ready = false;
 
-const SESSION   = process.env.WPP_SESSION || 'default';
-const LOG_LEVEL = process.env.BAILEYS_LOG_LEVEL || 'error';
-const logger    = Pino({ level: LOG_LEVEL });
+const {
+  WPP_SESSION  = 'default',
+  WPP_AUTH_DIR = '/app/baileys-auth-v2',
+  BAILEYS_LOG_LEVEL = 'error',
+} = process.env;
+
+const logger = Pino({ level: BAILEYS_LOG_LEVEL });
 
 export async function init({ onReady, onQr, onDisconnect } = {}) {
   _stopRequested = false;
-  const { state, saveCreds } = await useMultiFileAuthState(`.wpp_auth/${SESSION}`);
+  const authDir = path.join(WPP_AUTH_DIR, WPP_SESSION);
+  const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
 
   _sock = makeWASocket({
@@ -45,11 +56,12 @@ export async function init({ onReady, onQr, onDisconnect } = {}) {
     }
 
     if (connection === 'open') {
-      _lastQrText = null;
+      _ready = true; _lastQrText = null;
       if (typeof onReady === 'function') onReady();
     }
 
     if (connection === 'close') {
+      _ready = false;
       const reason = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect =
         !_stopRequested &&
@@ -95,9 +107,7 @@ export async function init({ onReady, onQr, onDisconnect } = {}) {
   });
 }
 
-export function onMessage(cb) {
-  _onMsgCb = typeof cb === 'function' ? cb : null;
-}
+export function onMessage(cb) { _onMsgCb = typeof cb === 'function' ? cb : null; }
 
 export async function sendMessage(to, { text }, opts = {}) {
   if (!_sock) throw new Error('WPP socket not ready');
@@ -107,7 +117,15 @@ export async function sendMessage(to, { text }, opts = {}) {
 
 export async function sendImage(to, url, caption = '') {
   if (!_sock) throw new Error('WPP socket not ready');
-  await _sock.sendMessage(to, { image: { url }, caption: caption || '' });
+  try {
+    // tenta buffer primeiro (mais resiliente em ambiente sem sharp/jimp)
+    const res = await fetch(String(url));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    await _sock.sendMessage(to, { image: buf, caption: caption || '' });
+  } catch {
+    await _sock.sendMessage(to, { image: { url }, caption: caption || '' });
+  }
   return { ok: true };
 }
 
@@ -155,5 +173,30 @@ export async function stop() {
   try { _stopRequested = true; } catch {}
   try { await _sock?.logout?.(); } catch {}
   try { await _sock?.end?.(); } catch {}
-  _sock = null;
+  _sock = null; _ready = false; _lastQrText = null;
+}
+
+export function isReady(){ return _ready; }
+
+export async function getQrDataURL() {
+  if (!_lastQrText) return null;
+  try { return await toDataURL(_lastQrText, { margin: 2, width: 320 }); }
+  catch { return null; }
+}
+
+export async function forceRefreshQr() {
+  if (_ready) return false;
+  try { await stop(); } catch {}
+  await init({});
+  return true;
+}
+
+export async function logoutAndReset() {
+  try { await stop(); } catch {}
+  try {
+    const dir = path.join(WPP_AUTH_DIR, WPP_SESSION);
+    await fs.rm(dir, { recursive: true, force: true });
+  } catch {}
+  await init({});
+  return true;
 }

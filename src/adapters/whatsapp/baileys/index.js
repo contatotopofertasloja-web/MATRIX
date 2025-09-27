@@ -3,23 +3,22 @@
 // + logs para debug em Railway
 // + FIXES: ignora ecos (fromMe e self JID) e status@broadcast
 // + extração de texto robusta
+// + envio de imagem com fallback (buffer → url) para evitar dependências nativas
 
 import * as qrcode from "qrcode";
 import fs from "node:fs/promises";
 import path from "node:path";
-// ✅ agora existe o named export sanitizeOutbound no utils/polish.js
 import { sanitizeOutbound } from "../../../utils/polish.js";
 
-// Import dinâmico
 let B = null;
 try { B = await import("@whiskeysockets/baileys"); }
 catch { try { B = await import("@adiwajshing/baileys"); } catch { B = null; } }
 
 function pick(fn) { return B?.[fn] || B?.default?.[fn] || null; }
 function pickMakeWASocket() {
-  return pick("makeWASocket") ||
-         (typeof B?.default === "function" ? B.default : null) ||
-         (typeof B === "function" ? B : null)
+  return pick("makeWASocket")
+      || (typeof B?.default === "function" ? B.default : null)
+      || (typeof B === "function" ? B : null);
 }
 const makeWASocket               = pickMakeWASocket();
 const useMultiFileAuthState      = pick("useMultiFileAuthState");
@@ -42,8 +41,8 @@ const {
   TYPING_VARIANCE_PCT = "0.2",
 } = process.env;
 
-const bool = (v, d=false) => (v==null?d:["1","true","y","yes","on"].includes(String(v).trim().toLowerCase()));
-const num  = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const bool = (v, d=false)=> (v==null?d:["1","true","y","yes","on"].includes(String(v).trim().toLowerCase()));
+const num  = (v, d)=> (Number.isFinite(Number(v))?Number(v):d);
 
 const PRINT_QR      = bool(WPP_PRINT_QR, true);
 const SEND_TYPING_B = bool(SEND_TYPING, true);
@@ -59,7 +58,7 @@ let _onMessageHandler = null;
 let _booting = false;
 let _callbacks = { onReady:null, onQr:null, onDisconnect:null };
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms)=> new Promise(r=> setTimeout(r, ms));
 function normalizeJid(input) {
   const digits = String(input || "").replace(/\D/g, "");
   if (!digits) throw new Error("destinatário inválido");
@@ -98,8 +97,14 @@ async function getAudioBufferFromRaw(raw) {
     return null;
   }
 }
+async function fetchBuffer(url) {
+  const res = await fetch(String(url));
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
+}
 
-export function isReady() { return _isReady && !!sock; }
+export function isReady(){ return _isReady && !!sock; }
 export async function getQrDataURL() {
   if (!_lastQrText) return null;
   try { return await qrcode.toDataURL(_lastQrText, { margin: 1, width: 300 }); }
@@ -110,7 +115,7 @@ function finalizeOutbound(text, { allowPrice=false, allowLink=false } = {}) {
 }
 
 export const adapter = {
-  onMessage(fn) { _onMessageHandler = typeof fn === "function" ? fn : null; },
+  onMessage(fn){ _onMessageHandler = typeof fn === "function" ? fn : null; },
 
   async sendMessage(to, payload) {
     if (!sock) throw new Error("WhatsApp não inicializado");
@@ -133,8 +138,16 @@ export const adapter = {
     if (!sock) throw new Error("WhatsApp não inicializado");
     const jid = normalizeJid(to);
     const safeCap = finalizeOutbound(caption, { allowPrice: !!opts.allowPrice, allowLink: !!opts.allowLink });
+
     console.log(`[wpp/sendImage] to=${jid} url=${url} captionPreview=${safeCap.slice(0,40)}`);
-    return sock.sendMessage(jid, { image: { url: String(url) }, caption: safeCap });
+
+    // Tenta buffer (evita thumbnail nativa); se falhar, cai para url
+    try {
+      const buf = await fetchBuffer(url);
+      return await sock.sendMessage(jid, { image: buf, caption: safeCap });
+    } catch {
+      return await sock.sendMessage(jid, { image: { url: String(url) }, caption: safeCap });
+    }
   },
 
   async sendAudio(to, buffer, { mime = "audio/ogg; codecs=opus", ptt = true } = {}) {
@@ -148,8 +161,8 @@ export const adapter = {
     return this.sendAudio(to, buffer, { mime, ptt: true });
   },
 
-  async getAudioBuffer(raw) { return await getAudioBufferFromRaw(raw); },
-  async downloadMedia(raw, { audioOnly = false } = {}) {
+  async getAudioBuffer(raw){ return await getAudioBufferFromRaw(raw); },
+  async downloadMedia(raw, { audioOnly=false } = {}) {
     if (audioOnly) return await getAudioBufferFromRaw(raw);
     return null;
   },
@@ -221,17 +234,14 @@ async function boot() {
       const m = messages?.[0];
       if (!m || !_onMessageHandler) return;
 
-      // 1) corta ecos explícitos
       if (m.key?.fromMe) return;
 
-      // 2) corta mensagens cujo remoteJid é da PRÓPRIA conta (eco sem fromMe)
-      const selfIdRaw = sock?.user?.id || "";         // ex: "55619...:1@s.whatsapp.net"
-      const selfBare  = selfIdRaw.split(":")[0];      // "55619..."
+      const selfIdRaw = sock?.user?.id || "";
+      const selfBare  = selfIdRaw.split(":")[0];
       const from      = m.key?.remoteJid || "";
       if (!from) return;
       if (selfBare && from.includes(selfBare)) return;
 
-      // 3) ignora status/broadcast
       if (isStatusBroadcast(from)) return;
 
       const hasMedia =
@@ -268,7 +278,7 @@ export async function stop() {
 }
 
 export async function forceRefreshQr() {
-  if (_isReady) return false;
+  if (_isReady) return false; // se já está pronto, não força
   try { await stop(); } catch {}
   await boot();
   return true;
