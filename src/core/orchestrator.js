@@ -1,8 +1,6 @@
 // src/core/orchestrator.js
-// Orquestrador neutro + amigável a flows, sem depender de flags ausentes.
-// - Se flags.flow_only === true → usa só flows (sem LLM).
-// - Carimbo [flow/...] visível por padrão (assume debug_labels=true se não existir).
-// - Mantém tudo em try/catch e não quebra se métricas/outbox estiverem indisponíveis.
+// Orquestrador neutro com flow_only, carimbos visíveis e polish consolidando
+// a saída em 1–2 bolhas. Mantém fallback LLM apenas se flow_only=false.
 
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
@@ -10,26 +8,17 @@ import { settings, BOT_ID } from './settings.js';
 import { loadFlows } from './flow-loader.js';
 import { polishReply, consolidateBubbles } from '../utils/polish.js';
 
-// persistência (no-op se ausente)
+// persistência (best-effort)
 let saveSession = async (_s) => {};
-try {
-  const mem = await import('./memory.js');
-  saveSession = mem?.saveSession || saveSession;
-} catch {}
+try { const mem = await import('./memory.js'); saveSession = mem?.saveSession || saveSession; } catch {}
 
 // métricas (no-op se ausente)
 let captureFromActions = async (_ctx, _actions) => {};
-try {
-  const mm = await import('./metrics/middleware.js');
-  captureFromActions = mm?.captureFromActions || captureFromActions;
-} catch {}
+try { const mm = await import('./metrics/middleware.js'); captureFromActions = mm?.captureFromActions || captureFromActions; } catch {}
 
-// prompts específicos por bot (opcional)
+// prompts por bot (opcional)
 let buildPrompt = null;
-try {
-  const mod = await import(`../../configs/bots/${BOT_ID}/prompts/index.js`);
-  buildPrompt = mod?.buildPrompt || mod?.default || null;
-} catch {}
+try { const mod = await import(`../../configs/bots/${BOT_ID}/prompts/index.js`); buildPrompt = mod?.buildPrompt || mod?.default || null; } catch {}
 
 const DEFAULT_FALLBACK = 'Dei uma travadinha aqui, pode repetir? 💕';
 
@@ -46,7 +35,7 @@ function stageFromIntent(intention) {
   return 'recepcao';
 }
 
-// injeta carimbo visível quando debugLabels estiver ativo
+// injeta carimbo quando debug_labels ativo (default true)
 function withVisibleTag(text, tag, debugLabels) {
   const has = /\[[a-z]+\/.+?\]/i.test(String(text || ''));
   if (!debugLabels || !tag || has) return text;
@@ -56,41 +45,32 @@ function withVisibleTag(text, tag, debugLabels) {
 export async function orchestrate(ctx = {}) {
   const { session = {}, from = '', text = '', meta = {} } = ctx;
 
-  const flowOnly   = !!settings?.flags?.flow_only;
-  // NOVO: se flags.debug_labels não existir, assume TRUE (útil p/ testes)
+  const flowOnly = !!settings?.flags?.flow_only;
   const debugLabels =
     (settings?.flags && Object.prototype.hasOwnProperty.call(settings.flags, 'debug_labels'))
       ? !!settings.flags.debug_labels
       : true;
 
-  // 1) Intenção e estágio
   const intent = intentOf(text || '');
   const stage  = stageFromIntent(meta?.stageHint || intent);
 
-  // 2) Carrega flows
+  // carrega flows
   let flows = {};
-  try {
-    flows = await loadFlows(BOT_ID);
-  } catch (e) {
-    console.warn('[orchestrator] loadFlows falhou:', e?.message || e);
-  }
+  try { flows = await loadFlows(BOT_ID); } catch (e) { console.warn('[orchestrator] loadFlows falhou:', e?.message || e); }
 
-  // 3) Executa flow do estágio
-  let reply = '';
-  let replyMeta = null;
-  let actionsFromFlow = null;
-
-  const flowHandler =
-    (flows && (flows[stage] || flows[intent?.toLowerCase?.()] || flows?.handle)) || null;
+  // roda handler do flow (por estágio)
+  let reply = ''; let replyMeta = null; let actionsFromFlow = null;
+  const flowHandler = (flows && (flows[stage] || flows[intent?.toLowerCase?.()] || flows?.handle)) || null;
 
   try {
     if (typeof flowHandler === 'function') {
       const out = await flowHandler({
         userId: from,
+        jid: from,
         text: String(text || ''),
+        state: session.state || (session.state = {}),
         settings,
         context: { session, meta, stage, intent, settings },
-        send: (_to, _msg) => {}, // neutro
       });
 
       if (out && Array.isArray(out.actions)) {
@@ -106,95 +86,56 @@ export async function orchestrate(ctx = {}) {
     console.error('[orchestrator][flow][error]', err?.message || err);
   }
 
-  // 4) Fallback: LLM (se permitido) ou silêncio controlado
+  // fallback LLM só se flow_only=false
   if (!reply && !actionsFromFlow) {
     if (!flowOnly) {
       try {
         if (typeof buildPrompt === 'function') {
-          const built = (buildPrompt({
-            stage, intent, message: String(text || ''), settings, meta,
-          }) || {});
+          const built = (buildPrompt({ stage, intent, message: String(text || ''), settings, meta }) || {});
           const llm = await callLLM({ stage, system: built.system || '', prompt: built.user || '' });
           reply = llm?.text || '';
         } else {
-          const system =
-            'Você é uma atendente humana de vendas, simpática, objetiva e respeitosa. Nunca diga que é uma IA. PT-BR.';
-          const prompt =
-            `Mensagem do cliente: "${String(text || '').trim()}". ` +
-            `Responda de forma breve e útil, no tom de consultora de vendas. ` +
-            `Se aplicável, peça um dado do funil (CEP+cidade; interesse; etc.).`;
+          const system = 'Você é uma consultora humana de vendas. Nunca diga que é IA. PT-BR.';
+          const prompt = `Mensagem do cliente: "${String(text || '').trim()}". Responda breve, educada e objetiva.`;
           const llm = await callLLM({ stage, system, prompt });
           reply = llm?.text || '';
         }
-      } catch (err) {
-        console.error('[orchestrator][llm][error]', err?.message || err);
-      }
+      } catch (err) { console.error('[orchestrator][llm][error]', err?.message || err); }
     } else {
       reply = '';
     }
   }
 
-  // 5) Polish
+  // polish + consolidação (1–2 bolhas)
   let polished = '';
-  try {
-    polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply;
-  } catch (polErr) {
-    console.warn('[orchestrator] polishReply falhou:', polErr?.message || polErr);
-    polished = reply || '';
-  }
+  try { polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply; }
+  catch (e) { polished = reply || ''; }
 
-  // 6) Actions
   let actions = [];
-
   if (actionsFromFlow && actionsFromFlow.length) {
     actions = actionsFromFlow.map((a) => ({
       type: a?.type || 'text',
       to: a?.to || from,
       text: withVisibleTag(a?.text || '', a?.meta?.tag || replyMeta?.tag, debugLabels),
-      meta: {
-        ...(a?.meta || {}),
-        stage,
-        intent,
-        botId: BOT_ID,
-      },
+      meta: { ...(a?.meta || {}), stage, intent, botId: BOT_ID },
     }));
   } else {
     const textOut = polished || DEFAULT_FALLBACK;
-    const bubbles = consolidateBubbles([
-      withVisibleTag(textOut, replyMeta?.tag, debugLabels),
-    ]);
-    actions = bubbles.map((line) => ({
-      type: 'text',
-      to: from,
-      text: line,
-      meta: {
-        stage,
-        intent,
-        botId: BOT_ID,
-        ...(replyMeta ? { tag: replyMeta.tag } : {}),
-      },
-    }));
+    const bubbles = consolidateBubbles([withVisibleTag(textOut, replyMeta?.tag, debugLabels)]);
+    actions = bubbles.map((line) => ({ type: 'text', to: from, text: line, meta: { stage, intent, botId: BOT_ID, ...(replyMeta ? { tag: replyMeta.tag } : {}) } }));
   }
 
-  // 7) Persistência (best-effort)
+  // persistência leve
   try {
-    session.lastStage  = stage;
+    session.lastStage = stage;
     session.lastIntent = intent;
-    session.updatedAt  = Date.now();
+    session.updatedAt = Date.now();
     await saveSession(session);
-  } catch (e) {
-    console.warn('[orchestrator] saveSession falhou:', e?.message || e);
-  }
+  } catch (e) { console.warn('[orchestrator] saveSession falhou:', e?.message || e); }
 
-  // 8) Métricas (nunca quebra)
-  try {
-    await captureFromActions(
-      { botId: BOT_ID, from, stage, intent, variant: meta?.variant || null },
-      actions
-    );
-  } catch (e) {
-    console.warn('[orchestrator] metrics.captureFromActions falhou:', e?.message || e);
-  }
+  // métricas (nunca quebra)
+  try { await captureFromActions({ botId: BOT_ID, from, stage, intent, variant: meta?.variant || null }, actions); }
+  catch (e) { console.warn('[orchestrator] metrics.captureFromActions falhou:', e?.message || e); }
 
   return { actions, stage, intent };
 }

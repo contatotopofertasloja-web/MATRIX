@@ -1,6 +1,6 @@
 // configs/bots/claudia/flow/router.js
 // Prioridade: pós-venda → fechamento → FAQ → oferta → objeções → qualificação → saudação.
-// Agora consulta memória unificada para usar stage/profile persistentes.
+// Consulta memória persistente para manter “stickiness” de estágio.
 
 import greet from "./greet.js";
 import qualify from "./qualify.js";
@@ -9,84 +9,43 @@ import objections, { match as objectionsMatch } from "./objections.js";
 import close from "./close.js";
 import postsale from "./postsale.js";
 import faq, { match as faqMatch } from "./faq.js";
-
 import { recall } from "../../../../src/core/memory.js";
 
 function stripAccents(s = "") {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 function clean(t = "") {
-  return stripAccents(String(t || "").toLowerCase())
-    .replace(/\s+/g, " ")
-    .trim();
+  return stripAccents(String(t || "").toLowerCase()).replace(/\s+/g, " ").trim();
 }
 
-/**
- * Decide qual flow deve assumir a mensagem
- * @param {string} text - mensagem recebida
- * @param {object} _settings - settings do bot
- * @param {object} state - state da rodada
- * @param {string} jid - id do usuário (para recuperar memória)
- */
 export async function pickFlow(text = "", _settings = {}, state = {}, jid = "") {
   const t = clean(text);
 
-  // merge memória persistente
+  // memória
   if (jid) {
     try {
       const saved = await recall(jid);
-      if (saved) {
-        state = { ...(saved || {}), ...(state || {}) };
-      }
-    } catch (e) {
-      console.warn("[router.recall]", e?.message);
-    }
+      if (saved) state = { ...(saved || {}), ...(state || {}) };
+    } catch {}
   }
 
-  // 0) stickiness: se está no fechamento, fica (salvo cancelamento explícito)
-  if (
-    state?.stage === "fechamento" &&
-    !/\b(cancelar|voltar|mudar|n[aã]o quero)\b/i.test(t)
-  ) {
+  // fechamento persiste
+  if (state?.stage === "fechamento" && !/\b(cancelar|voltar|mudar|n[aã]o quero)\b/i.test(t)) {
     return close;
   }
 
-  // 1) Pós-venda
-  if (/\b(paguei|comprovante|finalizei|comprei|pedido feito|pago)\b/i.test(t)) {
-    return postsale;
-  }
+  if (/\b(paguei|comprovante|finalizei|comprei|pedido feito|pago)\b/i.test(t)) return postsale;
+  if (/\b(checkout|finalizar|finaliza(r)?|fechar|comprar|carrinho|link)\b/i.test(t)) return close;
 
-  // 2) Fechamento (checkout/link)
-  if (/\b(checkout|finalizar|finaliza(r)?|fechar|comprar|carrinho|link)\b/i.test(t)) {
-    return close;
-  }
+  try { if (typeof faqMatch === "function" && faqMatch(text, _settings)) return faq; } catch {}
 
-  // 3) FAQ determinístico (inclui entrega/pagamento)
-  try {
-    if (typeof faqMatch === "function" && faqMatch(text, _settings)) return faq;
-  } catch {}
+  if (/\b(pre[cç]o|valor|quanto\s*custa|promo[cç][aã]o|oferta|cust[ao])\b/i.test(t)) return offer;
 
-  // 4) Oferta (preço)
-  if (/\b(pre[cç]o|valor|quanto\s*custa|promo[cç][aã]o|oferta|cust[ao])\b/i.test(t)) {
-    return offer;
-  }
+  try { if (typeof objectionsMatch === "function" && objectionsMatch(text, _settings)) return objections; } catch {}
 
-  // 5) Objeções
-  try {
-    if (typeof objectionsMatch === "function" && objectionsMatch(text, _settings)) {
-      return objections;
-    }
-  } catch {}
+  if (/\b(liso|ondulado|cachead[oa]|crespo|frizz|volume|brilho|alisar)\b/i.test(t)) return qualify;
 
-  // 6) Qualificação por sinais de cabelo
-  if (/\b(liso|ondulado|cachead[oa]|crespo|frizz|volume)\b/i.test(t)) {
-    return qualify;
-  }
-
-  // 7) Saudação
-  if (/\b(oi|ol[áa]|bom\s*dia|boa\s*tarde|boa\s*noite|hey|hi|hello)\b/i.test(t)) {
-    return greet;
-  }
+  if (/\b(oi|ol[áa]|bom\s*dia|boa\s*tarde|boa\s*noite|hey|hi|hello)\b/i.test(t)) return greet;
 
   return qualify;
 }
