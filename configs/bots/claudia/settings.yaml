@@ -7,77 +7,28 @@ product:
   store_name: "TopOfertas"
   price_original: 197
   price_target: 170
-  price_promo_day: 150        # ← adicionado para evitar undefined no offer
+  price_promo_day: 150
   promo_day_quota: 5
   checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
   site_url: "https://tpofertas.com/collections/cod-todos"
   coupon_code: "TOP-AGO2025-PROGRVG-150"
-  coupon_post_payment_only: true
   refund_days_after_delivery: 7
   volume_ml: 500
   delivery_sla:
     capitals_hours: 24
     others_hours: 72
-  how_to_use: >
-    Lave os cabelos, aplique o produto e deixe agir por 40 minutos.
-    Para maior durabilidade, finalize com escova/chapinha.
-  upsell_flatiron:
-    enabled: true
-    pitch: "Se quiser, te indico uma chapinha com ótimo custo-benefício para potencializar o efeito."
-  opening_hours: "06h às 21h (escala variável)"
 
 media:
   opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
 
 messages:
   opening:
-    - "Oi! Eu sou a Cláudia da *{{ product.store_name }}*. Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?"
-  opening_named:
-    - "Oi, {{ profile.name }}! Pra te orientar certinho: seu cabelo é **liso**, **ondulado**, **cacheado** ou **crespo**?"
-  applications_hint: "2–4 aplicações (varia com comprimento)"
-  duration_hint: "de 2 a 3 meses"
+    - "[flow/greet#ask_name] Oi! Eu sou a Cláudia 💚 Qual o seu **nome completo**?"
 
 marketing:
   sold_count: 40000
 
-promotions:
-  raffle:
-    enabled: false
-    teaser: "Comprando este mês você participa do nosso sorteio de prêmios. Quer que eu te explique rapidinho?"
-
 flags:
-  debug_labels: true            # ← para visualizar [flow/<stage>]
+  debug_labels: true
   has_cod: true
-  reply_dedupe_ms: 90000        # janela anti-rajada (saída)
-  send_opening_photo: true
-  disable_opening_hook: true
-  disable_hooks_fallback: true  # não cair em hooks se orquestrador falhar
-  flow_only: true               # usar só flows enquanto ajustamos
-  guardrails_strict: true
-  use_telemetry: true
-  use_thompson: true
-  allow_audio_in: true
-  allow_audio_out: false
-  small_talk_soften: true
-  useModelsByStage: true
-  fallbackToGlobal: true
-  debug_log_router: false
-
-models_by_stage:
-  recepcao: "gpt-5-nano"
-  qualificacao: "gpt-5-nano"
-  oferta: "gpt-5-mini"
-  objecoes: "gpt-5"
-  fechamento: "gpt-5"
-  posvenda: "gpt-5-nano"
-
-typing:
-  ms_per_char: 35
-  min_ms: 800
-  max_ms: 5000
-
-guardrails:
-  allowed_links:
-    - "{{ product.checkout_link }}"
-    - "{{ product.site_url }}"
-    - "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  flow_only: true

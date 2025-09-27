@@ -1,16 +1,12 @@
+// src/scripts/sanity-check.mjs
 // Sanity check do NLU — rodada 2 com frases extras.
-// Uso (Windows CMD):
-//   set NLU_DEBUG=1
-//   node src/scripts/sanity-check.mjs
-// Uso (PowerShell):
-//   $env:NLU_DEBUG="1"; node src/scripts/sanity-check.mjs
 
 import { classify, suggestNextStage } from "../core/nlu.js";
 try { await import("dotenv/config"); } catch {}
 
 const SAMPLES = [
   // saudações
-  "oi", "boa tarde", "olá claudia",
+  "oi", "boa tarde", "olá",
 
   // preço / oferta
   "quanto custa?", "tem promoção?", "qual o valor?",
@@ -18,14 +14,14 @@ const SAMPLES = [
   // link / fechar
   "me manda o link", "quero comprar", "finalizar pedido",
 
-  // FAQ (agora com gatilhos novos no faq.yaml)
+  // FAQ (gatilhos do faq.yaml)
   "tem parcelamento?", "qual o nome da empresa?", "até que horas atendem?",
   "quando chega?", "quanto tempo chega?",
 
   // objeções e dúvidas frequentes
   "tá caro", "tenho alergia", "isso funciona mesmo?",
 
-  // uso / volume / rendimento (expandido)
+  // uso / volume / rendimento
   "como aplica?", "como usar", "aplicação",
   "quantas vezes rende?", "rende quantas aplicacoes", "tem quantos ml?",
 

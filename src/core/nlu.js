@@ -1,16 +1,10 @@
-// src/core/nlu.js
-// Classificador NLU leve por regras (regex/keywords), neutro e extensível.
-// - Mantém regex internas (estáveis).
-// - Opcionalmente carrega gatilhos do configs/bots/<bot_id>/prompts/faq.yaml para INTENT FAQ.
-// - Logs de debug controlados por env (NLU_DEBUG=1).
-
+// src/core/nlu.js — classificador leve por regras (neutro)
 import fs from "node:fs";
 import path from "node:path";
 import { BOT_ID } from "./settings.js";
 
 const DEBUG = ["1","true","yes","y","on"].includes(String(process.env.NLU_DEBUG||"").toLowerCase());
 
-// ========================= Regex base (estáveis) =========================
 const RX = {
   greeting: /\b(oi|ol[áa]|boa\s*(tarde|noite|dia)|hey|e[ai]\b)/i,
   price: /\b(preç|valor|custa|quanto(?:\s+custa)?|por\s*quanto)\b/i,
@@ -25,16 +19,12 @@ const RX = {
   duration: /\b(dura|tempo|mes(es)?)\b/i,
   volume: /\b(\d+\s*ml|ml|mili|tamanho\s+do\s+frasco|frasco)/i,
   howToUse: /\b(como\s+usa(r)?|modo\s+de\s+uso|aplicar)\b/i,
-
-  // ⬇️ Ampliada: cobre "tá caro", "esta caro", "tá muito caro", "valor alto" etc.
   objections_price: /\b((t[áa]\s*)?(muito\s*)?car[oa]|est[áa]\s*car[oa]|preç|valor\s*alto)\b/i,
-
   audio: /\b(áudio|audio|mandar\s+voz|posso\s+enviar\s+áudio)/i,
   negativity: /\b(burra|idiota|merd|porra|droga|vac[aai]|ot[aá]ria?|incompetente)\b/i,
   thanks: /\b(obrigad[oa]|valeu|gratid[aã]o)\b/i,
   goodbye: /\b(tchau|até\s+mais|falou|encerrar)\b/i,
   address: /\b(rua|avenida|n[úu]mero|cep|bairro|cidade|estado|uf|refer[eê]ncia)\b/i,
-  // FAQ (dinâmico via YAML) ficará em RX.__faq_dyn (array de regex)
 };
 
 const INTENTS = {
@@ -61,7 +51,6 @@ const INTENTS = {
   SMALL_TALK: "small_talk",
 };
 
-// Ordem de verificação (prioridades)
 const ORDER = [
   ["NEGATIVITY", "negativity"],
   ["BUY", "buy"],
@@ -80,12 +69,11 @@ const ORDER = [
   ["ADDRESS_DATA", "address"],
   ["THANKS", "thanks"],
   ["GOODBYE", "goodbye"],
-  ["OBJECTION_PRICE", "objections_price"], // ← garante que objeção de preço seja capturada cedo
+  ["OBJECTION_PRICE", "objections_price"],
   ["FAQ", "__faq_dyn"],
   ["GREETING", "greeting"],
 ];
 
-// ========================= Loader opcional do faq.yaml =========================
 let _faqLoaded = false;
 
 function findFaqYamlPath(botId) {
@@ -93,16 +81,11 @@ function findFaqYamlPath(botId) {
     path.join(process.cwd(), "configs", "bots", botId, "prompts", "faq.yaml"),
     path.join(process.cwd(), "configs", "bots", botId, "faq.yaml"),
   ];
-  for (const f of candidates) {
-    try { if (fs.existsSync(f) && fs.statSync(f).isFile()) return f; } catch {}
-  }
+  for (const f of candidates) { try { if (fs.existsSync(f) && fs.statSync(f).isFile()) return f; } catch {} }
   return null;
 }
 function toRegexSafe(s) {
-  const esc = String(s || "")
-    .trim()
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\s+/g, "\\s+");
+  const esc = String(s || "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
   return new RegExp(esc, "i");
 }
 async function loadFaqTriggersIfAny() {
@@ -110,9 +93,7 @@ async function loadFaqTriggersIfAny() {
   const botId = BOT_ID || "default";
   const file = findFaqYamlPath(botId);
   if (!file) { _faqLoaded = true; return; }
-
-  let YAML = null;
-  try { YAML = (await import("yaml")).default; } catch {}
+  let YAML = null; try { YAML = (await import("yaml")).default; } catch {}
   if (!YAML) { _faqLoaded = true; return; }
 
   try {
@@ -135,36 +116,20 @@ async function loadFaqTriggersIfAny() {
   } finally { _faqLoaded = true; }
 }
 
-// ========================= API pública =========================
 export async function classify(text = "") {
   const t = String(text || "").trim();
   if (!t) return { intent: INTENTS.SMALL_TALK, score: 0.1, entities: {} };
-
   if (!_faqLoaded) { await loadFaqTriggersIfAny(); }
 
   for (const [label, rxKey] of ORDER) {
     if (rxKey === "__faq_dyn") {
       const arr = RX.__faq_dyn || [];
-      if (arr.length) {
-        for (const rx of arr) {
-          if (rx.test(t)) {
-            if (DEBUG) console.log(`[NLU] hit YAML -> intent=FAQ phrase="${t.slice(0,60)}"`);
-            return { intent: INTENTS.FAQ, score: 0.85, entities: {} };
-          }
-        }
-      }
+      if (arr.length) for (const rx of arr) if (rx.test(t)) return { intent: INTENTS.FAQ, score: 0.85, entities: {} };
       continue;
     }
-
     const rx = RX[rxKey];
-    if (rx?.test(t)) {
-      const intentKey = INTENTS[label];
-      if (DEBUG) console.log(`[NLU] hit RX -> intent=${intentKey} key=${rxKey} phrase="${t.slice(0,60)}"`);
-      return { intent: intentKey, score: 0.9, entities: {} };
-    }
+    if (rx?.test(t)) return { intent: INTENTS[label], score: 0.9, entities: {} };
   }
-
-  if (DEBUG) console.log(`[NLU] fallback -> SMALL_TALK phrase="${t.slice(0,60)}"`);
   return { intent: INTENTS.SMALL_TALK, score: 0.3, entities: {} };
 }
 
@@ -183,8 +148,7 @@ export function suggestNextStage(intent) {
     case INTENTS.DURATION:
     case INTENTS.VOLUME:
     case INTENTS.HOW_TO_USE:
-    case INTENTS.FAQ:
-      return "oferta";
+    case INTENTS.FAQ: return "oferta";
     case INTENTS.OBJECTION_PRICE: return "objecoes";
     case INTENTS.AUDIO: return "oferta";
     case INTENTS.ADDRESS_DATA: return "fechamento";

@@ -29,6 +29,7 @@ function upsertEnvVar(name, val){
   fs.writeFileSync(envPath, txt, 'utf8');
 }
 
+// Exemplos mínimos (apenas para scaffold)
 const CORE_INTENT = `// src/core/intent.js
 export function intentOf(text){
   const t=(text||'').toLowerCase().trim();
@@ -62,7 +63,7 @@ const YAML_PATH = path.join(ROOT,'configs','bots',BOT_ID,'settings.yaml');
 
 let settings = {
   bot_id: BOT_ID,
-  persona_name: 'Cláudia',
+  persona_name: 'Atendente',
   product: { price_original:197, price_target:170, checkout_link:'', coupon_code:'' },
   flags: { has_cod:true, send_opening_photo:true },
   models_by_stage: {}
@@ -86,13 +87,13 @@ export { settings };
 const FLOW_GREET = (name)=>`// src/bots/${name}/flows/greet.js
 import { settings } from '../../../core/settings.js';
 export async function greet(){
-  return \`Oi! Eu sou a \${settings.persona_name} 😊 Posso te ajudar a alinhar o cabelo sem formol. Seu cabelo é liso, ondulado, cacheado ou crespo?\`;
+  return \`Olá! Eu sou \${settings.persona_name}. Como posso te ajudar hoje?\`;
 }
 `;
 
 const FLOW_QUALIFY = (name)=>`// src/bots/${name}/flows/qualify.js
 export async function qualify(){
-  return 'Entendi. Pra eu te indicar certinho: o que te incomoda mais hoje — frizz, volume ou falta de alinhamento?';
+  return 'Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho?';
 }
 `;
 
@@ -101,9 +102,9 @@ import { settings } from '../../../core/settings.js';
 export async function offer(){
   const p = Number(settings?.product?.price_target || 170).toFixed(0);
   return [
-    'A Progressiva Vegetal trata enquanto alinha, sem formol 🌿.',
-    \`Normalmente sai por R$ \${p} e rende até 3 meses.\`,
-    'Quer que eu detalhe o passo a passo de uso pra ver se encaixa na sua rotina?'
+    'Condição do dia disponível.',
+    \`Preço alvo: R$ \${p}.\`,
+    'Quer verificar sua cobertura para pagamento na entrega (COD)?'
   ].join(' ');
 }
 `;
@@ -115,21 +116,14 @@ export async function closeDeal(){
   const url = settings?.product?.checkout_link || '';
   return [
     \`Perfeito! Fechamos por R$ \${p}.\`,
-    'Vou te enviar o link oficial em seguida para concluir com pagamento na entrega (COD).',
-    url
+    url ? 'Te envio o link oficial para concluir.' : 'Sem link disponível neste momento.'
   ].join('\\n');
 }
 `;
 
 const FLOW_POSTSALE = (name)=>`// src/bots/${name}/flows/postsale.js
-import { settings } from '../../../core/settings.js';
 export async function postSale(){
-  const cupom = settings?.product?.coupon_code || 'TOP-AGO2025-PROGRVG-150';
-  return [
-    'Pedido confirmado! 🎉 Obrigado pela confiança.',
-    'Te aviso quando sair para entrega e te mando o rastreio.',
-    \`Na próxima compra, usa o cupom \${cupom} pra ganhar descontinho 😉\`
-  ].join(' ');
+  return 'Pedido confirmado! Qualquer dúvida no pós-venda, estou por aqui.';
 }
 `;
 
@@ -154,12 +148,7 @@ export const bot = {
     const intent = intentOf(text);
     const fn = flows[intent];
     if(typeof fn === 'function') return await fn({ userId, text, context });
-
-    if(intent==='delivery') return 'Me passa seu CEP rapidinho que já te confirmo prazo e frete 🚚';
-    if(intent==='payment')  return 'Trabalhamos com Pagamento na Entrega (COD). Se preferir, posso te passar outras opções.';
-    if(intent==='features') return 'É um tratamento sem formol, que alinha e nutre. Posso te enviar o passo a passo de uso?';
-    if(intent==='objection') return 'Te entendo! É produto regularizado e com garantia. Quer que eu te mande o passo a passo e resultados?';
-    return 'Consegue me contar rapidinho sobre seu cabelo? 😊 (liso, ondulado, cacheado ou crespo?)';
+    return 'Certo! Posso te passar a condição do dia ou verificar cobertura para pagamento na entrega.';
   }
 };
 `;
@@ -170,8 +159,8 @@ const DEFAULT_SETTINGS_YAML = (id, name)=>YAML.stringify({
   product: {
     price_original: 197,
     price_target: 170,
-    checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170",
-    coupon_code: "TOP-AGO2025-PROGRVG-150"
+    checkout_link: "",
+    coupon_code: ""
   },
   flags: { has_cod:true, send_opening_photo:true },
   models_by_stage: { greet:"gpt-4o-mini", qualify:"gpt-4o-mini", offer:"gpt-4o", close:"gpt-4o", postsale:"gpt-4o-mini" }
@@ -197,7 +186,6 @@ function scaffoldBot(botId, personaName){
 }
 
 function migrateOldFlowsTo(botId){
-  // se existir src/flows antigo, move p/ src/bots/<botId>/flows
   const old = p('src/flows');
   if(fs.existsSync(old) && fs.lstatSync(old).isDirectory()){
     const dest = p('src/bots', botId, 'flows');
@@ -224,10 +212,10 @@ Matrix Scaffold
 
 Comandos:
   node tools/scaffold-bot.mjs init
-      → Cria core + Cláudia (padrão) e define BOT_ID=claudia
+      → Cria core + bot padrão e define BOT_ID=claudia
 
   node tools/scaffold-bot.mjs add <bot_id> [Persona Name]
-      → Cria estrutura para uma nova menina (flows + settings.yaml)
+      → Cria estrutura para uma nova vendedora (flows + settings.yaml)
 
 Exemplos:
   node tools/scaffold-bot.mjs init
@@ -240,7 +228,7 @@ Exemplos:
 
   if(cmd === 'init'){
     scaffoldCore();
-    scaffoldBot('claudia','Cláudia');
+    scaffoldBot('claudia','Atendente');
     migrateOldFlowsTo('claudia');
     setActiveBot('claudia');
     console.log('✅ Estrutura básica criada.');

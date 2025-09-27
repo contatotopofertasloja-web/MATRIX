@@ -1,14 +1,11 @@
+# docs/conexus/schema.v1.yaml
 version: 1.0
 kind: conexus_flow_schema
-description: >-
-  Esquema padrão para comparar funis entre vendedoras (Matrix).
-  Um único “flow” por bot/campanha, com estágios, metas e regras operacionais.
+description: >
+  Esquema para comparar funis entre vendedoras (Matrix 2.0).
 
 flow:
-  required:
-    - bot_id
-    - flow_id
-    - stages
+  required: [bot_id, flow_id, stages]
   properties:
     bot_id:        { type: string, pattern: "^[a-z0-9_-]{2,40}$" }
     flow_id:       { type: string, pattern: "^[a-z0-9_-]{2,40}$" }
@@ -30,7 +27,7 @@ flow:
           goals:        { type: array, items: { type: string } }
           required_actions:
             type: array
-            items: { type: string, enum: [send_price, send_link, ask_hair_type, confirm_cod, handle_objection, confirm_payment] }
+            items: { type: string, enum: [send_price, send_link, confirm_cod, handle_objection, confirm_payment] }
           guardrails:
             type: object
             properties:
@@ -44,14 +41,13 @@ flow:
               properties:
                 id:     { type: string }
                 metric: { type: string, enum: [time_to_first_reply, messages_to_offer, price_disclosed_rate, link_sent_rate, objection_resolution_rate, stage_completion_rate] }
-                target: { type: number } # % ou segundos dependendo do metric
+                target: { type: number }
           exit_conditions:
             type: array
             items: { type: string }
           sla_sec: { type: number }
 
 events_map:
-  # Nomes de eventos que o Conexus espera encontrar nos logs/telemetria
   message_in:           { source: "adapter",   match: "messages.upsert" }
   message_out:          { source: "outbox",    match: "sendMessage|sendImage" }
   intent_detected:      { source: "core",      match: "intent=" }

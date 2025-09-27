@@ -1,3 +1,4 @@
+# docs/conexus/qa/smoke.yaml
 version: 1.0
 kind: conexus_qa_smoke
 
@@ -6,24 +7,12 @@ tests:
     title: "Preço e Link em sequência"
     steps:
       - say: "qual o preço?"
-      - expect:
-          any_of:
-            - contains: "R$"
-            - contains: "preço"
-        within_sec: 5
+      - expect: { any_of: [ { contains: "R$" }, { contains: "preço" } ], within_sec: 5 }
       - say: "manda o link"
-      - expect:
-          any_of:
-            - contains: "http"
-            - contains: "checkout"
-        within_sec: 20
+      - expect: { any_of: [ { contains: "http" }, { contains: "checkout" } ], within_sec: 20 }
 
   - id: objection_formol
     title: "Objeção: tem formol?"
     steps:
       - say: "tem formol?"
-      - expect:
-          any_of:
-            - contains: "não contém formol"
-            - contains: "sem formol"
-        within_sec: 10
+      - expect: { any_of: [ { contains: "livre de formol" }, { contains: "sem formol" } ], within_sec: 10 }

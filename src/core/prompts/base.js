@@ -1,5 +1,5 @@
-// System e prompts do orquestrador (JSON schema + ReAct simples)
-// Core neutro (sem cheiro de bot específico). Cada bot define persona em settings.yaml.
+// src/core/prompts/base.js
+// System e prompts do orquestrador (JSON schema + ReAct simples), neutro.
 
 export function buildSystem({ settings }) {
   const name = settings?.persona_name || "Atendente";
@@ -14,15 +14,7 @@ export function buildSystem({ settings }) {
 
 /**
  * Prompt do PLANNER (planejamento da próxima ação).
- * Saída esperada: JSON válido (sem comentários) com o seguinte shape:
- * {
- *   "next": "reply" | "ask" | "tools" | "handoff",
- *   "stage": "greet" | "qualify" | "offer" | "objection" | "close" | "postsale",
- *   "tool_calls": [ { "name": "getPrice", "args": { } } ],
- *   "slots": { "nome": "Ana", "tipo_cabelo": "ondulado", ... },
- *   "reply": "rascunho de resposta opcional",
- *   "confidence": 0.0 - 1.0
- * }
+ * Saída esperada: JSON válido (sem comentários).
  */
 export function buildPlannerUser({ message, stageHint, settings, memory }) {
   const s = settings || {};
@@ -61,5 +53,5 @@ export function buildRefineUser({ message, stage, plan, tools, settings, slots, 
   return lines.join("\n");
 }
 
-// Alias para compat com versões antigas (se algum ponto do código ainda chamar buildUser)
+// Alias de compat com versões antigas
 export const buildUser = buildPlannerUser;

@@ -1,60 +1,31 @@
 // configs/bots/claudia/flow/greet.js
-// Abertura objetiva: capta nome, reforça que serve para todos os tipos
-// e pergunta o objetivo (frizz/volume/brilho/alisar). Se já vier objetivo,
-// encaminha direto para o offer mantendo o carimbo.
+// Abertura: pede nome, já informa que serve para todos os tipos de cabelo.
+// Se cliente já trouxer objetivo (alisar, frizz, volume, brilho), encaminha pro offer.
 
-import { normalizeSettings, tagReply } from "./_state.js";
+import { ensureProfile, tagReply } from "./_state.js";
 
 const RX = {
-  GOAL_FRIZZ: /\b(frizz|fris|arrepiad)/i,
-  GOAL_VOLUME: /\b(volume|volumoso|armad)/i,
-  GOAL_BRILHO: /\b(brilho|brilhante|brilhar)\b/i,
-  GOAL_ALISAR: /\b(alisar|liso|chapar)\b/i,
+  NAME: /\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,})/i,
+  GOAL: /\b(alisar|frizz|volume|brilho)\b/i,
 };
 
-function tag(text, t) { return tagReply({}, text, t); }
-
-function wantsGoal(txt="") {
-  const t = txt.toLowerCase();
-  if (RX.GOAL_FRIZZ.test(t)) return "reduzir frizz";
-  if (RX.GOAL_VOLUME.test(t)) return "baixar volume";
-  if (RX.GOAL_BRILHO.test(t)) return "mais brilho";
-  if (RX.GOAL_ALISAR.test(t)) return "alisar";
-  return null;
-}
-
 export default async function greet(ctx = {}) {
-  const { text = "", profile = {}, settings = {}, state = {} } = ctx;
-  const S = normalizeSettings(settings);
-  const name = profile?.name || state?.profile?.name || "";
+  const { state = {}, text = "" } = ctx;
+  const profile = ensureProfile(state);
+  const s = String(text).trim();
 
-  // 1) Se já veio objetivo, antecipa oferta e empurra para offer
-  const goal = wantsGoal(text);
-  if (goal) {
-    const msg =
-      `Perfeito! A ${S.product.name} serve para todos os tipos de cabelo e ` +
-      `hidrata profundamente enquanto alinha — é ótima para ${goal}.\n\n` +
-      `Condição de hoje:\n` +
-      `• Preço cheio: R$ ${S.product.price_original},00\n` +
-      `• Promo do dia: R$ ${S.product.price_target},00\n` +
-      `• ${S.product.promo_day_quota || 5} unidades relâmpago por R$ ${S.product.price_promo_day},00 🎉\n\n` +
-      `Quer que eu verifique o R$ ${S.product.price_promo_day},00 no seu endereço com pagamento só na entrega?\n` +
-      `Prazo: até ${S.product.delivery_sla.capitals_hours}h capitais / até ${S.product.delivery_sla.others_hours}h demais.`;
-    state.stage = "oferta";
-    return tag(msg, "flow/greet→offer");
+  const m = s.match(RX.NAME);
+  if (m) profile.name = m[2];
+
+  const g = s.match(RX.GOAL);
+  if (g) {
+    profile.goal = g[1].toLowerCase();
+    return { reply: tagReply(ctx, `Prazer, ${profile.name || "💚"}! Nossa Progressiva Vegetal serve para **todos os tipos de cabelo**. Já te passo a condição do dia 🙌`, "flow/greet→offer"), meta: { tag: "flow/greet→offer" } };
   }
 
-  // 2) Sem nome ainda → pedir nome de forma humana (sem falar que é IA)
-  if (!name) {
-    const msg =
-      `Oi! Eu sou a Cláudia da ${S.product.store_name} 💚 ` +
-      `Como posso te chamar? Você já ouviu falar da ${S.product.name}? Ela é livre de formol.`;
-    return tag(msg, "flow/greet#opening");
+  if (!profile.name) {
+    return { reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Qual o seu **nome completo**?", "flow/greet#ask_name"), meta: { tag: "flow/greet#ask_name" } };
   }
 
-  // 3) Com nome → pergunta objetiva
-  const msg =
-    `Prazer, ${name}! A ${S.product.name} funciona em todos os tipos de cabelo. ` +
-    `Você quer mais é alisar, reduzir frizz, baixar volume ou só dar brilho de salão em casa?`;
-  return tag(msg, "flow/greet#opening_named");
+  return { reply: tagReply(ctx, `Prazer, ${profile.name}! A Progressiva Vegetal serve para **todos os tipos de cabelo**. Qual é o seu objetivo hoje: **alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa**?`, "flow/greet#ask_goal"), meta: { tag: "flow/greet#ask_goal" } };
 }

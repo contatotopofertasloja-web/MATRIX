@@ -1,5 +1,5 @@
-// Funções utilitárias que o LLM pode "pedir" (simulação de tool-calls no core).
-// Core neutro; lê valores do settings ativo (da bot atual).
+// src/core/prompts/product.js
+// Funções utilitárias que o LLM pode “pedir” (simulação de tool-calls), neutro.
 
 export function getPrice(settings) {
   const p = settings?.product || {};

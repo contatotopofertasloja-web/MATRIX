@@ -1,4 +1,4 @@
-﻿#configs/schema.tool.yaml
+﻿# configs/schema.tool.yaml
 version: v1
 description: "Assinaturas de tools (contratos estáveis)"
 tools:

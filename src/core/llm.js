@@ -1,4 +1,4 @@
-// src/core/llm.js — seletor de modelo por estágio com compat GPT-5 ⇄ GPT-4o
+// src/core/llm.js — seletor de modelo por estágio (neutro)
 import OpenAI from "openai";
 import { settings } from "./settings.js";
 
@@ -12,30 +12,24 @@ const STAGE_KEYS = {
 };
 function resolveStageKey(stage) {
   const t = String(stage || "").toLowerCase().trim();
-  for (const canonical in STAGE_KEYS) {
-    if (STAGE_KEYS[canonical].some(k => t.includes(k))) return canonical;
-  }
+  for (const canonical in STAGE_KEYS) if (STAGE_KEYS[canonical].some(k => t.includes(k))) return canonical;
   return "recepcao";
 }
 
 const ENV_DEFAULTS = {
   provider:    settings?.llm?.provider || process.env.LLM_PROVIDER || "openai",
   temperature: Number.isFinite(+settings?.llm?.temperature) ? +settings.llm.temperature
-            : Number.isFinite(+process.env.LLM_TEMPERATURE) ? +process.env.LLM_TEMPERATURE
-            : 0.5,
+            : Number.isFinite(+process.env.LLM_TEMPERATURE) ? +process.env.LLM_TEMPERATURE : 0.5,
   retries:     Number.isFinite(+process.env.LLM_RETRIES) ? +process.env.LLM_RETRIES
             : (Number.isFinite(+settings?.llm?.retries) ? +settings.llm.retries : 2),
   timeoutMs:   Number.isFinite(+process.env.LLM_TIMEOUT_MS) ? +process.env.LLM_TIMEOUT_MS : 25000,
   maxTokens: {
     nano: Number.isFinite(+settings?.llm?.maxTokens?.nano) ? +settings.llm.maxTokens.nano
-        : Number.isFinite(+process.env.LLM_MAX_TOKENS_NANO) ? +process.env.LLM_MAX_TOKENS_NANO
-        : 512,
+        : Number.isFinite(+process.env.LLM_MAX_TOKENS_NANO) ? +process.env.LLM_MAX_TOKENS_NANO : 512,
     mini: Number.isFinite(+settings?.llm?.maxTokens?.mini) ? +settings.llm.maxTokens.mini
-        : Number.isFinite(+process.env.LLM_MAX_TOKENS_MINI) ? +process.env.LLM_MAX_TOKENS_MINI
-        : 1024,
+        : Number.isFinite(+process.env.LLM_MAX_TOKENS_MINI) ? +process.env.LLM_MAX_TOKENS_MINI : 1024,
     full: Number.isFinite(+settings?.llm?.maxTokens?.full) ? +settings.llm.maxTokens.full
-        : Number.isFinite(+process.env.LLM_MAX_TOKENS_FULL) ? +process.env.LLM_MAX_TOKENS_FULL
-        : 2048,
+        : Number.isFinite(+process.env.LLM_MAX_TOKENS_FULL) ? +process.env.LLM_MAX_TOKENS_FULL : 2048,
   },
 };
 const ENV_STAGE_VARS = {
@@ -85,10 +79,7 @@ function getOpenAI() {
 }
 
 export async function callLLM({ stage, system, prompt, temperature, maxTokens, model } = {}) {
-  if ((ENV_DEFAULTS.provider || "openai") !== "openai") {
-    throw new Error(`Provider "${ENV_DEFAULTS.provider}" não suportado neste módulo.`);
-  }
-
+  if ((ENV_DEFAULTS.provider || "openai") !== "openai") throw new Error(`Provider "${ENV_DEFAULTS.provider}" não suportado.`);
   const rawModel = model || pickModelForStage(stage);
   const chosenModel = translateModel(rawModel);
   const temp = typeof temperature === "number" ? temperature : ENV_DEFAULTS.temperature;
@@ -100,7 +91,6 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), ENV_DEFAULTS.timeoutMs);
-
       const res = await client.chat.completions.create({
         model: chosenModel,
         temperature: temp,
@@ -112,12 +102,10 @@ export async function callLLM({ stage, system, prompt, temperature, maxTokens, m
         signal: controller.signal,
       });
       clearTimeout(t);
-
       const text = res?.choices?.[0]?.message?.content?.trim() || "";
       return { model: chosenModel, text };
     } catch (e) {
-      lastErr = e;
-      const backoff = Math.min(1000 * (2 ** attempt), 4000);
+      lastErr = e; const backoff = Math.min(1000 * (2 ** attempt), 4000);
       await new Promise(r => setTimeout(r, backoff));
     }
   }

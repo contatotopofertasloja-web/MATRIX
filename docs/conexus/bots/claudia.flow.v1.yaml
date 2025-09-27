@@ -1,6 +1,4 @@
-# configs/bots/claudia/claudia.flow.yml
-# Funil determinístico com carimbos (flow/...) e rotas claras.
-
+# configs/docs/conexus/bots/claudia.flow.v1.yaml
 version: 1
 bot_id: claudia
 
@@ -8,7 +6,7 @@ stages:
   greet:
     entry:
       - kind: call
-        fn: "greet"          # configs/bots/claudia/flow/greet.js
+        fn: "greet"
     on_intent:
       offer:        "offer"
       close:        "close"
@@ -18,21 +16,20 @@ stages:
   qualify:
     entry:
       - kind: call
-        fn: "qualify"        # configs/bots/claudia/flow/qualify.js (anti-loop + 'pular')
+        fn: "qualify"
     on_intent:
-      offer:        "offer"   # "quanto custa" → oferta
-      close:        "close"   # "link/checkout" → fechamento
-      jump:         "offer"   # "pular" → avança
-      objection:    "offer"   # trata e leva para oferta
-      delivery:     "offer"   # responde via FAQ interno e empurra oferta
+      offer:        "offer"
+      close:        "close"
+      objection:    "offer"
+      delivery:     "offer"
       payment:      "offer"
       features:     "offer"
-      default:      "qualify"
+      default:      "offer"
 
   offer:
     entry:
       - kind: call
-        fn: "offer"          # configs/bots/claudia/flow/offer.js (preço + CTA link)
+        fn: "offer"
     on_intent:
       close:        "close"
       postsale:     "postsale"
@@ -41,23 +38,22 @@ stages:
   close:
     entry:
       - kind: call
-        fn: "close"          # configs/bots/claudia/flow/close.js (stickiness)
+        fn: "close"
     on_intent:
-      confirm:      "postsale" # “confirmo” → confirmação
+      confirm:      "postsale"
       postsale:     "postsale"
-      # stickiness: permanecer em close salvo cancelamento explícito
       default:      "close"
 
   postsale:
     entry:
       - kind: call
-        fn: "postsale"       # configs/bots/claudia/flow/postsale.js
+        fn: "postsale"
     on_intent:
       default:      "postsale"
 
 carimbos:
   enabled: true
-  pattern: "(flow/{{stage}})"   # todos os flows já retornam reply com carimbo
+  pattern: "(flow/{{stage}})"
 
 guardrails:
   links:
@@ -73,7 +69,7 @@ media:
   opening_photo:
     enabled: true
     source: "{{media.opening_photo_url}}"
-    stage: "greet"             # disparo 1x por sessão
+    stage: "greet"
 
 notes:
-  - "Este YAML só roteia. O conteúdo das respostas fica nos flows JS e no funnel.js."
+  - "YAML de roteamento/telemetria. Respostas ficam nos flows JS."

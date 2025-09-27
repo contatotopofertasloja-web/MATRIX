@@ -1,45 +1,70 @@
-// src/core/queue/dispatcher.js
-import { _getGlobalOutboxController } from '../queue.js';
+// src/queue/dispatcher.js — wrapper HTTP/outbox
+import express from "express";
+import { enqueueOutbox, startOutboxWorkers, queueSize } from "../core/queue/dispatcher.js";
+import { adapter as wpp } from "../adapters/whatsapp/index.js";
 
-const isObj = (v) => v && typeof v === 'object' && !Buffer.isBuffer(v);
+const OUTBOX_TOPIC           = process.env.OUTBOX_TOPIC || "outbox:whatsapp";
+const OUTBOX_RATE_PER_SEC    = Number(process.env.OUTBOX_RATE_PER_SEC || 0.5);
+const OUTBOX_CONCURRENCY     = Number(process.env.OUTBOX_CONCURRENCY || 1);
+const OUTBOX_MIN_GAP_MS      = Number(process.env.OUTBOX_MIN_GAP_MS || 1500);
+const OUTBOX_MIN_GAP_GLOBAL  = Number(process.env.OUTBOX_MIN_GAP_GLOBAL_MS || 300);
+const OUTBOX_RETRIES         = Number(process.env.OUTBOX_RETRIES || 2);
+const OUTBOX_RETRY_DELAY_MS  = Number(process.env.OUTBOX_RETRY_DELAY_MS || 1000);
+const OUTBOX_DLQ_ENABLED     = String(process.env.OUTBOX_DLQ_ENABLED || "true").toLowerCase() === "true";
 
-function normalizeContent(content) {
-  if (isObj(content) && (content.kind || content.payload)) {
-    const kind = content.kind || 'text';
-    const payload = content.payload || (isObj(content) ? { ...content } : { text: String(content ?? '') });
-    return { kind, payload };
+async function sendFn(jid, content) {
+  try {
+    if (content && typeof content === "object" && content.imageUrl) {
+      const { imageUrl, caption = "", allowLink = false, allowPrice = false } = content;
+      console.log(`[outbox/send] image to=${jid} caption=${caption.slice(0,40)}`);
+      await wpp.sendImage(jid, imageUrl, caption, { allowLink, allowPrice });
+      return;
+    }
+    const text = typeof content === "string" ? content : String(content?.text ?? "");
+    const allowLink  = !!content?.allowLink;
+    const allowPrice = !!content?.allowPrice;
+    console.log(`[outbox/send] text to=${jid} preview=${text.slice(0,60)}`);
+    await wpp.sendMessage(jid, { text, allowLink, allowPrice });
+  } catch (e) {
+    console.warn("[outbox/send] erro:", e?.message || e);
+    throw e;
   }
-  if (!isObj(content)) return { kind: 'text', payload: { text: String(content ?? '') } };
-  if (content.imageUrl || content.url) return { kind: 'image', payload: { url: content.imageUrl || content.url, caption: content.caption || '' } };
-  if (content.audioBuffer) return { kind: 'audio', payload: { buffer: content.audioBuffer, mime: content.mime || 'audio/ogg', fallbackText: content.fallbackText || '' } };
-  if (content.text) return { kind: 'text', payload: { text: String(content.text) } };
-  return { kind: 'text', payload: { text: JSON.stringify(content) } };
 }
 
-export async function enqueueOutbox({ topic, to, content, meta = {} }) {
-  const ctrl = _getGlobalOutboxController();
-  if (!ctrl?.publish) throw new Error('enqueueOutbox: outbox não inicializado');
-  if (!to) throw new Error('enqueueOutbox: "to" obrigatório');
-  const { kind, payload } = normalizeContent(content);
-  console.log(`[outbox/enqueue] topic=${topic} to=${to} kind=${kind} preview=${String(payload?.text||payload?.caption||"").slice(0,50)}`);
-  await ctrl.publish({ to, kind, payload, meta: { ...(meta || {}) } });
+export async function enqueueText(to, text, meta = {}) {
+  return enqueueOutbox({ topic: OUTBOX_TOPIC, to, content: String(text || ""), meta });
+}
+export async function enqueuePayload(to, payload, meta = {}) {
+  return enqueueOutbox({ topic: OUTBOX_TOPIC, to, content: payload, meta });
 }
 
-export async function startOutboxWorkers(handler) {
-  const ctrl = _getGlobalOutboxController();
-  if (!ctrl?.start) throw new Error('startOutboxWorkers: outbox não inicializado');
-  console.log("[outbox] iniciando workers…");
-  await ctrl.start(handler);
+export async function start() {
+  await startOutboxWorkers({
+    topic: OUTBOX_TOPIC,
+    concurrency: OUTBOX_CONCURRENCY,
+    ratePerSec: OUTBOX_RATE_PER_SEC,
+    sendFn,
+    minGapMs: OUTBOX_MIN_GAP_MS,
+    minGapGlobalMs: OUTBOX_MIN_GAP_GLOBAL,
+    maxRetries: OUTBOX_RETRIES,
+    baseRetryDelayMs: OUTBOX_RETRY_DELAY_MS,
+    dlqEnabled: OUTBOX_DLQ_ENABLED,
+  });
+  console.log(`[outbox] iniciado topic=${OUTBOX_TOPIC} conc=${OUTBOX_CONCURRENCY} rps=${OUTBOX_RATE_PER_SEC}`);
 }
 
-export async function stopOutboxWorkers() {
-  const ctrl = _getGlobalOutboxController();
-  if (!ctrl?.stop) return;
-  console.log("[outbox] parando workers…");
-  await ctrl.stop();
+export async function size() { return queueSize(OUTBOX_TOPIC); }
+
+export function mountHealthCheck(app) {
+  if (!app || typeof app.get !== "function") return;
+  app.get("/health/queue", async (_req, res) => {
+    try {
+      const qsize = await size();
+      res.json({ ok: true, topic: OUTBOX_TOPIC, size: qsize });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e?.message || "queue error" });
+    }
+  });
 }
 
-export async function queueSize() {
-  const ctrl = _getGlobalOutboxController();
-  return ctrl?.size ? await ctrl.size() : 0;
-}
+export default { start, size, enqueueText, enqueuePayload, mountHealthCheck };

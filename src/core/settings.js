@@ -1,8 +1,4 @@
-// src/core/settings.js — loader neutro de settings por BOT_ID
-// - Sem “configs/configs”
-// - Suporte a CONFIGS_ROOT (opcional) e .yaml/.yml
-// - Normaliza models_by_stage e flags globais
-
+// src/core/settings.js — loader neutro de settings (sem “cheiro” de bot)
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,17 +8,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const ROOT       = path.resolve(__dirname, "..", "..");
 
-function env(name, dflt) {
-  const v = process.env[name];
-  return v == null || v === "" ? dflt : v;
-}
+function env(name, dflt) { const v = process.env[name]; return v == null || v === "" ? dflt : v; }
 
-export const BOT_ID = env("BOT_ID", "claudia");
-
-// Permite customizar a raiz das configs via ENV (ex.: "/app/configs")
+export const BOT_ID = env("BOT_ID", "default");
 const CONFIGS_ROOT = path.resolve(env("CONFIGS_ROOT", path.join(ROOT, "configs")));
 
-// Candidatos para settings do bot
 const CANDIDATES = [
   path.join(CONFIGS_ROOT, "bots", BOT_ID, "settings.yaml"),
   path.join(CONFIGS_ROOT, "bots", BOT_ID, "settings.yml"),
@@ -30,13 +20,8 @@ const CANDIDATES = [
 
 function readYamlIfExists(p) {
   if (!fs.existsSync(p)) return null;
-  try {
-    const text = fs.readFileSync(p, "utf8");
-    return YAML.parse(text) || {};
-  } catch (e) {
-    console.warn("[SETTINGS] Falha ao ler YAML:", p, e?.message || e);
-    return {};
-  }
+  try { const text = fs.readFileSync(p, "utf8"); return YAML.parse(text) || {}; }
+  catch (e) { console.warn("[SETTINGS] Falha ao ler YAML:", p, e?.message || e); return {}; }
 }
 
 function normalizeStageKey(k) {
@@ -52,14 +37,10 @@ function normalizeStageKey(k) {
   return map.get(s) || s;
 }
 function normalizeModelsByStage(map) {
-  const out = {};
-  if (map && typeof map === "object") {
-    for (const [k, v] of Object.entries(map)) out[normalizeStageKey(k)] = String(v || "").trim();
-  }
+  const out = {}; if (map && typeof map === "object") for (const [k, v] of Object.entries(map)) out[normalizeStageKey(k)] = String(v || "").trim();
   return out;
 }
 
-// Defaults “razão social” do core (neutro)
 const GLOBAL_MODELS = {
   recepcao:     env("LLM_MODEL_RECEPCAO",     "gpt-5-nano"),
   qualificacao: env("LLM_MODEL_QUALIFICACAO", "gpt-5-nano"),
@@ -94,28 +75,16 @@ const LLM_DEFAULTS = {
   retries: Number(env("LLM_RETRIES", "2")),
 };
 
-// Carrega primeiro caminho que existir
-let loaded = null;
-let usedPath = null;
-for (const p of CANDIDATES) {
-  const obj = readYamlIfExists(p);
-  if (obj) { loaded = obj; usedPath = p; break; }
-}
+let loaded = null; let usedPath = null;
+for (const p of CANDIDATES) { const obj = readYamlIfExists(p); if (obj) { loaded = obj; usedPath = p; break; } }
 
-if (loaded) {
-  if (loaded.models_by_stage) loaded.models_by_stage = normalizeModelsByStage(loaded.models_by_stage);
-  console.log(`[SETTINGS] Carregado: ${usedPath}`);
-} else {
-  console.warn(`[SETTINGS] Arquivo não encontrado. Esperado em uma destas rotas:`);
-  for (const p of CANDIDATES) console.warn(" -", p);
-  loaded = {};
-}
+if (loaded) { if (loaded.models_by_stage) loaded.models_by_stage = normalizeModelsByStage(loaded.models_by_stage); console.log(`[SETTINGS] Carregado: ${usedPath}`); }
+else { console.warn(`[SETTINGS] Arquivo não encontrado em:`, ...CANDIDATES); loaded = {}; }
 
-// Defaults mínimos
 const fileDefaults = {
   bot_id: BOT_ID,
-  persona_name: "Cláudia",
-  product: { price_original: 197, price_target: 170, checkout_link: "", coupon_code: "" },
+  persona_name: "Atendente", // ← neutro
+  product: { price_original: 0, price_target: 0, checkout_link: "", coupon_code: "" },
   models_by_stage: {},
   flags: { has_cod: true, send_opening_photo: true },
 };

@@ -34,21 +34,24 @@ function adaptBase(baseMod) {
 }
 
 export async function loadPromptBuilder() {
-  // a) prompts da bot
-  const a = await tryImport(pathToFileURL(path.join(ROOT, "configs", "bots", BOT_ID, "prompts", "index.js")).href);
+  // a) prompts da bot (se existir) — respeita force_core_prompts
+  const botPrompts = pathToFileURL(path.join(ROOT, "configs", "bots", BOT_ID, "prompts", "index.js")).href;
+  const a = await tryImport(botPrompts);
   const aBuilder = await validateBuilder(a?.buildPrompt || a?.default);
   if (aBuilder && !GLOBAL_SETTINGS?.flags?.force_core_prompts) return aBuilder;
 
-  // c) core/base
+  // b) core/base
   const base = await tryImport(pathToFileURL(path.join(ROOT, "src", "core", "prompts", "base.js")).href);
   const baseB = adaptBase(base);
   const baseBuilder = await validateBuilder(baseB);
   if (baseBuilder) return baseBuilder;
 
-  // d) core/products (compat)
-  const prod = await tryImport(pathToFileURL(path.join(ROOT, "src", "core", "prompts", "products.js")).href);
+  // c) core/products (compat)
+  const prod = await tryImport(pathToFileURL(path.join(ROOT, "src", "core", "prompts", "product.js")).href);
   const prodB = await validateBuilder(prod?.buildPrompt);
   if (prodB) return prodB;
 
   throw new Error("[prompts] Nenhum builder válido encontrado");
 }
+
+export default { loadPromptBuilder };

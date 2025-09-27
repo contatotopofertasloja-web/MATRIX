@@ -6,7 +6,7 @@
 // - Outbox (Redis) com fallback para envio direto
 // - Orchestrator plugado (core neutro) ✅
 // - WhatsApp QR/health/ops (forçar novo QR, logout+reset sessão)
-// - (+) DEBUG: /wpp/debug, /wpp/last, /_ops/clear-debug (inspeção fromMe/remoteJid/participant)
+// - (+) DEBUG: /wpp/debug, /wpp/last, /_ops/clear-debug
 // - (+) Métricas no /health: queue/sink/backoffMs
 
 import express from "express";
@@ -34,7 +34,7 @@ import { getBotHooks } from "./core/bot-registry.js";
 import { orchestrate } from "./core/orchestrator.js";
 import { flushMetricsNow, getQueueSize, getSink, getBackoffMs } from "./core/metrics/middleware.js";
 
-// ========= Bootstrap resiliente (raiz OU configs/) =========
+// ========= Bootstrap resiliente =========
 let loadBotConfig = () => ({});
 try {
   const m = await import("../bootstrap.js");
@@ -90,9 +90,9 @@ await outbox.start(async (job) => {
 });
 
 // ========= Flows / Hooks =========
-const flows = await loadFlows(BOT_ID);           // carrega flows da pasta da BOT atual
-const hooks = await getBotHooks();               // hooks opcionais da BOT
-const HOOKS_ON = settings?.flags?.disable_hooks_fallback === false; // gating global de hooks
+const flows = await loadFlows(BOT_ID);
+const hooks = await getBotHooks();
+const HOOKS_ON = settings?.flags?.disable_hooks_fallback === false;
 
 // ========= Trace leve =========
 const TRACE_MAX = 800;
@@ -204,7 +204,7 @@ async function tryTTS(text) {
   return null;
 }
 
-// ========= DEBUG BUFFER (para /wpp/debug) =========
+// ========= DEBUG BUFFER =========
 const DBG_MAX = 200;
 const dbgBuf = [];
 function dbgPush(row) {
@@ -220,7 +220,7 @@ function requireOps(req,res,next){
   next();
 }
 
-// ========= Flow runner (resiliente) =========
+// ========= Flow runner =========
 function pickHandle(flowsMod) {
   if (typeof flowsMod?.__handle === "function") return flowsMod.__handle;
   if (typeof flowsMod?.handle   === "function") return flowsMod.handle;
@@ -231,13 +231,12 @@ function pickUnit(flowsMod, intent) {
   return flowsMod?.[intent] || flowsMod?.greet || flowsMod?.default || null;
 }
 
-// ⚠️ NOVO: suporta pickFlow() do módulo da bot (se existir). Mantém compat com run/handle/fn.
+// ⚠️ pickFlow opcional
 async function runFlows({ from, text, state }) {
   const wantAudio = false;
   let used = "none";
   let reply = "";
 
-  // 0) pickFlow → decide handler dinamicamente (string, função, ou objeto com run)
   if (typeof flows?.pickFlow === "function") {
     try {
       const selected = await flows.pickFlow(text, settings);
@@ -270,7 +269,6 @@ async function runFlows({ from, text, state }) {
     }
   }
 
-  // 1) handle/__handle
   const handle = pickHandle(flows);
   if (handle) {
     try {
@@ -286,7 +284,6 @@ async function runFlows({ from, text, state }) {
     }
   }
 
-  // 2) intent → obj.run / função default
   const intent = intentOf(text);
   let unit = pickUnit(flows, intent);
 
@@ -320,7 +317,7 @@ async function runFlows({ from, text, state }) {
   return { used, reply };
 }
 
-// ========= Entrega unificada =========
+// ========= Entrega =========
 async function deliver({ to, text, wantAudio=false }) {
   const clean = prepText(text);
   if (!clean) return;
@@ -334,7 +331,7 @@ async function deliver({ to, text, wantAudio=false }) {
   markOut(to, clean);
 }
 
-// ========= (NOVO) Roteia uma action do orquestrador → envio/outbox =========
+// ========= Orchestrator actions → envio =========
 async function routeAction(a, toFallback) {
   if (!a) return;
   const kind = (a.kind || a.type || "text").toLowerCase();
@@ -358,7 +355,7 @@ async function routeAction(a, toFallback) {
   }
 }
 
-// ========= Handler principal (onMessage) =========
+// ========= Handler principal =========
 adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
   if (!INTAKE_ON) return "";
 
@@ -372,7 +369,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       processedIds.add(id); setTimeout(()=> processedIds.delete(id), 180000).unref();
     }
 
-    // === DEBUG CAPTURE (sempre no início)
+    // Debug in
     try {
       const msgTypes = raw?.message ? Object.keys(raw.message) : [];
       dbgPush({
@@ -398,7 +395,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       sentOpening.add(from);
     }
 
-    // ECHO
+    // Echo
     if (ECHO_MODE && text) { 
       await enqueueOrDirect({ to: from, payload: { text: `Echo: ${text}` } }); 
       dbgPush({ kind:"outbound", to: from, preview: `Echo: ${String(text).slice(0,120)}` });
@@ -418,7 +415,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
     const last = lastSentAt.get(from) || 0;
     if (Date.now() - last < GAP_PER_TO) { await persist(); return ""; }
 
-    // 1) FLOW (resiliente) — agora com pickFlow + alias userId
+    // 1) FLOW
     const flowRes = await runFlows({ from, text: msg, state });
     if (flowRes.reply && flowRes.reply.trim()) {
       await deliver({ to: from, text: flowRes.reply });
@@ -428,7 +425,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       await persist(); return "";
     }
 
-    // 2) ORCHESTRATOR — usa { actions } do core
+    // 2) Orchestrator
     const flowOnly = !!settings?.flags?.flow_only;
     if (!flowOnly) {
       try {
@@ -447,7 +444,7 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
       } catch (e) { console.warn("[orchestrator]", e?.message || e); }
     }
 
-    // 3) Freeform/HOOKS (somente se ligado)
+    // 3) Freeform hooks (se ligado)
     if (!flowOnly && HOOKS_ON) {
       try {
         const built = await hooks?.safeBuildPrompt?.({ stage: "qualify", message: msg, settings });
@@ -531,7 +528,7 @@ app.get("/wpp/qr", async (req,res)=>{
 });
 app.get("/qr", (_req,res)=> res.redirect(302, "/wpp/qr?view=img"));
 
-// === DEBUG endpoints ===
+// Debug endpoints
 app.get("/wpp/debug", requireOps, (req,res)=>{
   const lim = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
   const data = dbgBuf.slice(-lim).reverse();
@@ -546,7 +543,7 @@ app.post("/_ops/clear-debug", requireOps, (_req,res)=>{
   res.json({ ok:true, cleared:true });
 });
 
-// === OPs utilitários (multi-serviço) ===
+// OPs utilitários
 app.post("/_ops/force-qr", requireOps, async (_req,res)=>{
   try { const forced = await forceNewQr(); res.json({ ok:true, forced }); }
   catch(e){ res.status(500).json({ ok:false, error:String(e?.message||e) }); }

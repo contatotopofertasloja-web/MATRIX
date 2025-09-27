@@ -9,7 +9,7 @@ categories:
       - "topofertas"
       - "sobre a empresa"
     answers:
-      - "Eu sou a Cláudia, da *{{product.store_name}}*. A gente seleciona produtos de beleza com melhor custo–benefício e entrega rápida. (faq.yaml)"
+      - "Eu sou a Cláudia, da *{{product.store_name}}*. Selecionamos produtos de beleza com ótimo custo–benefício e entrega rápida. (faq.yaml)"
 
   horario:
     triggers:
@@ -18,7 +18,7 @@ categories:
       - "plantao"
       - "ate que horas"
     answers:
-      - "Atendemos em *plantão* das *{{product.opening_hours}}* (BRT). Pode me chamar à vontade nesse horário 😉 (faq.yaml)"
+      - "Atendemos em *plantão* das *{{product.opening_hours}}* (BRT). Pode me chamar nesse horário 😉 (faq.yaml)"
 
   sorteio:
     triggers:
@@ -28,7 +28,6 @@ categories:
       - "brinde"
     answers:
       - "{{messages.sweepstakes_teaser}} (faq.yaml)"
-      - "Este mês tem *sorteio de 3 prêmios* 🎁. Regulamento no site. (faq.yaml)"
 
   parcelamento:
     triggers:
@@ -48,7 +47,7 @@ categories:
       - "quanto dura o frasco"
       - "quantas vezes rende"
     answers:
-      - "O frasco de *{{product.volume_ml}}ml* rende de 3 até 10 aplicações (depende do volume e comprimento). O alinhamento costuma durar *2–3 meses* com os cuidados certos. (faq.yaml)"
+      - "O frasco de *{{product.volume_ml}}ml* rende de 2 até 4 aplicações (depende do volume/comprimento). O alinhamento costuma durar *2–3 meses*. (faq.yaml)"
 
   contra_indicacao:
     triggers:
@@ -59,7 +58,7 @@ categories:
       - "mecha"
       - "tenho alergia"
     answers:
-      - "A *{{product.name}}* é livre de formol adicionado. Recomendamos sempre fazer um *teste de mecha* — especialmente se o couro cabeludo for sensível. (faq.yaml)"
+      - "A *{{product.name}}* é **livre de formol adicionado**. Recomendamos sempre fazer um **teste de mecha** antes da aplicação completa. (faq.yaml)"
 
   como_funciona:
     triggers:
@@ -71,8 +70,6 @@ categories:
       - "isso funciona mesmo"
     answers:
       - "É simples: lave, aplique e deixe agir ~40min; enxágue. Para maior durabilidade, finalize com escova/chapinha (opcional). (faq.yaml)"
-      - "Modo rápido: aplique, deixe agir 40 min, enxágue e finalize como preferir. (faq.yaml)"
-      - "Sim 💚 funciona de verdade! O efeito de alinhamento/liso dura até 3 meses com manutenção adequada. (faq.yaml)"
 
   entrega:
     triggers:

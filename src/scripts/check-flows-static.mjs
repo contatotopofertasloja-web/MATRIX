@@ -18,7 +18,7 @@ const FILES = {
 
 function fail(msg) {
   console.error("✖", msg);
-  process.exitCode = 1;
+  process.exitCode = 1; // não derruba imediatamente no Railway
 }
 function ok(msg) {
   console.log("✔", msg);
