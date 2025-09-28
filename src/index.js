@@ -1,4 +1,4 @@
-﻿// src/index.js — Matrix IA 2.0 (compacto + blindagens + multi-serviço)
+﻿// [MATRIX_STAMP:http v2.0] src/index.js — Matrix IA 2.0 (compacto + blindagens + multi-serviço)
 // - Gating de hooks (core neutro; cada bot pluga só sua pasta)
 // - Runner resiliente de flows (__handle/handle | obj.run | default function | pickFlow)
 // - Sanitização de links com whitelist (settings.guardrails.allowed_links)
@@ -7,7 +7,7 @@
 // - Orchestrator plugado (core neutro) ✅
 // - WhatsApp QR/health/ops (forçar novo QR, logout+reset sessão)
 // - (+) DEBUG: /wpp/debug, /wpp/last, /_ops/clear-debug
-// - (+) Métricas no /health: queue/sink/backoffMs
+// - (+) Métricas no /health: queue/sink/backoffMs (no-op seguro se middleware ausente)
 
 import express from "express";
 import cors from "cors";
@@ -23,8 +23,8 @@ import {
   logoutAndReset,
 } from "./adapters/whatsapp/index.js";
 
-import { createOutbox } from "./core/queue.js";
-import { stopOutboxWorkers } from "./core/queue/dispatcher.js";
+// ✅ FIX: importa diretamente do dispatcher correto (evita "core/core/queue/dispatcher.js")
+import { createOutbox } from "./core/queue/dispatcher.js";
 
 import { BOT_ID, settings } from "./core/settings.js";
 import { loadFlows } from "./core/flow-loader.js";
@@ -32,7 +32,21 @@ import { intentOf } from "./core/intent.js";
 import { callLLM } from "./core/llm.js";
 import { getBotHooks } from "./core/bot-registry.js";
 import { orchestrate } from "./core/orchestrator.js";
-import { flushMetricsNow, getQueueSize, getSink, getBackoffMs } from "./core/metrics/middleware.js";
+
+// Métricas opcionais (no-op seguro se arquivo não existir)
+let flushMetricsNow = async () => {};
+let getQueueSize = () => 0;
+let getSink = () => "none";
+let getBackoffMs = () => 0;
+try {
+  const mm = await import("./core/metrics/middleware.js");
+  flushMetricsNow = mm.flushMetricsNow || flushMetricsNow;
+  getQueueSize = mm.getQueueSize || getQueueSize;
+  getSink = mm.getSink || getSink;
+  getBackoffMs = mm.getBackoffMs || getBackoffMs;
+} catch {
+  // middleware ausente — segue com no-ops
+}
 
 // ========= Bootstrap resiliente =========
 let loadBotConfig = () => ({});
@@ -605,11 +619,10 @@ const server = app.listen(PORT, HOST, ()=> console.log(`[HTTP] Matrix bot (${BOT
 
 async function shutdown(sig){
   console.log("[shutdown]", sig);
-  try { await stopOutboxWorkers(); } catch {}
   try { await flushMetricsNow(); } catch {}
   try { await new Promise(r=>server?.close?.(()=>r())); } catch {}
   try { adapter?.close?.(); } catch {}
-  try { outbox?.stop?.(); } catch {}
+  try { await outbox?.close?.(); } catch {}
   setTimeout(()=> process.exit(0), 1200).unref();
 }
 process.once("SIGINT",  ()=> shutdown("SIGINT"));
