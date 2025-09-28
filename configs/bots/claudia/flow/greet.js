@@ -1,8 +1,7 @@
 // configs/bots/claudia/flow/greet.js
-// Abertura em 2 passos: 1) pedir o nome; 2) perguntar se conhece a Progressiva.
-// Aceita respostas curtas como nome (ex.: “Vanda”) e trata “não conheço”/“sim”.
-// Se vier objetivo (alisar / frizz / volume / brilho), já handoff para offer.
-// Carimbos preservados. Formatação limpa (sem excesso de **).
+// Abertura em 2 passos (nome → conhece?), vocativo variado e
+// handoff para offer quando a cliente declara o objetivo.
+// Carimbos preservados. Formatação enxuta.
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 
@@ -16,7 +15,7 @@ function detectGoal(s = "") {
   return null;
 }
 
-// ————————— normalização de nome —————————
+// ————————— nome livre (curto) —————————
 function pickNameFromFreeText(s = "") {
   const t = s.trim();
 
@@ -34,20 +33,37 @@ function pickNameFromFreeText(s = "") {
 }
 const toTitle = (s="") => s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
 
+// ————————— vocativo variado —————————
+function pickVocative(profile) {
+  const first = (profile?.name || "").split(" ")[0] || "";
+  // pesos: 55% nome, 20% “minha flor”, 15% “amiga”, 10% vazio
+  const r = Math.random();
+  if (first && r < 0.55) return first;
+  if (r < 0.75) return "minha flor";
+  if (r < 0.90) return "amiga";
+  return ""; // às vezes sem vocativo, para não soar repetitiva
+}
+function vocStr(voc) { return voc ? `, ${voc}` : ""; }
+
 export default async function greet(ctx = {}) {
   const { state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
   const asked   = ensureAsked(state);
   const s       = String(text).trim();
 
-  // 0) objetivo declarado em qualquer momento → handoff p/ offer
+  // 0) objetivo declarado em qualquer momento → handoff p/ offer + já pedir CEP+Cidade
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
     state.stage = "offer.ask_cep_city";
-    const call = profile.name ? profile.name.split(" ")[0] : "💚";
+    const voc = pickVocative(profile);
     return {
-      reply: tagReply(ctx, `Perfeito, ${call}! Nossa Progressiva Vegetal serve para todos os tipos de cabelo. Já te passo a condição do dia 🙌`, "flow/greet→offer"),
+      reply: tagReply(
+        ctx,
+        `Perfeito${vocStr(voc)}! Nossa Progressiva Vegetal serve para todos os tipos de cabelo.\n` +
+        `Pra liberar a condição do dia, me passe o **CEP** (ex.: 00000-000) e a **cidade** (ex.: Brasília/DF).`,
+        "flow/greet→offer"
+      ),
       meta: { tag: "flow/greet→offer" },
     };
   }
@@ -59,22 +75,31 @@ export default async function greet(ctx = {}) {
       const picked = toTitle(pickNameFromFreeText(s));
       if (picked) {
         profile.name = picked;
-        markAsked(state, "name"); // já estava, mantemos marcado
+        markAsked(state, "name"); // mantemos marcado
 
-        // se a mesma frase indica que “não conhece”, pula p/ pergunta de objetivo
+        // se na mesma frase disser que não conhece/conhece, já vamos pro objetivo
         const saysNo  = /\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s);
         const saysYes = /\b(sim|já\s*conhe[cç]o|conhe[cç]o)\b/i.test(s);
         if (saysNo || saysYes) {
+          const voc = pickVocative(profile);
           return {
-            reply: tagReply(ctx, `Prazer, ${picked}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`, "flow/greet#ask_goal"),
+            reply: tagReply(
+              ctx,
+              `Prazer${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`,
+              "flow/greet#ask_goal"
+            ),
             meta: { tag: "flow/greet#ask_goal" },
           };
         }
 
-        // 2º passo: checar se conhece a Progressiva
+        // 2º passo: perguntar se conhece a Progressiva
         markAsked(state, "known");
         return {
-          reply: tagReply(ctx, `Prazer, ${picked}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`, "flow/greet#ask_known"),
+          reply: tagReply(
+            ctx,
+            `Prazer, ${picked}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`,
+            "flow/greet#ask_known"
+          ),
           meta: { tag: "flow/greet#ask_known" },
         };
       }
@@ -105,24 +130,36 @@ export default async function greet(ctx = {}) {
   }
 
   // 3) interpretar resposta “conhece?” e levar para o objetivo
-  const first = profile.name.split(" ")[0];
+  const voc = pickVocative(profile);
 
   if (/\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s)) {
     return {
-      reply: tagReply(ctx, `Sem problema, ${first}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`, "flow/greet#ask_goal"),
+      reply: tagReply(
+        ctx,
+        `Sem problema${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`,
+        "flow/greet#ask_goal"
+      ),
       meta: { tag: "flow/greet#ask_goal" },
     };
   }
   if (/\b(sim|já|conhe[cç]o)\b/i.test(s)) {
     return {
-      reply: tagReply(ctx, `Ótimo, ${first}! Me conta: qual é o seu objetivo hoje — alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`, "flow/greet#ask_goal"),
+      reply: tagReply(
+        ctx,
+        `Ótimo${vocStr(voc)}! Me conta: qual é o seu objetivo hoje — alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`,
+        "flow/greet#ask_goal"
+      ),
       meta: { tag: "flow/greet#ask_goal" },
     };
   }
 
-  // 4) se vier o objetivo aqui, cai no bloco 0 na próxima mensagem; senão, nudge
+  // 4) se vier o objetivo na próxima, cai no bloco 0; senão, nudge
   return {
-    reply: tagReply(ctx, `Certo, ${first}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`, "flow/greet#ask_goal"),
+    reply: tagReply(
+      ctx,
+      `Certo${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho de salão em casa?`,
+      "flow/greet#ask_goal"
+    ),
     meta: { tag: "flow/greet#ask_goal" },
   };
 }
