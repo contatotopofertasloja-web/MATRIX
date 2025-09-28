@@ -1,6 +1,6 @@
 ﻿// [MATRIX_STAMP:http v2.0] src/index.js — Matrix IA 2.0 (compacto + blindagens + multi-serviço)
 // - Gating de hooks (core neutro; cada bot pluga só sua pasta)
-// - Runner resiliente de flows (__handle/handle | obj.run | default function | pickFlow)
+// - Runner resiliente de flows (__route → pickFlow → handle → intents)  ← AJUSTE
 // - Sanitização de links com whitelist (settings.guardrails.allowed_links)
 // - Anti-rajada de saída (reply_dedupe_ms)
 // - Outbox (Redis) com fallback para envio direto
@@ -246,12 +246,46 @@ function pickUnit(flowsMod, intent) {
   return flowsMod?.[intent] || flowsMod?.greet || flowsMod?.default || null;
 }
 
-// ⚠️ pickFlow opcional
+// ⚠️ AGORA COM __route PRIORITÁRIO (evita loop no qualify)
 async function runFlows({ from, text, state }) {
   const wantAudio = false;
   let used = "none";
   let reply = "";
 
+  // 0) Router por estado — se o módulo de flows expôs __route, ele decide primeiro
+  if (typeof flows?.__route === "function") {
+    try {
+      const hinted = await flows.__route({ from, text, state, settings, intent: intentOf(text) });
+      let unit = null;
+      if (typeof hinted === "string")           unit = flows?.[hinted] || flows?.default || null;
+      else if (typeof hinted === "function")    unit = hinted;
+      else if (hinted && typeof hinted.run === "function") unit = hinted;
+
+      if (unit) {
+        if (typeof unit.run === "function") {
+          await unit.run({
+            jid: from, userId: from, text, settings, state,
+            send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
+          });
+          used = "flow/__route.run";
+          return { used, reply: "" };
+        }
+        if (typeof unit === "function") {
+          const out = await unit({
+            jid: from, userId: from, text, settings, state,
+            send: async (to, t)=> deliver({ to, text: String(t||""), wantAudio })
+          });
+          reply = out?.reply || (typeof out === "string" ? out : "");
+          used = "flow/__route.fn";
+          return { used, reply };
+        }
+      }
+    } catch (e) {
+      console.warn("[flow.__route]", e?.message || e);
+    }
+  }
+
+  // 1) pickFlow (opcional)
   if (typeof flows?.pickFlow === "function") {
     try {
       const selected = await flows.pickFlow(text, settings);
@@ -284,6 +318,7 @@ async function runFlows({ from, text, state }) {
     }
   }
 
+  // 2) handle clássico
   const handle = pickHandle(flows);
   if (handle) {
     try {
@@ -299,6 +334,7 @@ async function runFlows({ from, text, state }) {
     }
   }
 
+  // 3) por intenção (nomes exportados)
   const intent = intentOf(text);
   let unit = pickUnit(flows, intent);
 

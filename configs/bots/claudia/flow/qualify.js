@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/qualify.js
-// Simplificado: sem perguntas de tipo de cabelo. Só registra nome/objetivo e encaminha pro offer.
+// Simplificado: registra nome/objetivo e ACIONA o offer (state.stage = offer.ask_cep_city)
 
 import { ensureProfile, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -23,6 +23,11 @@ export default async function qualify(ctx = {}) {
   if (g) p.goal = g[1].toLowerCase();
 
   await remember(jid, { profile: state.profile });
+
+  // Quando concluímos a qualificação, já deixamos o próximo estágio preparado
+  if (p.goal || p.name) {
+    state.stage = "offer.ask_cep_city"; // <- chave para o router cair em offer
+  }
 
   if (p.name && p.goal) {
     return { reply: tagReply(ctx, `Perfeito, ${p.name}! Já consigo verificar a promoção do dia 🙌`, "flow/qualify→offer"), meta: { tag: "flow/qualify→offer" } };
