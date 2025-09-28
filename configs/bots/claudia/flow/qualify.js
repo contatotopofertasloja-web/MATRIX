@@ -1,13 +1,18 @@
 // configs/bots/claudia/flow/qualify.js
 // Registra nome/objetivo e, quando tiver objetivo, ACIONA o offer (state.stage = "offer.ask_cep_city").
-// Formatação limpa (sem excesso de **). Carimbos preservados.
+// Correção: extração de nome com Unicode (NFC + \p{L}) para não truncar acentos.
+// Formatação limpa. Carimbos preservados.
 
 import { ensureProfile, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
 
+// ——— util unicode ———
+const T = (s = "") => String(s).normalize("NFC");
+const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
+
 // ——— detecção robusta de objetivo ———
 function detectGoal(s = "") {
-  const t = String(s).toLowerCase();
+  const t = T(s).toLowerCase();
   if (/\balis(ar|amento)|liso|progressiva\b/.test(t)) return "alisar";
   if (/\bfrizz|arrepiad/.test(t)) return "frizz";
   if (/\b(baixar|reduzir|diminuir)\s+volume\b|\bvolume\b/.test(t)) return "volume";
@@ -15,10 +20,10 @@ function detectGoal(s = "") {
   return null;
 }
 
-// ——— extração de nome por frases comuns ———
+// ——— extração de nome por frases comuns (Unicode-safe) ———
 const RX = {
   NAME_SENTENCE:
-    /\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,}(?:\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,})*)/i,
+    /\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([\p{L}’'\-]{2,}(?:\s+[\p{L}’'\-]{2,})*)/iu,
 };
 
 // evita tratar objetivo como nome (ex.: “alisar” salvo em name)
@@ -31,7 +36,7 @@ function sanitizeNameLikeGoal(name = "") {
 
 export default async function qualify(ctx = {}) {
   const { jid, state = {}, text = "" } = ctx;
-  const s = String(text || "").trim();
+  const s = T(text).trim();
   const profile = ensureProfile(state);
 
   // carrega memória anterior (se houver)
@@ -40,7 +45,7 @@ export default async function qualify(ctx = {}) {
 
   // 1) nome por frase do tipo “me chamo … / meu nome é …”
   const m = s.match(RX.NAME_SENTENCE);
-  if (m) profile.name = m[2].trim();
+  if (m) profile.name = toTitle(m[2].trim());
   profile.name = sanitizeNameLikeGoal(profile.name);
 
   // 2) objetivo explícito

@@ -1,13 +1,18 @@
 // configs/bots/claudia/flow/greet.js
 // Abertura em 2 passos (nome → conhece?), vocativo variado e
 // handoff para offer quando a cliente declara o objetivo.
+// Correção: extração de nome com Unicode (NFC + \p{L}) para não truncar acentos.
 // Carimbos preservados. Formatação enxuta.
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 
+// ————————— util unicode —————————
+const T = (s = "") => String(s).normalize("NFC"); // normaliza para NFC (ex.: "é" → "é")
+const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
+
 // ————————— detecção de objetivo —————————
 function detectGoal(s = "") {
-  const t = String(s).toLowerCase();
+  const t = T(s).toLowerCase();
   if (/\balis(ar|amento)|liso|progressiva\b/.test(t)) return "alisar";
   if (/\bfrizz|arrepiad/.test(t)) return "frizz";
   if (/\b(baixar|reduzir|diminuir)\s+volume\b|\bvolume\b/.test(t)) return "volume";
@@ -17,21 +22,20 @@ function detectGoal(s = "") {
 
 // ————————— nome livre (curto) —————————
 function pickNameFromFreeText(s = "") {
-  const t = s.trim();
+  const t = T(s).trim();
 
-  // “meu nome é … / me chamo … / sou …”
-  const m = t.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,}(?:\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÜÇa-záàâãéêíóôõúüç]{2,})*)/i);
+  // “meu nome é … / me chamo … / sou …”  (Unicode-safe)
+  const m = t.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([\p{L}’'\-]{2,}(?:\s+[\p{L}’'\-]{2,})*)/iu);
   if (m) return m[2].trim();
 
   // resposta curta (primeira palavra) – ignora “não/sim/já/conheço…”
   const block = /\b(n(ã|a)o|sim|já|ja|conhe[cç]o)\b/i;
   if (!block.test(t)) {
-    const m2 = t.match(/^\s*([A-Za-zÀ-ÖØ-öø-ÿ']{2,})/);
+    const m2 = t.match(/^\s*([\p{L}’'\-]{2,})/u);
     if (m2) return m2[1];
   }
   return "";
 }
-const toTitle = (s="") => s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
 
 // ————————— vocativo variado —————————
 function pickVocative(profile) {
@@ -43,13 +47,13 @@ function pickVocative(profile) {
   if (r < 0.90) return "amiga";
   return ""; // às vezes sem vocativo, para não soar repetitiva
 }
-function vocStr(voc) { return voc ? `, ${voc}` : ""; }
+const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
 export default async function greet(ctx = {}) {
   const { state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
-  const asked   = ensureAsked(state);
-  const s       = String(text).trim();
+  const asked = ensureAsked(state);
+  const s = T(text).trim();
 
   // 0) objetivo declarado em qualquer momento → handoff p/ offer + já pedir CEP+Cidade
   const g0 = detectGoal(s);
@@ -61,7 +65,7 @@ export default async function greet(ctx = {}) {
       reply: tagReply(
         ctx,
         `Perfeito${vocStr(voc)}! Nossa Progressiva Vegetal serve para todos os tipos de cabelo.\n` +
-        `Pra liberar a condição do dia, me passe o **CEP** (ex.: 00000-000) e a **cidade** (ex.: Brasília/DF).`,
+          `Pra liberar a condição do dia, me passe o CEP (ex.: 00000-000) e a cidade (ex.: Brasília/DF).`,
         "flow/greet→offer"
       ),
       meta: { tag: "flow/greet→offer" },
@@ -78,7 +82,7 @@ export default async function greet(ctx = {}) {
         markAsked(state, "name"); // mantemos marcado
 
         // se na mesma frase disser que não conhece/conhece, já vamos pro objetivo
-        const saysNo  = /\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s);
+        const saysNo = /\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s);
         const saysYes = /\b(sim|já\s*conhe[cç]o|conhe[cç]o)\b/i.test(s);
         if (saysNo || saysYes) {
           const voc = pickVocative(profile);
@@ -106,7 +110,7 @@ export default async function greet(ctx = {}) {
 
       // ainda não deu pra extrair nome → reforço curto
       return {
-        reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Vanda…", "flow/greet#ask_name"),
+        reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
         meta: { tag: "flow/greet#ask_name" },
       };
     }
@@ -124,7 +128,11 @@ export default async function greet(ctx = {}) {
     markAsked(state, "known");
     const first = profile.name.split(" ")[0];
     return {
-      reply: tagReply(ctx, `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`, "flow/greet#ask_known"),
+      reply: tagReply(
+        ctx,
+        `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`,
+        "flow/greet#ask_known"
+      ),
       meta: { tag: "flow/greet#ask_known" },
     };
   }
