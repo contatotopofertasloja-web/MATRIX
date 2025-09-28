@@ -97,11 +97,12 @@ const REDIS_URL    = process.env.MATRIX_REDIS_URL || process.env.REDIS_URL || ""
 const OUTBOX_TOPIC = process.env.OUTBOX_TOPIC || `outbox:${process.env.WPP_SESSION || "default"}`;
 const OUTBOX_CONC  = envN(process.env.QUEUE_OUTBOX_CONCURRENCY, 1);
 
-const outbox = await createOutbox({ topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONC, redisUrl: REDIS_URL });
-await outbox.start(async (job) => {
+// 🔧 ajuste: não bloquear o boot (sem await aqui)
+const outbox = createOutbox({ topic: OUTBOX_TOPIC, concurrency: OUTBOX_CONC, redisUrl: REDIS_URL });
+outbox.start(async (job) => {
   const { to, kind = "text", payload = {} } = job || {};
   await sendViaAdapter(to, kind, payload);
-});
+}).catch(()=>{});
 
 // ========= Flows / Hooks =========
 const flows = await loadFlows(BOT_ID);
