@@ -23,7 +23,7 @@ export async function __route(ctx = {}) {
 // === Mapa de handlers por stage ===
 export const handlers = {
   recepcao: greet,
-  greet, // alias
+  greet,
   qualificacao: qualify,
   oferta: offer,
   fechamento: close,
