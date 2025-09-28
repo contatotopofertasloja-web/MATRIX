@@ -208,7 +208,7 @@ export default async function offer(ctx = {}) {
 - E temos **${P.quota} unidades relâmpago por R$ ${P.promoDay},00** 🎉
 
 Quer que eu verifique se a condição de **R$ ${P.promoDay},00** está liberada pra você, com **pagamento só na entrega**?
-A entrega é rápida: **até ${P.capH}h nas capitais** e **até ${P.othH}h nas demais localidades**.`;
+A entrega é rápida: **até ${P.capH}h nas capitais** e **até ${P.othH}h** nas demais localidades**.`;
     return TAG(msg, "flow/offer#price");
   }
   if (RX.LINK.test(lower)) {
