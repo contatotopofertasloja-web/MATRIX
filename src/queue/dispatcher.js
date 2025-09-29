@@ -12,19 +12,33 @@ const OUTBOX_RETRIES         = Number(process.env.OUTBOX_RETRIES || 2);
 const OUTBOX_RETRY_DELAY_MS  = Number(process.env.OUTBOX_RETRY_DELAY_MS || 1000);
 const OUTBOX_DLQ_ENABLED     = String(process.env.OUTBOX_DLQ_ENABLED || "true").toLowerCase() === "true";
 
+// --- helper para enviar UMA unidade de conteúdo ---
+async function sendUnit(jid, unit) {
+  if (unit && typeof unit === "object" && unit.imageUrl) {
+    const { imageUrl, caption = "", allowLink = false, allowPrice = false } = unit;
+    console.log(`[outbox/send] image to=${jid} caption=${caption.slice(0,40)}`);
+    await wpp.sendImage(jid, imageUrl, caption, { allowLink, allowPrice });
+    return;
+  }
+  const text = typeof unit === "string" ? unit : String(unit?.text ?? "");
+  const allowLink  = !!unit?.allowLink;
+  const allowPrice = !!unit?.allowPrice;
+  console.log(`[outbox/send] text to=${jid} preview=${text.slice(0,60)}`);
+  await wpp.sendMessage(jid, { text, allowLink, allowPrice });
+}
+
 async function sendFn(jid, content) {
   try {
-    if (content && typeof content === "object" && content.imageUrl) {
-      const { imageUrl, caption = "", allowLink = false, allowPrice = false } = content;
-      console.log(`[outbox/send] image to=${jid} caption=${caption.slice(0,40)}`);
-      await wpp.sendImage(jid, imageUrl, caption, { allowLink, allowPrice });
+    // Suporte a múltiplas mensagens (replies[])
+    if (Array.isArray(content)) {
+      for (const unit of content) {
+        // envia cada parte em sequência, respeitando o rate/worker
+        await sendUnit(jid, unit);
+      }
       return;
     }
-    const text = typeof content === "string" ? content : String(content?.text ?? "");
-    const allowLink  = !!content?.allowLink;
-    const allowPrice = !!content?.allowPrice;
-    console.log(`[outbox/send] text to=${jid} preview=${text.slice(0,60)}`);
-    await wpp.sendMessage(jid, { text, allowLink, allowPrice });
+    // Mensagem única (com ou sem imagem)
+    await sendUnit(jid, content);
   } catch (e) {
     console.warn("[outbox/send] erro:", e?.message || e);
     throw e;
@@ -35,6 +49,7 @@ export async function enqueueText(to, text, meta = {}) {
   return enqueueOutbox({ topic: OUTBOX_TOPIC, to, content: String(text || ""), meta });
 }
 export async function enqueuePayload(to, payload, meta = {}) {
+  // payload pode ser string, objeto, ou ARRAY de objetos/strings (replies)
   return enqueueOutbox({ topic: OUTBOX_TOPIC, to, content: payload, meta });
 }
 
