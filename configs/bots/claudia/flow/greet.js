@@ -1,10 +1,6 @@
 // configs/bots/claudia/flow/greet.js
-// Correções aplicadas (base: 2009 - greet.txt):
-// 1) Flags persistentes (askedName / askedKnown) + compat. com asked volátil.
-// 2) Interpreta "sim/não" ANTES de re-perguntar se conhece (evita loop).
-// 3) "não conheço" → envia DUAS mensagens (explicação breve + ask_goal).
-// 4) "já conheço" → vai direto para offer.ask_cep_city.
-// 5) Carimbos (tags) preservados para rastreio em produção.
+// Fluxo validado: objetivo → (preço cheio R$197 + promo R$170) → pedir CEP+Cidade (consulta especial)
+// Base usada: 2032 - greet.txt
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -50,7 +46,7 @@ const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
 // ——— fluxo greet ———
 export default async function greet(ctx = {}) {
-  const { jid = "", state = {}, text = "" } = ctx;
+  const { jid = "", state = {}, text = "", settings = {} } = ctx;
   const profile = ensureProfile(state);
   const askedVolatile = ensureAsked(state); // compat. com core atual
   const s = T(text).trim();
@@ -67,21 +63,22 @@ export default async function greet(ctx = {}) {
     try { await remember(jid, { profile, flags }); } catch {}
   };
 
-  // 0) objetivo pode ser declarado a qualquer momento → ir para offer
+  // 0) objetivo pode ser declarado a qualquer momento → apresentar âncora+promo e pedir CEP+Cidade
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
     state.stage = "offer.ask_cep_city";
     await save();
     const voc = pickVocative(profile);
-    return {
-      reply: tagReply(
-        ctx,
-        `Perfeito${vocStr(voc)}! Pra liberar a condição do dia, me passe o CEP (ex.: 00000-000) e a cidade (ex.: Brasília/DF).`,
-        "flow/greet→offer"
-      ),
-      meta: { tag: "flow/greet→offer" },
-    };
+    const m1 = tagReply(
+      ctx,
+      `Perfeito${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
+      `💰 **Preço cheio: R$197**\n🎁 **Promo do dia: R$170**\n\n` +
+      `Quer que eu **consulte no sistema** se existe **promoção especial** pro seu endereço?\n` +
+      `Se sim, me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
+      "flow/offer#precheck_special"
+    );
+    return { replies: [m1], meta: { tag: "flow/offer#precheck_special" } };
   }
 
   // 1) coletar nome
@@ -137,14 +134,15 @@ export default async function greet(ctx = {}) {
     state.stage = "offer.ask_cep_city";
     await save();
     const voc = pickVocative(profile);
-    return {
-      reply: tagReply(
-        ctx,
-        `Ótimo${vocStr(voc)}! Posso consultar se há **oferta especial para o seu endereço**. Me envia **Cidade + CEP** (ex.: 01001-000 – São Paulo/SP).`,
-        "flow/greet#known_yes→offer"
-      ),
-      meta: { tag: "flow/greet#known_yes→offer" },
-    };
+    const msg = tagReply(
+      ctx,
+      `Ótimo${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
+      `💰 **Preço cheio: R$197**\n🎁 **Promo do dia: R$170**\n\n` +
+      `Quer que eu **consulte no sistema** se existe **promoção especial** pro seu endereço?\n` +
+      `Se sim, me envia **Cidade/UF + CEP** (ex.: **01001-000 – São Paulo/SP**).`,
+      "flow/offer#precheck_special"
+    );
+    return { reply: msg, meta: { tag: "flow/offer#precheck_special" } };
   }
 
   // 3) se ainda não perguntamos, perguntar se conhece

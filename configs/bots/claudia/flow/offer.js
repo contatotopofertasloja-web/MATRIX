@@ -1,9 +1,7 @@
 // configs/bots/claudia/flow/offer.js
-// Estratégia A:
-// - Coinzz (Correios): R$170 fixo (prepaid).
-// - Logzz (COD): oferecer 2x R$197 (R$98,50 cada) OU 1x R$150 (promo relâmpago),
-//   com ênfase em "pagamento só na entrega" APÓS cobertura por CEP/Cidade.
-// - NÃO revelar R$150 antes da checagem de CEP. Carimbos mantidos.
+// Ajustado: pré-CEP agora apresenta âncora (R$197) + promo do dia (R$170) e só depois pede Cidade/UF + CEP.
+// Mantém: cobertura → COD (2×197 ou 1×150) | fora de rota → Coinzz (R$170).
+// Base usada: 2032 - offer.txt
 
 import { normalizeSettings, tagReply } from "./_state.js";
 import { recall, remember } from "../../../../src/core/memory.js";
@@ -195,18 +193,21 @@ E o melhor: pagamento somente na entrega (COD), direto ao entregador. Aceitamos 
   }
   if (RX.OBJECTION_PRICE.test(lower)) {
     const msg = `Entendo 👍 Comparando com salão, sai bem mais em conta e você faz em casa no seu tempo.
-Hoje trabalhamos a partir de R$ ${P.target},00. Posso consultar seu CEP pra ver se libera oferta exclusiva com pagamento só na entrega?`;
+Hoje trabalhamos a **R$ ${P.original},00** (cheio) com **Promo do Dia por R$ ${P.target},00**.
+Posso consultar seu CEP pra ver se libera **promoção especial** com pagamento só na entrega?`;
     return TAG(msg, "flow/offer#objection_price");
   }
 
-  // 1) Preço / Link (pré-CEP: não revelar 150)
+  // 1) Preço / Link (pré-CEP)
   if (RX.PRICE.test(lower)) {
     state.stage = FLOW.ASK_CEP_CITY;
-    const msg = `Ótima pergunta 💚
-Hoje temos condição especial **a partir de R$ ${P.target},00**.
-Posso consultar no sistema se o seu CEP libera oferta exclusiva com pagamento **só na entrega**?
-Me informa Cidade + CEP, por favor.`;
-    return TAG(msg, "flow/offer#price_min_anchor");
+    const msg = `Hoje a nossa condição está assim:
+💰 **Preço cheio: R$ ${P.original},00**
+🎁 **Promo do dia: R$ ${P.target},00**
+
+Quer que eu **consulte no sistema** se existe **promoção especial** para o seu endereço?
+Se sim, me envia **Cidade/UF + CEP** (ex.: São Paulo/SP – 01001-000).`;
+    return TAG(msg, "flow/offer#precheck_special");
   }
   if (RX.LINK.test(lower)) {
     const msg = `Aqui está o link seguro para finalizar pelo site oficial:
@@ -214,17 +215,31 @@ ${S?.product?.checkout_link || P.link}`;
     return TAG(msg, "flow/offer#link");
   }
 
-  // 2) Pedir CEP + Cidade
+  // 2) Pedir CEP + Cidade (entrada padrão vinda do greet)
   if (state.stage === FLOW.ASK_CEP_CITY || want("cep_city", state)) {
     const ck = ensureCheckout(state);
 
+    // ——— NOVO: se ainda não temos CEP nem Cidade, mostrar âncora + promo e pedir ambos ———
+    if (!ck.cep && !ck.city) {
+      state.stage = FLOW.ASK_CEP_CITY;
+      return TAG(
+        `Hoje a nossa condição está assim:
+💰 **Preço cheio: R$ ${P.original},00**
+🎁 **Promo do dia: R$ ${P.target},00**
+
+Quer que eu **consulte no sistema** se existe **promoção especial** para o seu endereço?
+Me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
+        "flow/offer#precheck_special"
+      );
+    }
+
     if (!ck.cep) {
       state.stage = FLOW.ASK_CEP_CITY;
-      return TAG(`Pode me enviar o seu CEP (ex.: 00000-000) e a cidade (ex.: Brasília/DF)?`, "flow/offer#ask_cep_city");
+      return TAG(`Pode me enviar o seu **CEP** (ex.: 00000-000)?`, "flow/offer#ask_cep_city");
     }
     if (!ck.city) {
       state.stage = FLOW.ASK_CEP_CITY;
-      return TAG(`Obrigada! Agora me diga a cidade (ex.: Brasília/DF).`, "flow/offer#ask_city");
+      return TAG(`Obrigada! Agora me diga a **cidade no formato Cidade/UF** (ex.: Brasília/DF).`, "flow/offer#ask_city");
     }
 
     // Checar cobertura
@@ -400,8 +415,8 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
   state.stage = FLOW.ASK_CEP_CITY;
   return TAG(
     `A Progressiva Vegetal serve para todos os tipos de cabelo e hidrata enquanto alinha.
-Hoje trabalhamos **a partir de R$ ${P.target},00**.
-Quer que eu verifique seu **CEP** para liberar oferta exclusiva com **pagamento só na entrega**?`,
+Hoje: **R$ ${P.original},00** (cheio) e **R$ ${P.target},00** (Promo do Dia).
+Quer que eu verifique seu **CEP** para liberar **promoção especial** com **pagamento só na entrega**?`,
     "flow/offer#fallback"
   );
 }
