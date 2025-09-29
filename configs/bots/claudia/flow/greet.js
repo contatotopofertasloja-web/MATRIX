@@ -1,8 +1,12 @@
 // configs/bots/claudia/flow/greet.js
-// Base preservada (1844). Ajuste: rota “não conheço” agora retorna duas mensagens (replies[]).
+// Base preservada (1900). Correções:
+// 1) Persistência de profile via memory (recall/remember) para não perder nome/objetivo entre turnos.
+// 2) “não conheço” → duas mensagens (replies[]).
+// 3) “já conheço” → cai direto em offer.ask_cep_city.
 // Carimbos e vocativos preservados.
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
+import { remember, recall } from "../../../../src/core/memory.js";
 
 // ————————— util unicode —————————
 const T = (s = "") => String(s).normalize("NFC");
@@ -44,16 +48,23 @@ function pickVocative(profile) {
 const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
 export default async function greet(ctx = {}) {
-  const { state = {}, text = "" } = ctx;
+  const { jid = "", state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
   const asked = ensureAsked(state);
   const s = T(text).trim();
+
+  // ——— carrega profile persistido (evita voltar a pedir nome) ———
+  try {
+    const saved = await recall(jid);
+    if (saved?.profile) Object.assign(profile, saved.profile);
+  } catch {}
 
   // 0) objetivo declarado em qualquer momento → handoff p/ offer
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
     state.stage = "offer.ask_cep_city";
+    try { await remember(jid, { profile }); } catch {}
     const voc = pickVocative(profile);
     return {
       reply: tagReply(
@@ -71,6 +82,7 @@ export default async function greet(ctx = {}) {
       const picked = toTitle(pickNameFromFreeText(s));
       if (picked) {
         profile.name = picked;
+        try { await remember(jid, { profile }); } catch {}
         markAsked(state, "name");
 
         const saysNo = /\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s);
@@ -128,7 +140,7 @@ export default async function greet(ctx = {}) {
   // 3) interpretar resposta “conhece?”
   const voc = pickVocative(profile);
 
-  // ➤ AJUSTE: “não conheço” → retorna duas mensagens (replies[])
+  // ——— “não conheço” → duas mensagens (replies[]) ———
   if (/\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s)) {
     const msg1 = tagReply(
       ctx,
@@ -147,9 +159,10 @@ export default async function greet(ctx = {}) {
     };
   }
 
-  // ➤ “já conheço” → cai direto em offer.ask_cep_city
+  // ——— “já conheço” → cai direto em offer.ask_cep_city ———
   if (/\b(sim|já|conhe[cç]o|usei)\b/i.test(s)) {
     state.stage = "offer.ask_cep_city";
+    try { await remember(jid, { profile }); } catch {}
     return {
       reply: tagReply(
         ctx,
