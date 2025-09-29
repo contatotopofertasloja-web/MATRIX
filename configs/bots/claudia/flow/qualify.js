@@ -1,6 +1,7 @@
 // configs/bots/claudia/flow/qualify.js
-// Base preservada (1509). Pequeno ajuste: clareza ao ir para offer quando já tem objetivo.
-// Unicode-safe, memória ativa, carimbos mantidos.
+// Base preservada (1849). Ajuste: quando ainda não há objetivo, responder em duas mensagens (replies[]):
+// 1) micro explicação (brief_explain) + 2) pergunta objetiva (ask_goal).
+// Mantém memória ativa, Unicode e carimbos existentes.
 
 import { ensureProfile, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -68,17 +69,25 @@ export default async function qualify(ctx = {}) {
     };
   }
 
+  // ——— Ajuste: ainda sem objetivo → duas mensagens (micro-explicação + pergunta)
   if (!profile.goal) {
+    const explain = tagReply(
+      ctx,
+      "Rapidinho 💚 A Progressiva Vegetal é **100% sem formol**, aprovada pela **Anvisa** e indicada para **todos os tipos de cabelo**. Ela hidrata enquanto alinha os fios ✨",
+      "flow/qualify#brief_explain"
+    );
+    const ask = tagReply(
+      ctx,
+      "E me conta: qual é o **seu objetivo hoje**?\n• **Alisar**\n• **Reduzir frizz**\n• **Baixar volume**\n• **Dar brilho** de salão em casa",
+      "flow/qualify#ask_goal"
+    );
     return {
-      reply: tagReply(
-        ctx,
-        "Qual é o seu objetivo hoje?\n• **Alisar**\n• **Reduzir frizz**\n• **Baixar volume**\n• **Dar brilho** de salão em casa",
-        "flow/qualify#ask_goal"
-      ),
+      replies: [explain, ask],
       meta: { tag: "flow/qualify#ask_goal" },
     };
   }
 
+  // fallback (mantido)
   return {
     reply: tagReply(
       ctx,
