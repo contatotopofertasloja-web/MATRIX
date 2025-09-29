@@ -1,9 +1,10 @@
 // configs/bots/claudia/flow/greet.js
-// Correções:
-// 1) Flags de perguntas persistidas em memória (flags.askedName / flags.askedKnown).
+// Correções aplicadas (base: 2009 - greet.txt):
+// 1) Flags persistentes (askedName / askedKnown) + compat. com asked volátil.
 // 2) Interpreta "sim/não" ANTES de re-perguntar se conhece (evita loop).
-// 3) "não conheço" → duas mensagens (replies[]). "já conheço" → offer.ask_cep_city.
-// Carimbos e vocativos preservados.
+// 3) "não conheço" → envia DUAS mensagens (explicação breve + ask_goal).
+// 4) "já conheço" → vai direto para offer.ask_cep_city.
+// 5) Carimbos (tags) preservados para rastreio em produção.
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -11,7 +12,7 @@ import { remember, recall } from "../../../../src/core/memory.js";
 const T = (s = "") => String(s).normalize("NFC");
 const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
 
-// ——— detecção de objetivo ———
+// ——— detecta objetivo no texto livre ———
 function detectGoal(s = "") {
   const t = T(s).toLowerCase();
   if (/\balis(ar|amento)|liso|progressiva\b/.test(t)) return "alisar";
@@ -21,11 +22,13 @@ function detectGoal(s = "") {
   return null;
 }
 
-// ——— nome livre ———
+// ——— tenta extrair nome do texto livre ———
 function pickNameFromFreeText(s = "") {
   const t = T(s).trim();
   const m = t.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([\p{L}’'\-]{2,}(?:\s+[\p{L}’'\-]{2,})*)/iu);
   if (m) return m[2].trim();
+
+  // se não for "sim/não/conheço", aceita a primeira palavra como possível nome
   const block = /\b(n(ã|a)o|sim|já|ja|conhe[cç]o)\b/i;
   if (!block.test(t)) {
     const m2 = t.match(/^\s*([\p{L}’'\-]{2,})/u);
@@ -34,7 +37,7 @@ function pickNameFromFreeText(s = "") {
   return "";
 }
 
-// ——— vocativo ———
+// ——— vocativo suave ———
 function pickVocative(profile) {
   const first = (profile?.name || "").split(" ")[0] || "";
   const r = Math.random();
@@ -45,10 +48,11 @@ function pickVocative(profile) {
 }
 const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
+// ——— fluxo greet ———
 export default async function greet(ctx = {}) {
   const { jid = "", state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
-  const askedVolatile = ensureAsked(state); // mantém compatibilidade com seu core
+  const askedVolatile = ensureAsked(state); // compat. com core atual
   const s = T(text).trim();
 
   // ——— carrega memória persistida (profile + flags) ———
@@ -63,7 +67,7 @@ export default async function greet(ctx = {}) {
     try { await remember(jid, { profile, flags }); } catch {}
   };
 
-  // 0) objetivo declarado em qualquer momento → offer
+  // 0) objetivo pode ser declarado a qualquer momento → ir para offer
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
@@ -82,7 +86,7 @@ export default async function greet(ctx = {}) {
 
   // 1) coletar nome
   if (!profile.name) {
-    // se já perguntamos (flag persistida ou volátil), tentar extrair
+    // se já perguntamos (flag persistente ou volátil), tentar extrair
     if (flags.askedName || askedVolatile.name) {
       const picked = toTitle(pickNameFromFreeText(s));
       if (picked) {
@@ -107,9 +111,9 @@ export default async function greet(ctx = {}) {
     }
   }
 
-  // 2) ——— INTERPRETAR RESPOSTA "conhece?" ANTES DE RE-PERGUNTAR ———
-  const saysNo = /\bn(ã|a)o(\s*conhe[cç]o)?\b/i.test(s);
-  const saysYes = /\b(sim|já|conhe[cç]o|usei)\b/i.test(s);
+  // 2) interpretar resposta à pergunta "já conhece?"
+  const saysNo  = /\bn(ã|a)o(\s*conhe[cç]o)?\b/i.test(s);
+  const saysYes = /\b(sim|já|ja|conhe[cç]o|usei)\b/i.test(s);
 
   if (saysNo) {
     flags.askedKnown = true;
@@ -159,7 +163,7 @@ export default async function greet(ctx = {}) {
     };
   }
 
-  // 4) fallback: reforçar objetivo (se a pessoa respondeu algo aleatório)
+  // 4) fallback: reforçar objetivo caso a resposta não encaixe
   const voc = pickVocative(profile);
   return {
     reply: tagReply(
@@ -168,5 +172,4 @@ export default async function greet(ctx = {}) {
       "flow/greet#ask_goal"
     ),
   };
-} 
- 
+}
