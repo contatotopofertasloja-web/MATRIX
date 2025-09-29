@@ -1,92 +1,164 @@
 // configs/bots/claudia/flow/greet.js
-// Preserva fluxo validado (173 linhas) — apenas corrige rota “já conheço”
-// Carimbos mantidos
+// Base preservada (1311). Ajuste pontual: rota “já conheço” cai direto em offer.ask_cep_city.
+// Carimbos e vocativos preservados.
 
-import { ensureProfile, tagReply } from "./_state.js";
+import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 
-const T = (s="") => String(s).normalize("NFC").trim();
+// ————————— util unicode —————————
+const T = (s = "") => String(s).normalize("NFC");
+const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
 
-function detectGoals(s="") {
+// ————————— detecção de objetivo —————————
+function detectGoal(s = "") {
   const t = T(s).toLowerCase();
-  const goals = [];
-  if (/\balis(ar|amento)|\bliso\b/.test(t)) goals.push("alisar");
-  if (/\bfrizz|arrepiad/.test(t)) goals.push("frizz");
-  if (/\b(baixar|reduzir|diminuir)\s+volume|\bvolume\b/.test(t)) goals.push("volume");
-  if (/\bbrilho|iluminar\b/.test(t)) goals.push("brilho");
-  return [...new Set(goals)];
+  if (/\balis(ar|amento)|liso|progressiva\b/.test(t)) return "alisar";
+  if (/\bfrizz|arrepiad/.test(t)) return "frizz";
+  if (/\b(baixar|reduzir|diminuir)\s+volume\b|\bvolume\b/.test(t)) return "volume";
+  if (/\bbrilho|brilhos[oa]|iluminar\b/.test(t)) return "brilho";
+  return null;
 }
+
+// ————————— nome livre —————————
+function pickNameFromFreeText(s = "") {
+  const t = T(s).trim();
+  const m = t.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([\p{L}’'\-]{2,}(?:\s+[\p{L}’'\-]{2,})*)/iu);
+  if (m) return m[2].trim();
+
+  const block = /\b(n(ã|a)o|sim|já|ja|conhe[cç]o)\b/i;
+  if (!block.test(t)) {
+    const m2 = t.match(/^\s*([\p{L}’'\-]{2,})/u);
+    if (m2) return m2[1];
+  }
+  return "";
+}
+
+// ————————— vocativo —————————
+function pickVocative(profile) {
+  const first = (profile?.name || "").split(" ")[0] || "";
+  const r = Math.random();
+  if (first && r < 0.55) return first;
+  if (r < 0.75) return "minha flor";
+  if (r < 0.90) return "amiga";
+  return "";
+}
+const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
 export default async function greet(ctx = {}) {
   const { state = {}, text = "" } = ctx;
-  const s = T(text);
   const profile = ensureProfile(state);
+  const asked = ensureAsked(state);
+  const s = T(text).trim();
 
-  // captura nome
+  // 0) objetivo declarado em qualquer momento → handoff p/ offer
+  const g0 = detectGoal(s);
+  if (g0) {
+    profile.goal = g0;
+    state.stage = "offer.ask_cep_city";
+    const voc = pickVocative(profile);
+    return {
+      reply: tagReply(
+        ctx,
+        `Perfeito${vocStr(voc)}! Pra liberar a condição do dia, me passe o CEP (ex.: 00000-000) e a cidade (ex.: Brasília/DF).`,
+        "flow/greet→offer"
+      ),
+      meta: { tag: "flow/greet→offer" },
+    };
+  }
+
+  // 1) ainda não temos nome? pedir nome
   if (!profile.name) {
-    const m = s.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+(.{2,})$/i);
-    if (m) profile.name = T(m[2]).replace(/\s+/g, " ").trim();
+    if (asked.name) {
+      const picked = toTitle(pickNameFromFreeText(s));
+      if (picked) {
+        profile.name = picked;
+        markAsked(state, "name");
 
-    if (!profile.name) {
+        const saysNo = /\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s);
+        const saysYes = /\b(sim|já\s*conhe[cç]o|conhe[cç]o)\b/i.test(s);
+        if (saysNo || saysYes) {
+          const voc = pickVocative(profile);
+          return {
+            reply: tagReply(
+              ctx,
+              `Prazer${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho?`,
+              "flow/greet#ask_goal"
+            ),
+            meta: { tag: "flow/greet#ask_goal" },
+          };
+        }
+
+        markAsked(state, "known");
+        return {
+          reply: tagReply(
+            ctx,
+            `Prazer, ${picked}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`,
+            "flow/greet#ask_known"
+          ),
+          meta: { tag: "flow/greet#ask_known" },
+        };
+      }
+
       return {
-        reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name")
+        reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
+        meta: { tag: "flow/greet#ask_name" },
       };
     }
+
+    markAsked(state, "name");
+    return {
+      reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name"),
+      meta: { tag: "flow/greet#ask_name" },
+    };
   }
 
-  // pergunta se conhece
-  if (!state._askedKnown) {
-    state._askedKnown = true;
+  // 2) já temos nome mas ainda não perguntamos se conhece
+  if (!asked.known) {
+    markAsked(state, "known");
     const first = profile.name.split(" ")[0];
     return {
-      reply: tagReply(ctx, `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`, "flow/greet#ask_known")
+      reply: tagReply(
+        ctx,
+        `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`,
+        "flow/greet#ask_known"
+      ),
+      meta: { tag: "flow/greet#ask_known" },
     };
   }
 
-  // rota SIM/já conheço → ajuste aqui!
+  // 3) interpretar resposta “conhece?”
+  const voc = pickVocative(profile);
+
+  if (/\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s)) {
+    return {
+      reply: tagReply(
+        ctx,
+        `Sem problema${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho?`,
+        "flow/greet#ask_goal"
+      ),
+      meta: { tag: "flow/greet#ask_goal" },
+    };
+  }
+
+  // >>> AJUSTE AQUI: “já conheço” cai direto em offer.ask_cep_city <<<
   if (/\b(sim|já|conhe[cç]o|usei)\b/i.test(s)) {
-    // >>> NOVO COMPORTAMENTO <<<
     state.stage = "offer.ask_cep_city";
     return {
       reply: tagReply(
         ctx,
-        "Perfeito! Posso consultar se há **oferta especial para o seu endereço**. Me envia **Cidade + CEP** (ex.: 01001-000 – São Paulo/SP).",
+        `Ótimo${vocStr(voc)}! Posso consultar se há **oferta especial para o seu endereço**. Me envia **Cidade + CEP** (ex.: 01001-000 – São Paulo/SP).`,
         "flow/greet#known_yes→offer"
-      )
+      ),
+      meta: { tag: "flow/greet#known_yes→offer" },
     };
   }
 
-  // rota NÃO conhece → pede objetivo
-  if (/\bn(ã|a)o\b/i.test(s) || /\bnunca\b/i.test(s)) {
-    state.stage = "qualify.ask_goal";
-    return {
-      reply: tagReply(
-        ctx,
-        "Sem problemas! A Progressiva Vegetal é aprovada pela Anvisa e serve para todos os tipos de cabelo.\nQual é o seu objetivo hoje: **alisar, reduzir frizz, baixar volume ou dar brilho**?",
-        "flow/greet#known_no→qualify"
-      )
-    };
-  }
-
-  // se escreveu o objetivo diretamente
-  const goals = detectGoals(s);
-  if (goals.length) {
-    profile.goal = goals.join("+");
-    state.stage = "offer.ask_cep_city";
-    return {
-      reply: tagReply(
-        ctx,
-        "Perfeito! Pra liberar a condição do dia, me passe **CEP** (ex.: 00000-000) e **Cidade/UF** (ex.: Brasília/DF).",
-        "flow/greet→offer"
-      )
-    };
-  }
-
-  // fallback: reforça objetivo
+  // 4) fallback
   return {
     reply: tagReply(
       ctx,
-      "Só pra direcionar certinho: seu objetivo é **alisar, reduzir frizz, baixar volume** ou **dar brilho**?",
+      `Certo${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho?`,
       "flow/greet#ask_goal"
-    )
+    ),
+    meta: { tag: "flow/greet#ask_goal" },
   };
 }
