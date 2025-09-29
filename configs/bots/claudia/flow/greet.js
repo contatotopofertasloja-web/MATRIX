@@ -1,5 +1,7 @@
 // configs/bots/claudia/flow/greet.js
-// Base preservada (1311). Ajuste pontual: rota “já conheço” cai direto em offer.ask_cep_city.
+// Base preservada (1751). Ajuste pontual:
+// 1) “já conheço” → cai direto em offer.ask_cep_city (mantido)
+// 2) “não conheço” → micro explicação + pergunta de objetivo (mesma resposta, com quebra de linha)
 // Carimbos e vocativos preservados.
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
@@ -128,18 +130,20 @@ export default async function greet(ctx = {}) {
   // 3) interpretar resposta “conhece?”
   const voc = pickVocative(profile);
 
+  // ➤ AJUSTE 1: “não conheço” → micro explicação + pergunta (uma mensagem com quebra de linha)
   if (/\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s)) {
     return {
       reply: tagReply(
         ctx,
-        `Sem problema${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho?`,
+        `Sem problema${vocStr(voc)}! A Progressiva Vegetal é **100% sem formol**, aprovada pela **Anvisa** e indicada para **todos os tipos de cabelo**. Ela hidrata profundamente enquanto alinha os fios ✨\n\n` +
+        `E me conta: qual é o **seu objetivo hoje**? **Alisar, reduzir frizz, baixar volume ou dar brilho**?`,
         "flow/greet#ask_goal"
       ),
       meta: { tag: "flow/greet#ask_goal" },
     };
   }
 
-  // >>> AJUSTE AQUI: “já conheço” cai direto em offer.ask_cep_city <<<
+  // ➤ AJUSTE 2: “já conheço” → cai direto em offer.ask_cep_city (mantido)
   if (/\b(sim|já|conhe[cç]o|usei)\b/i.test(s)) {
     state.stage = "offer.ask_cep_city";
     return {
@@ -152,11 +156,11 @@ export default async function greet(ctx = {}) {
     };
   }
 
-  // 4) fallback
+  // 4) fallback: reforça objetivo
   return {
     reply: tagReply(
       ctx,
-      `Certo${vocStr(voc)}! Qual é o seu objetivo hoje: alisar, reduzir frizz, baixar volume ou dar brilho?`,
+      `Certo${vocStr(voc)}! Qual é o seu objetivo hoje: **alisar, reduzir frizz, baixar volume** ou **dar brilho**?`,
       "flow/greet#ask_goal"
     ),
     meta: { tag: "flow/greet#ask_goal" },
