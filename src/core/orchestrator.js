@@ -1,5 +1,5 @@
 // src/core/orchestrator.js
-// Orquestrador neutro com suporte a multiple replies e fallback correto para 'greet' no estágio inicial.
+// Orquestrador neutro com suporte a múltiplas bolhas e fallback para greet no estágio inicial.
 
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
@@ -53,12 +53,11 @@ export async function orchestrate(ctx = {}) {
   let flows = {};
   try { flows = await loadFlows(BOT_ID); } catch (e) { console.warn('[orchestrator] loadFlows:', e?.message || e); }
 
-  let reply = ''; 
-  let replyMeta = null; 
+  let reply = '';
+  let replyMeta = null;
   let actionsFromFlow = null;
   let repliesFromFlow = null;
 
-  // 🔧 Escolha do handler: tenta o stage, depois o intent, depois GREET, por fim handle
   const flowHandler =
     (typeof flows[stage] === 'function' && flows[stage]) ||
     (typeof flows[intent?.toLowerCase?.()] === 'function' && flows[intent.toLowerCase()]) ||
@@ -92,7 +91,6 @@ export async function orchestrate(ctx = {}) {
     console.error('[orchestrator][flow]', err?.message || err);
   }
 
-  // Se nada veio do flow, opcionalmente chama LLM (se não for flow_only)
   if (!reply && !actionsFromFlow && !repliesFromFlow) {
     if (!flowOnly) {
       try {
@@ -100,19 +98,18 @@ export async function orchestrate(ctx = {}) {
           const built = (buildPrompt({ stage, intent, message: String(text || ''), settings, meta }) || {});
           const llm = await callLLM({ stage, system: built.system || '', prompt: built.user || '' });
           reply = llm?.text || '';
-        } else {
-          const system = 'Você é uma atendente humana de vendas. Nunca diga que é IA. PT-BR.';
-          const prompt = `Mensagem: "${String(text || '').trim()}". Responda breve, educada e objetiva.`;
-          const llm = await callLLM({ stage, system, prompt });
-          reply = llm?.text || '';
-        }
-      } catch (err) { console.error('[orchestrator][llm]', err?.message || err); }
+        } catch (err) { console.error('[orchestrator][llm]', err?.message || err); }
+      } else {
+        const system = 'Você é uma atendente humana de vendas. Nunca diga que é IA. PT-BR.';
+        const prompt = `Mensagem: "${String(text || '').trim()}". Responda breve, educada e objetiva.`;
+        const llm = await callLLM({ stage, system, prompt });
+        reply = llm?.text || '';
+      }
     } else {
       reply = '';
     }
   }
 
-  // Polimento e sanitização do SINGLE reply (quando existir)
   let polished = '';
   try { polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply; }
   catch { polished = reply || ''; }
@@ -134,15 +131,18 @@ export async function orchestrate(ctx = {}) {
   } else if (repliesFromFlow && repliesFromFlow.length) {
     actions = repliesFromFlow
       .map((r) => {
-        const line = (r && (r.reply ?? r.text)) || ''; // aceita reply OU text
+        const line = (r && (r.reply ?? r.text)) || '';
         const txt  = withVisibleTag(String(line || ''), (r?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag);
-        return { type: 'text', to: from, text: txt,
-          meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) } };
+        return {
+          type: 'text',
+          to: from,
+          text: txt,
+          meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) }
+        };
       })
-      .filter(a => a.text && a.text.trim()); // evita bolhas vazias
+      .filter(a => a.text && a.text.trim());
   }
 
-  // Se ainda não há actions, gera fallback único
   if (!actions.length) {
     const textOut = finalText || DEFAULT_FALLBACK;
     const bubbles = consolidateBubbles([withVisibleTag(textOut, (replyMeta?.tag), debugLabels, defaultTag)]);

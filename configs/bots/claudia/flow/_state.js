@@ -27,12 +27,12 @@ export function callUser(state) {
 
 /**
  * Cria um reply estruturado para o orchestrator.
- * Agora retorna objeto { reply, meta } em vez de string simples.
+ * Importante: devolve { reply, meta }.
  */
 export function tagReply(_ctx, text, tag) {
   return {
-    reply: `${text}`,            // texto da bolha
-    meta: { tag }                // carimbo usado no orchestrator/polish
+    reply: `${text}`,
+    meta: { tag }
   };
 }
 
@@ -44,9 +44,6 @@ export function filledSummary(state) {
   return items;
 }
 
-/* ======================= normalizeSettings =======================
-Garante defaults e shape mínimo de settings; neutro (sem “cheiro” de bot).
-*/
 export function normalizeSettings(incoming = {}) {
   const S = { ...(incoming || {}) };
   S.product      = { ...(S.product || {}) };
