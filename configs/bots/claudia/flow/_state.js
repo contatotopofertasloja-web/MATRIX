@@ -25,8 +25,15 @@ export function callUser(state) {
   return p.name ? p.name.split(" ")[0] : "";
 }
 
+/**
+ * Cria um reply estruturado para o orchestrator.
+ * Agora retorna objeto { reply, meta } em vez de string simples.
+ */
 export function tagReply(_ctx, text, tag) {
-  return `[${tag}] ${text}`;
+  return {
+    reply: `${text}`,            // texto da bolha
+    meta: { tag }                // carimbo usado no orchestrator/polish
+  };
 }
 
 export function filledSummary(state) {
