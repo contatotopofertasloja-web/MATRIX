@@ -1,45 +1,55 @@
 // configs/bots/claudia/flow/index.js
-// Handlers da Cláudia + roteador por estado (__route) com prioridade.
+// Router do bot (neutro): mapeia estágios para handlers.
+// Pontos-chave:
+// - Alias explícito: "recepcao" → greet (evita silêncio no 1º "oi")
+// - handle() faz fallback para greet
+// - Mantém demais flows plug & play
 
-import greet from "./greet.js";
-import qualify from "./qualify.js";
-import offer from "./offer.js";
-import close from "./close.js";
-import postsale from "./postsale.js";
-import faq from "./faq.js";
-import objections from "./objections.js";
+import greet from './greet.js';
+import qualify from './qualify.js';
+import offer from './offer.js';
+import faq from './faq.js';
+import objections from './objections.js';
+import close from './close.js';
+import postsale from './postsale.js';
 
-// === Router por estado (PRIORITÁRIO) ===
-export async function __route(ctx = {}) {
-  const stage = String(ctx?.state?.stage || "");
-  if (!stage) return null;
+export { greet, qualify, offer, faq, objections, close, postsale };
 
-  if (stage.startsWith("offer."))     return "offer";
-  if (stage.startsWith("close.") || stage.startsWith("fechamento.")) return "close";
-  if (stage.startsWith("postsale.") || stage.startsWith("post_sale.")) return "postsale";
-  return null;
-}
+// Alias explícitos de estágio → handler
+export const recepcao   = greet;        // <- importante: 1º turno cai aqui
+export const qualificacao = qualify;
+export const oferta       = offer;
+export const objecoes     = objections;
+export const fechamento   = close;
+export const posvenda     = postsale;
 
-// === Mapa de handlers por stage ===
-export const handlers = {
-  recepcao: greet,
-  greet,
-  qualificacao: qualify,
-  oferta: offer,
-  fechamento: close,
-  posvenda: postsale,
-  features: faq,
-  objecoes: objections,
-};
-
-// === Fallback leve por intenção ===
+// Fallback leve por intenção/estágio
 export async function handle(ctx = {}) {
-  const t = String(ctx?.text || "").toLowerCase();
+  const t = String(ctx?.text || '').toLowerCase();
+
+  // Rotas diretas por palavras-chave (opcional, simples)
   if (/pre[cç]o|valor|quanto|cust/.test(t)) return offer(ctx);
-  if (/\blink|checkout|compr(ar|a)|finaliza(r)?/.test(t)) return close(ctx);
-  if (/entrega|prazo|frete/.test(t)) return faq(ctx);
+  if (/entrega|frete|prazo/.test(t)) return faq(ctx);
   if (/caro|alerg|parcel|vou pensar|depois/.test(t)) return objections(ctx);
-  return qualify(ctx);
+  if (/fechar|checkout|link|compr(ar|a)/.test(t)) return close(ctx);
+
+  // Sem intenção clara → sempre comece pelo greet
+  return greet(ctx);
 }
 
-export default handlers;
+// Export default com todos handlers (esperado pelo loader)
+export default {
+  recepcao,
+  greet,
+  handle,
+  qualificacao,
+  oferta,
+  objecoes,
+  fechamento,
+  posvenda,
+  faq,
+  qualify,   // aliases adicionais
+  offer,
+  close,
+  postsale,
+};
