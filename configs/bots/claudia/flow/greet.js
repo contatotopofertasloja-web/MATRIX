@@ -1,11 +1,11 @@
 // configs/bots/claudia/flow/greet.js
-// Merge 1311 (estável) + 2 mensagens no “não conheço” + carimbo anticolisão.
-// - Encadeamento nome → conhece? → objetivo (do 1311)
-// - “não conheço” => 2 bolhas: explicação breve + pergunta de objetivo
-// - Carimbo da pergunta de objetivo trocado para: flow/greet#objective_prompt_24k (sem “ask_goal”)
-// - Objetivo em qualquer momento => handoff para offer com R$197 → R$170 → consulta especial (pré-CEP)
+// Fix: regressão por falta de persistência (profile/flags) no 2320.
+// Reintroduz recall/remember (memória por jid), mantém 2 mensagens no "não conheço"
+// e usa carimbo anticolisão para a pergunta de objetivo.
+// Base analisada: 2320 - greet.txt
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
+import { remember, recall } from "../../../../src/core/memory.js";
 
 const T = (s = "") => String(s).normalize("NFC");
 const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
@@ -20,14 +20,14 @@ function detectGoal(s = "") {
   return null;
 }
 
-// ——— nome via texto livre ———
+// ——— extrai nome com cuidado (evita "oi", "olá", etc.) ———
+const STOPWORDS = /\b(oi|ol[aá]|bom\s*dia|boa\s*tarde|boa\s*noite|e[ai]|hello|hi)\b/i;
 function pickNameFromFreeText(s = "") {
   const t = T(s).trim();
   const m = t.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([\p{L}’'\-]{2,}(?:\s+[\p{L}’'\-]{2,})*)/iu);
   if (m) return m[2].trim();
-  const block = /\b(n(ã|a)o|sim|já|ja|conhe[cç]o)\b/i;
-  if (!block.test(t)) {
-    const m2 = t.match(/^\s*([\p{L}’'\-]{2,})/u);
+  if (!STOPWORDS.test(t) && !/\b(n[ãa]o|sim|já|ja|conhe[cç]o)\b/i.test(t)) {
+    const m2 = t.match(/^\s*([\p{L}’'\-]{3,})/u);
     if (m2) return m2[1];
   }
   return "";
@@ -46,82 +46,69 @@ const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
 // ——— fluxo greet ———
 export default async function greet(ctx = {}) {
-  const { state = {}, text = "" } = ctx;
+  const { jid = "", state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
-  const asked = ensureAsked(state);
+  const askedVolatile = ensureAsked(state);
   const s = T(text).trim();
 
-  // 0) objetivo pode aparecer a qualquer momento → ir pro offer com pré-CEP (197 → 170)
+  // —— memória persistente por jid ——
+  let flags = { askedName: false, askedKnown: false };
+  try {
+    const saved = await recall(jid);
+    if (saved?.profile) Object.assign(profile, saved.profile);
+    if (saved?.flags) flags = { ...flags, ...saved.flags };
+  } catch {}
+  const save = async () => { try { await remember(jid, { profile, flags }); } catch {} };
+
+  // 0) objetivo pode aparecer a qualquer momento → pula pra oferta pré-CEP (197 → 170)
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
     state.stage = "offer.ask_cep_city";
+    await save();
     const voc = pickVocative(profile);
-    return {
-      reply: tagReply(
-        ctx,
-        `Perfeito${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-          `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
-          `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
-          `Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).`,
-        "flow/offer#precheck_special"
-      ),
-      meta: { tag: "flow/offer#precheck_special" },
-    };
+    const m1 = tagReply(
+      ctx,
+      `Perfeito${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
+        `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
+        `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
+        `Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).`,
+      "flow/offer#precheck_special"
+    );
+    return { replies: [m1], meta: { tag: "flow/offer#precheck_special" } };
   }
 
-  // 1) pedir nome (1º passo)
+  // 1) coletar nome (com persistência)
   if (!profile.name) {
-    if (asked.name) {
+    if (flags.askedName || askedVolatile.name) {
       const picked = toTitle(pickNameFromFreeText(s));
       if (picked) {
         profile.name = picked;
+        flags.askedName = true;
         markAsked(state, "name");
-
-        // Se na mesma frase já disser que conhece/não conhece, pula pro objetivo
-        const saysNo = /\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s);
-        const saysYes = /\b(sim|já\s*conhe[cç]o|conhe[cç]o)\b/i.test(s);
-        if (saysNo || saysYes) {
-          const voc = pickVocative(profile);
-          return {
-            reply: tagReply(
-              ctx,
-              `Prazer${vocStr(voc)}! Qual é o seu objetivo hoje: *alisar, reduzir frizz, baixar volume* ou *dar brilho*?`,
-              "flow/greet#objective_prompt_24k"
-            ),
-            meta: { tag: "flow/greet#objective_prompt_24k" },
-          };
-        }
-
-        // 2º passo: perguntar se conhece
-        markAsked(state, "known");
+        await save();
+      } else {
         return {
-          reply: tagReply(
-            ctx,
-            `Prazer, ${picked}! Você já conhece a nossa Progressiva Vegetal, *100% livre de formol*?`,
-            "flow/greet#ask_known"
-          ),
-          meta: { tag: "flow/greet#ask_known" },
+          reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
+          meta: { tag: "flow/greet#ask_name" },
         };
       }
-      // reforço de nome
+    } else {
+      flags.askedName = true;
+      markAsked(state, "name");
+      await save();
       return {
-        reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
+        reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name"),
         meta: { tag: "flow/greet#ask_name" },
       };
     }
-
-    // primeira vez pedindo nome
-    markAsked(state, "name");
-    return {
-      reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name"),
-      meta: { tag: "flow/greet#ask_name" },
-    };
   }
 
-  // 2) se ainda não perguntamos “conhece?”, perguntar agora
-  if (!asked.known) {
+  // 2) se ainda não perguntamos “conhece?”, perguntar agora (com persistência)
+  if (!flags.askedKnown && !askedVolatile.known) {
+    flags.askedKnown = true;
     markAsked(state, "known");
+    await save();
     const first = profile.name.split(" ")[0];
     return {
       reply: tagReply(
@@ -135,14 +122,18 @@ export default async function greet(ctx = {}) {
 
   // 3) interpretar resposta do “conhece?”
   const voc = pickVocative(profile);
+  const saysNo  = /\b(n(ã|a)o|nao)(\s+conhe[cç]o)?\b/i.test(s);
+  const saysYes = /\b(sim|s|já|ja|conhe[cç]o|usei)\b/i.test(s);
 
-  // ——— NÃO conhece → 2 mensagens (explicação + objetivo) ———
-  if (/\bn(ã|a)o(\s+conhe[cç]o)?\b/i.test(s)) {
+  if (saysNo) {
+    flags.askedKnown = true;
+    await save();
     const msg1 = tagReply(
       ctx,
       `Sem problema${vocStr(voc)}! A Progressiva Vegetal é *100% sem formol*, aprovada pela *Anvisa* e indicada para *todos os tipos de cabelo*. Ela hidrata enquanto alinha os fios ✨`,
       "flow/greet#brief_explain"
     );
+    // carimbo anticolisão (não contém "ask_goal")
     const msg2 = tagReply(
       ctx,
       `E me conta: qual é o *seu objetivo hoje*? *Alisar, reduzir frizz, baixar volume ou dar brilho*?`,
@@ -151,19 +142,24 @@ export default async function greet(ctx = {}) {
     return { replies: [msg1, msg2], meta: { tag: "flow/greet#objective_prompt_24k" } };
   }
 
-  // ——— SIM, já conhece → pergunta de objetivo (1 mensagem) ———
-  if (/\b(sim|já|conhe[cç]o|usei)\b/i.test(s)) {
+  if (saysYes) {
+    flags.askedKnown = true;
+    state.stage = "offer.ask_cep_city";
+    await save();
     return {
       reply: tagReply(
         ctx,
-        `Ótimo${vocStr(voc)}! Me conta: qual é o *seu objetivo hoje* — *alisar, reduzir frizz, baixar volume* ou *dar brilho*?`,
-        "flow/greet#objective_prompt_24k"
+        `Ótimo${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
+          `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
+          `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
+          `Se sim, me envia *Cidade/UF + CEP* (ex.: *01001-000 – São Paulo/SP*).`,
+        "flow/offer#precheck_special"
       ),
-      meta: { tag: "flow/greet#objective_prompt_24k" },
+      meta: { tag: "flow/offer#precheck_special" },
     };
   }
 
-  // 4) nudge padrão se não encaixar
+  // 4) fallback: reforçar objetivo
   return {
     reply: tagReply(
       ctx,
