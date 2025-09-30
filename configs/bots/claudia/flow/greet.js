@@ -1,8 +1,8 @@
 // configs/bots/claudia/flow/greet.js
-// Microfix: bypass de hooks na pergunta de objetivo (após “não conheço”)
-// - Mantém 2 mensagens: explicação + pergunta de objetivo
-// - msg2 vai “crua” (sem tagReply), exibindo o carimbo no próprio texto
-// - meta.tag trocado para ID inédito (evita mapeamento de hook)
+// ✅ Corrigido para não cair no fallback do polish (nunca envia reply vazio)
+// ✅ Mantém 2 mensagens após "não conheço": explicação + pergunta de objetivo
+// ✅ Carimbo inédito para evitar colisões: flow/greet#goal_prompt_v3
+// ✅ Objetivo detectado a qualquer momento → offer pré-CEP (R$197 → R$170 → consultar CEP)
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -10,6 +10,7 @@ import { remember, recall } from "../../../../src/core/memory.js";
 const T = (s = "") => String(s).normalize("NFC");
 const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
 
+// Detecta objetivo no texto livre
 function detectGoal(s = "") {
   const t = T(s).toLowerCase();
   if (/\balis(ar|amento)|liso|progressiva\b/.test(t)) return "alisar";
@@ -19,6 +20,7 @@ function detectGoal(s = "") {
   return null;
 }
 
+// Extrai um possível nome do texto livre
 const STOPWORDS = /\b(oi|ol[aá]|bom\s*dia|boa\s*tarde|boa\s*noite|e[ai]|hello|hi)\b/i;
 function pickNameFromFreeText(s = "") {
   const t = T(s).trim();
@@ -31,6 +33,7 @@ function pickNameFromFreeText(s = "") {
   return "";
 }
 
+// Vocativo suave
 function pickVocative(profile) {
   const first = (profile?.name || "").split(" ")[0] || "";
   const r = Math.random();
@@ -47,7 +50,7 @@ export default async function greet(ctx = {}) {
   const askedVolatile = ensureAsked(state);
   const s = T(text).trim();
 
-  // memória persistente
+  // Memória persistente
   let flags = { askedName: false, askedKnown: false };
   try {
     const saved = await recall(jid);
@@ -56,7 +59,7 @@ export default async function greet(ctx = {}) {
   } catch {}
   const save = async () => { try { await remember(jid, { profile, flags }); } catch {} };
 
-  // 0) objetivo em qualquer momento → oferta pré-CEP (197 → 170)
+  // 0) Objetivo pode aparecer a qualquer momento → offer pré-CEP (197 → 170)
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
@@ -66,15 +69,15 @@ export default async function greet(ctx = {}) {
     const m1 = tagReply(
       ctx,
       `Perfeito${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-      `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
-      `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
-      `Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).`,
+        `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
+        `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
+        `Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).`,
       "flow/offer#precheck_special"
     );
     return { replies: [m1], meta: { tag: "flow/offer#precheck_special" } };
   }
 
-  // 1) nome
+  // 1) Coletar nome
   if (!profile.name) {
     if (flags.askedName || askedVolatile.name) {
       const picked = toTitle(pickNameFromFreeText(s));
@@ -84,17 +87,23 @@ export default async function greet(ctx = {}) {
         markAsked(state, "name");
         await save();
       } else {
-        return { reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name") };
+        return {
+          reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
+          meta: { tag: "flow/greet#ask_name" },
+        };
       }
     } else {
       flags.askedName = true;
       markAsked(state, "name");
       await save();
-      return { reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name") };
+      return {
+        reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name"),
+        meta: { tag: "flow/greet#ask_name" },
+      };
     }
   }
 
-  // 2) perguntar “conhece?”
+  // 2) Perguntar “já conhece?”
   if (!flags.askedKnown && !askedVolatile.known) {
     flags.askedKnown = true;
     markAsked(state, "known");
@@ -106,15 +115,16 @@ export default async function greet(ctx = {}) {
         `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, *100% livre de formol*?`,
         "flow/greet#ask_known"
       ),
-      meta: { tag: "flow/greet#ask_known" }
+      meta: { tag: "flow/greet#ask_known" },
     };
   }
 
-  // 3) interpretar resposta “conhece?”
+  // 3) Interpretar resposta do “conhece?”
   const voc = pickVocative(profile);
   const saysNo  = /\b(n(ã|a)o|nao)(\s+conhe[cç]o)?\b/i.test(s);
   const saysYes = /\b(sim|s|já|ja|conhe[cç]o|usei)\b/i.test(s);
 
+  // ——— NÃO conhece → 2 mensagens (explicação + pergunta de objetivo, AMBAS via tagReply) ———
   if (saysNo) {
     flags.askedKnown = true;
     await save();
@@ -125,16 +135,18 @@ export default async function greet(ctx = {}) {
       "flow/greet#brief_explain"
     );
 
-    // ⚠ Bypass de hooks: NÃO usar tagReply na pergunta do objetivo.
-    // Mostramos o carimbo no próprio texto e meta.tag usa um ID inédito.
-    const msg2 = {
-      reply: `E me conta: qual é o *seu objetivo hoje*? *Alisar, reduzir frizz, baixar volume ou dar brilho*?\n[flow/greet#objective_prompt_bypass]`,
-      meta: { tag: "flow/greet#objective_prompt_bypass" }
-    };
+    // ⚠ IMPORTANTE: usar tagReply (nada de reply vazio) para não cair no fallback do polish
+    // Carimbo inédito (não contém "ask_goal" nem "objective_prompt")
+    const msg2 = tagReply(
+      ctx,
+      `E me conta: qual é o *seu objetivo hoje*? *Alisar, reduzir frizz, baixar volume ou dar brilho*?`,
+      "flow/greet#goal_prompt_v3"
+    );
 
-    return { replies: [msg1, msg2], meta: { tag: "flow/greet#objective_prompt_bypass" } };
+    return { replies: [msg1, msg2], meta: { tag: "flow/greet#goal_prompt_v3" } };
   }
 
+  // ——— SIM, já conhece → vai direto para a condição do dia (pré-CEP) ———
   if (saysYes) {
     flags.askedKnown = true;
     state.stage = "offer.ask_cep_city";
@@ -143,19 +155,22 @@ export default async function greet(ctx = {}) {
       reply: tagReply(
         ctx,
         `Ótimo${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-        `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
-        `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
-        `Se sim, me envia *Cidade/UF + CEP* (ex.: *01001-000 – São Paulo/SP*).`,
+          `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
+          `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
+          `Se sim, me envia *Cidade/UF + CEP* (ex.: *01001-000 – São Paulo/SP*).`,
         "flow/offer#precheck_special"
       ),
-      meta: { tag: "flow/offer#precheck_special" }
+      meta: { tag: "flow/offer#precheck_special" },
     };
   }
 
-  // 4) fallback: mesma estratégia de bypass (caso resposta não encaixe)
-  const msgFallback = {
-    reply: `Certo${vocStr(voc)}! Qual é o *seu objetivo hoje*: *alisar, reduzir frizz, baixar volume* ou *dar brilho*?\n[flow/greet#objective_prompt_bypass]`,
-    meta: { tag: "flow/greet#objective_prompt_bypass" }
+  // 4) Fallback: reforçar objetivo (também via tagReply para evitar polish)
+  return {
+    reply: tagReply(
+      ctx,
+      `Certo${vocStr(voc)}! Qual é o *seu objetivo hoje*: *alisar, reduzir frizz, baixar volume* ou *dar brilho*?`,
+      "flow/greet#goal_prompt_v3"
+    ),
+    meta: { tag: "flow/greet#goal_prompt_v3" },
   };
-  return msgFallback;
 }
