@@ -1,6 +1,6 @@
 // src/core/orchestrator.js
 // Orquestrador neutro com flow_only e carimbo visível ([flow/<stage>]).
-// Polish + liberação de preço/link nas fases de oferta/fechamento.
+// Agora com suporte a out.replies (múltiplas mensagens).
 
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
@@ -54,7 +54,11 @@ export async function orchestrate(ctx = {}) {
   let flows = {};
   try { flows = await loadFlows(BOT_ID); } catch (e) { console.warn('[orchestrator] loadFlows:', e?.message || e); }
 
-  let reply = ''; let replyMeta = null; let actionsFromFlow = null;
+  let reply = ''; 
+  let replyMeta = null; 
+  let actionsFromFlow = null;
+  let repliesFromFlow = null;   // << suporte a múltiplas mensagens
+
   const flowHandler = (flows && (flows[stage] || flows[intent?.toLowerCase?.()] || flows?.handle)) || null;
 
   try {
@@ -66,13 +70,22 @@ export async function orchestrate(ctx = {}) {
         settings,
         context: { session, meta, stage, intent, settings },
       });
-      if (out && Array.isArray(out.actions)) actionsFromFlow = out.actions;
-      else if (out && typeof out === 'object') { if (typeof out.reply === 'string') reply = out.reply; if (out.meta) replyMeta = out.meta; }
-      else if (typeof out === 'string') reply = out;
+
+      if (out && Array.isArray(out.actions)) {
+        actionsFromFlow = out.actions;
+      } else if (out && Array.isArray(out.replies)) {
+        repliesFromFlow = out.replies;
+        if (out.meta) replyMeta = out.meta;
+      } else if (out && typeof out === 'object') {
+        if (typeof out.reply === 'string') reply = out.reply;
+        if (out.meta) replyMeta = out.meta;
+      } else if (typeof out === 'string') {
+        reply = out;
+      }
     }
   } catch (err) { console.error('[orchestrator][flow]', err?.message || err); }
 
-  if (!reply && !actionsFromFlow) {
+  if (!reply && !actionsFromFlow && !repliesFromFlow) {
     if (!flowOnly) {
       try {
         if (typeof buildPrompt === 'function') {
@@ -101,6 +114,7 @@ export async function orchestrate(ctx = {}) {
 
   const defaultTag = `flow/${stage}`;
   let actions = [];
+
   if (actionsFromFlow && actionsFromFlow.length) {
     actions = actionsFromFlow.map((a) => ({
       type: a?.type || 'text',
@@ -108,10 +122,22 @@ export async function orchestrate(ctx = {}) {
       text: withVisibleTag(a?.text || '', (a?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag),
       meta: { ...(a?.meta || {}), stage, intent, botId: BOT_ID, tag: (a?.meta?.tag || replyMeta?.tag || defaultTag) },
     }));
+  } else if (repliesFromFlow && repliesFromFlow.length) {
+    actions = repliesFromFlow.map((r) => ({
+      type: 'text',
+      to: from,
+      text: withVisibleTag(r?.reply || r?.text || '', (r?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag),
+      meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) },
+    }));
   } else {
     const textOut = finalText || DEFAULT_FALLBACK;
     const bubbles = consolidateBubbles([withVisibleTag(textOut, (replyMeta?.tag), debugLabels, defaultTag)]);
-    actions = bubbles.map((line) => ({ type: 'text', to: from, text: line, meta: { stage, intent, botId: BOT_ID, tag: (replyMeta?.tag || defaultTag) } }));
+    actions = bubbles.map((line) => ({
+      type: 'text',
+      to: from,
+      text: line,
+      meta: { stage, intent, botId: BOT_ID, tag: (replyMeta?.tag || defaultTag) },
+    }));
   }
 
   try {
