@@ -1,8 +1,8 @@
 // configs/bots/claudia/flow/greet.js
-// Fix: regressão por falta de persistência (profile/flags) no 2320.
-// Reintroduz recall/remember (memória por jid), mantém 2 mensagens no "não conheço"
-// e usa carimbo anticolisão para a pergunta de objetivo.
-// Base analisada: 2320 - greet.txt
+// Microfix: bypass de hooks na pergunta de objetivo (após “não conheço”)
+// - Mantém 2 mensagens: explicação + pergunta de objetivo
+// - msg2 vai “crua” (sem tagReply), exibindo o carimbo no próprio texto
+// - meta.tag trocado para ID inédito (evita mapeamento de hook)
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -10,7 +10,6 @@ import { remember, recall } from "../../../../src/core/memory.js";
 const T = (s = "") => String(s).normalize("NFC");
 const toTitle = (s = "") => (s ? s[0].toLocaleUpperCase("pt-BR") + s.slice(1) : s);
 
-// ——— detecta objetivo no texto livre ———
 function detectGoal(s = "") {
   const t = T(s).toLowerCase();
   if (/\balis(ar|amento)|liso|progressiva\b/.test(t)) return "alisar";
@@ -20,7 +19,6 @@ function detectGoal(s = "") {
   return null;
 }
 
-// ——— extrai nome com cuidado (evita "oi", "olá", etc.) ———
 const STOPWORDS = /\b(oi|ol[aá]|bom\s*dia|boa\s*tarde|boa\s*noite|e[ai]|hello|hi)\b/i;
 function pickNameFromFreeText(s = "") {
   const t = T(s).trim();
@@ -33,7 +31,6 @@ function pickNameFromFreeText(s = "") {
   return "";
 }
 
-// ——— vocativo ———
 function pickVocative(profile) {
   const first = (profile?.name || "").split(" ")[0] || "";
   const r = Math.random();
@@ -44,14 +41,13 @@ function pickVocative(profile) {
 }
 const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
-// ——— fluxo greet ———
 export default async function greet(ctx = {}) {
   const { jid = "", state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
   const askedVolatile = ensureAsked(state);
   const s = T(text).trim();
 
-  // —— memória persistente por jid ——
+  // memória persistente
   let flags = { askedName: false, askedKnown: false };
   try {
     const saved = await recall(jid);
@@ -60,7 +56,7 @@ export default async function greet(ctx = {}) {
   } catch {}
   const save = async () => { try { await remember(jid, { profile, flags }); } catch {} };
 
-  // 0) objetivo pode aparecer a qualquer momento → pula pra oferta pré-CEP (197 → 170)
+  // 0) objetivo em qualquer momento → oferta pré-CEP (197 → 170)
   const g0 = detectGoal(s);
   if (g0) {
     profile.goal = g0;
@@ -70,15 +66,15 @@ export default async function greet(ctx = {}) {
     const m1 = tagReply(
       ctx,
       `Perfeito${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-        `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
-        `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
-        `Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).`,
+      `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
+      `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
+      `Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).`,
       "flow/offer#precheck_special"
     );
     return { replies: [m1], meta: { tag: "flow/offer#precheck_special" } };
   }
 
-  // 1) coletar nome (com persistência)
+  // 1) nome
   if (!profile.name) {
     if (flags.askedName || askedVolatile.name) {
       const picked = toTitle(pickNameFromFreeText(s));
@@ -88,23 +84,17 @@ export default async function greet(ctx = {}) {
         markAsked(state, "name");
         await save();
       } else {
-        return {
-          reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
-          meta: { tag: "flow/greet#ask_name" },
-        };
+        return { reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name") };
       }
     } else {
       flags.askedName = true;
       markAsked(state, "name");
       await save();
-      return {
-        reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name"),
-        meta: { tag: "flow/greet#ask_name" },
-      };
+      return { reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name") };
     }
   }
 
-  // 2) se ainda não perguntamos “conhece?”, perguntar agora (com persistência)
+  // 2) perguntar “conhece?”
   if (!flags.askedKnown && !askedVolatile.known) {
     flags.askedKnown = true;
     markAsked(state, "known");
@@ -116,11 +106,11 @@ export default async function greet(ctx = {}) {
         `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, *100% livre de formol*?`,
         "flow/greet#ask_known"
       ),
-      meta: { tag: "flow/greet#ask_known" },
+      meta: { tag: "flow/greet#ask_known" }
     };
   }
 
-  // 3) interpretar resposta do “conhece?”
+  // 3) interpretar resposta “conhece?”
   const voc = pickVocative(profile);
   const saysNo  = /\b(n(ã|a)o|nao)(\s+conhe[cç]o)?\b/i.test(s);
   const saysYes = /\b(sim|s|já|ja|conhe[cç]o|usei)\b/i.test(s);
@@ -128,18 +118,21 @@ export default async function greet(ctx = {}) {
   if (saysNo) {
     flags.askedKnown = true;
     await save();
+
     const msg1 = tagReply(
       ctx,
       `Sem problema${vocStr(voc)}! A Progressiva Vegetal é *100% sem formol*, aprovada pela *Anvisa* e indicada para *todos os tipos de cabelo*. Ela hidrata enquanto alinha os fios ✨`,
       "flow/greet#brief_explain"
     );
-    // carimbo anticolisão (não contém "ask_goal")
-    const msg2 = tagReply(
-      ctx,
-      `E me conta: qual é o *seu objetivo hoje*? *Alisar, reduzir frizz, baixar volume ou dar brilho*?`,
-      "flow/greet#objective_prompt_24k"
-    );
-    return { replies: [msg1, msg2], meta: { tag: "flow/greet#objective_prompt_24k" } };
+
+    // ⚠ Bypass de hooks: NÃO usar tagReply na pergunta do objetivo.
+    // Mostramos o carimbo no próprio texto e meta.tag usa um ID inédito.
+    const msg2 = {
+      reply: `E me conta: qual é o *seu objetivo hoje*? *Alisar, reduzir frizz, baixar volume ou dar brilho*?\n[flow/greet#objective_prompt_bypass]`,
+      meta: { tag: "flow/greet#objective_prompt_bypass" }
+    };
+
+    return { replies: [msg1, msg2], meta: { tag: "flow/greet#objective_prompt_bypass" } };
   }
 
   if (saysYes) {
@@ -150,22 +143,19 @@ export default async function greet(ctx = {}) {
       reply: tagReply(
         ctx,
         `Ótimo${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-          `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
-          `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
-          `Se sim, me envia *Cidade/UF + CEP* (ex.: *01001-000 – São Paulo/SP*).`,
+        `💰 *Preço cheio: R$197*\n🎁 *Promo do dia: R$170*\n\n` +
+        `Quer que eu *consulte no sistema* se existe *promoção especial* pro seu endereço?\n` +
+        `Se sim, me envia *Cidade/UF + CEP* (ex.: *01001-000 – São Paulo/SP*).`,
         "flow/offer#precheck_special"
       ),
-      meta: { tag: "flow/offer#precheck_special" },
+      meta: { tag: "flow/offer#precheck_special" }
     };
   }
 
-  // 4) fallback: reforçar objetivo
-  return {
-    reply: tagReply(
-      ctx,
-      `Certo${vocStr(voc)}! Qual é o seu objetivo hoje: *alisar, reduzir frizz, baixar volume* ou *dar brilho*?`,
-      "flow/greet#objective_prompt_24k"
-    ),
-    meta: { tag: "flow/greet#objective_prompt_24k" },
+  // 4) fallback: mesma estratégia de bypass (caso resposta não encaixe)
+  const msgFallback = {
+    reply: `Certo${vocStr(voc)}! Qual é o *seu objetivo hoje*: *alisar, reduzir frizz, baixar volume* ou *dar brilho*?\n[flow/greet#objective_prompt_bypass]`,
+    meta: { tag: "flow/greet#objective_prompt_bypass" }
   };
+  return msgFallback;
 }
