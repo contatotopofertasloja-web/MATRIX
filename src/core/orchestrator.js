@@ -1,6 +1,5 @@
 // src/core/orchestrator.js
-// Orquestrador neutro com flow_only e carimbo visível ([flow/<stage>]).
-// Agora com suporte a out.replies (múltiplas mensagens).
+// Orquestrador neutro com suporte a multiple replies e fallback correto para 'greet' no estágio inicial.
 
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
@@ -57,12 +56,18 @@ export async function orchestrate(ctx = {}) {
   let reply = ''; 
   let replyMeta = null; 
   let actionsFromFlow = null;
-  let repliesFromFlow = null;   // << suporte a múltiplas mensagens
+  let repliesFromFlow = null;
 
-  const flowHandler = (flows && (flows[stage] || flows[intent?.toLowerCase?.()] || flows?.handle)) || null;
+  // 🔧 Escolha do handler: tenta o stage, depois o intent, depois GREET, por fim handle
+  const flowHandler =
+    (typeof flows[stage] === 'function' && flows[stage]) ||
+    (typeof flows[intent?.toLowerCase?.()] === 'function' && flows[intent.toLowerCase()]) ||
+    (typeof flows.greet === 'function' && flows.greet) ||
+    (typeof flows.handle === 'function' && flows.handle) ||
+    null;
 
   try {
-    if (typeof flowHandler === 'function') {
+    if (flowHandler) {
       const out = await flowHandler({
         userId: from, jid: from,
         text: String(text || ''),
@@ -83,8 +88,11 @@ export async function orchestrate(ctx = {}) {
         reply = out;
       }
     }
-  } catch (err) { console.error('[orchestrator][flow]', err?.message || err); }
+  } catch (err) {
+    console.error('[orchestrator][flow]', err?.message || err);
+  }
 
+  // Se nada veio do flow, opcionalmente chama LLM (se não for flow_only)
   if (!reply && !actionsFromFlow && !repliesFromFlow) {
     if (!flowOnly) {
       try {
@@ -104,6 +112,7 @@ export async function orchestrate(ctx = {}) {
     }
   }
 
+  // Polimento e sanitização do SINGLE reply (quando existir)
   let polished = '';
   try { polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply; }
   catch { polished = reply || ''; }
@@ -119,17 +128,22 @@ export async function orchestrate(ctx = {}) {
     actions = actionsFromFlow.map((a) => ({
       type: a?.type || 'text',
       to: a?.to || from,
-      text: withVisibleTag(a?.text || '', (a?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag),
+      text: withVisibleTag(a?.text || a?.reply || '', (a?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag),
       meta: { ...(a?.meta || {}), stage, intent, botId: BOT_ID, tag: (a?.meta?.tag || replyMeta?.tag || defaultTag) },
     }));
   } else if (repliesFromFlow && repliesFromFlow.length) {
-    actions = repliesFromFlow.map((r) => ({
-      type: 'text',
-      to: from,
-      text: withVisibleTag(r?.reply || r?.text || '', (r?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag),
-      meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) },
-    }));
-  } else {
+    actions = repliesFromFlow
+      .map((r) => {
+        const line = (r && (r.reply ?? r.text)) || ''; // aceita reply OU text
+        const txt  = withVisibleTag(String(line || ''), (r?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag);
+        return { type: 'text', to: from, text: txt,
+          meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) } };
+      })
+      .filter(a => a.text && a.text.trim()); // evita bolhas vazias
+  }
+
+  // Se ainda não há actions, gera fallback único
+  if (!actions.length) {
     const textOut = finalText || DEFAULT_FALLBACK;
     const bubbles = consolidateBubbles([withVisibleTag(textOut, (replyMeta?.tag), debugLabels, defaultTag)]);
     actions = bubbles.map((line) => ({
