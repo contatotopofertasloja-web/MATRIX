@@ -1,6 +1,7 @@
 // configs/bots/claudia/flow/greet.js
-// Fluxo validado: objetivo → (preço cheio R$197 + promo R$170) → pedir CEP+Cidade (consulta especial)
-// Base usada: 2032 - greet.txt
+// Microajuste: após "não", enviar 2 mensagens (explicação + pergunta de objetivo)
+// e usar carimbo NOVO na pergunta de objetivo para evitar colisão com hook antigo.
+// Base: 2057 - greet.txt
 
 import { ensureProfile, ensureAsked, markAsked, tagReply } from "./_state.js";
 import { remember, recall } from "../../../../src/core/memory.js";
@@ -24,7 +25,7 @@ function pickNameFromFreeText(s = "") {
   const m = t.match(/\b(meu\s*nome\s*é|me\s*chamo|sou)\s+([\p{L}’'\-]{2,}(?:\s+[\p{L}’'\-]{2,})*)/iu);
   if (m) return m[2].trim();
 
-  // se não for "sim/não/conheço", aceita a primeira palavra como possível nome
+  // se não for "sim/não/conheço", aceita a 1ª palavra como possível nome
   const block = /\b(n(ã|a)o|sim|já|ja|conhe[cç]o)\b/i;
   if (!block.test(t)) {
     const m2 = t.match(/^\s*([\p{L}’'\-]{2,})/u);
@@ -46,9 +47,9 @@ const vocStr = (voc) => (voc ? `, ${voc}` : "");
 
 // ——— fluxo greet ———
 export default async function greet(ctx = {}) {
-  const { jid = "", state = {}, text = "", settings = {} } = ctx;
+  const { jid = "", state = {}, text = "" } = ctx;
   const profile = ensureProfile(state);
-  const askedVolatile = ensureAsked(state); // compat. com core atual
+  const askedVolatile = ensureAsked(state);
   const s = T(text).trim();
 
   // ——— carrega memória persistida (profile + flags) ———
@@ -59,9 +60,7 @@ export default async function greet(ctx = {}) {
     if (saved?.flags) flags = { ...flags, ...saved.flags };
   } catch {}
 
-  const save = async () => {
-    try { await remember(jid, { profile, flags }); } catch {}
-  };
+  const save = async () => { try { await remember(jid, { profile, flags }); } catch {} };
 
   // 0) objetivo pode ser declarado a qualquer momento → apresentar âncora+promo e pedir CEP+Cidade
   const g0 = detectGoal(s);
@@ -73,9 +72,9 @@ export default async function greet(ctx = {}) {
     const m1 = tagReply(
       ctx,
       `Perfeito${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-      `💰 **Preço cheio: R$197**\n🎁 **Promo do dia: R$170**\n\n` +
-      `Quer que eu **consulte no sistema** se existe **promoção especial** pro seu endereço?\n` +
-      `Se sim, me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
+        `💰 **Preço cheio: R$197**\n🎁 **Promo do dia: R$170**\n\n` +
+        `Quer que eu **consulte no sistema** se existe **promoção especial** pro seu endereço?\n` +
+        `Se sim, me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
       "flow/offer#precheck_special"
     );
     return { replies: [m1], meta: { tag: "flow/offer#precheck_special" } };
@@ -83,7 +82,6 @@ export default async function greet(ctx = {}) {
 
   // 1) coletar nome
   if (!profile.name) {
-    // se já perguntamos (flag persistente ou volátil), tentar extrair
     if (flags.askedName || askedVolatile.name) {
       const picked = toTitle(pickNameFromFreeText(s));
       if (picked) {
@@ -92,25 +90,20 @@ export default async function greet(ctx = {}) {
         markAsked(state, "name");
         await save();
       } else {
-        return {
-          reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name"),
-          meta: { tag: "flow/greet#ask_name" },
-        };
+        return { reply: tagReply(ctx, "Pode me dizer seu nome? Ex.: Ana, Bruno, Andréia…", "flow/greet#ask_name") };
       }
     } else {
       flags.askedName = true;
       markAsked(state, "name");
       await save();
-      return {
-        reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name"),
-        meta: { tag: "flow/greet#ask_name" },
-      };
+      return { reply: tagReply(ctx, "Oi! Eu sou a Cláudia 💚 Como posso te chamar?", "flow/greet#ask_name") };
     }
   }
 
   // 2) interpretar resposta à pergunta "já conhece?"
-  const saysNo  = /\bn(ã|a)o(\s*conhe[cç]o)?\b/i.test(s);
-  const saysYes = /\b(sim|já|ja|conhe[cç]o|usei)\b/i.test(s);
+  // reforço: aceitar variações de "não"
+  const saysNo = /\b(n(ã|a)o|nao|ainda\s+n(ã|a)o|nunca)\b/i.test(s);
+  const saysYes = /\b(sim|s|já|ja|conhe[cç]o|usei)\b/i.test(s);
 
   if (saysNo) {
     flags.askedKnown = true;
@@ -121,12 +114,13 @@ export default async function greet(ctx = {}) {
       `Sem problema${vocStr(voc)}! A Progressiva Vegetal é **100% sem formol**, aprovada pela **Anvisa** e indicada para **todos os tipos de cabelo**. Ela hidrata profundamente enquanto alinha os fios ✨`,
       "flow/greet#brief_explain"
     );
+    // ⚠️ carimbo novo para evitar colisão com hooks antigos:
     const msg2 = tagReply(
       ctx,
       `E me conta: qual é o **seu objetivo hoje**? **Alisar, reduzir frizz, baixar volume ou dar brilho**?`,
-      "flow/greet#ask_goal"
+      "flow/greet#ask_goal_obj"
     );
-    return { replies: [msg1, msg2], meta: { tag: "flow/greet#ask_goal" } };
+    return { replies: [msg1, msg2], meta: { tag: "flow/greet#ask_goal_obj" } };
   }
 
   if (saysYes) {
@@ -137,9 +131,9 @@ export default async function greet(ctx = {}) {
     const msg = tagReply(
       ctx,
       `Ótimo${vocStr(voc)}! Hoje a nossa condição está assim:\n` +
-      `💰 **Preço cheio: R$197**\n🎁 **Promo do dia: R$170**\n\n` +
-      `Quer que eu **consulte no sistema** se existe **promoção especial** pro seu endereço?\n` +
-      `Se sim, me envia **Cidade/UF + CEP** (ex.: **01001-000 – São Paulo/SP**).`,
+        `💰 **Preço cheio: R$197**\n🎁 **Promo do dia: R$170**\n\n` +
+        `Quer que eu **consulte no sistema** se existe **promoção especial** pro seu endereço?\n` +
+        `Se sim, me envia **Cidade/UF + CEP** (ex.: **01001-000 – São Paulo/SP**).`,
       "flow/offer#precheck_special"
     );
     return { reply: msg, meta: { tag: "flow/offer#precheck_special" } };
@@ -154,10 +148,9 @@ export default async function greet(ctx = {}) {
     return {
       reply: tagReply(
         ctx,
-        `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, 100% livre de formol?`,
+        `Prazer, ${first}! Você já conhece a nossa Progressiva Vegetal, **100% livre de formol**?`,
         "flow/greet#ask_known"
-      ),
-      meta: { tag: "flow/greet#ask_known" },
+      )
     };
   }
 
@@ -167,7 +160,7 @@ export default async function greet(ctx = {}) {
     reply: tagReply(
       ctx,
       `Certo${vocStr(voc)}! Qual é o seu objetivo hoje: **alisar, reduzir frizz, baixar volume** ou **dar brilho**?`,
-      "flow/greet#ask_goal"
-    ),
+      "flow/greet#ask_goal_obj"
+    )
   };
 }
