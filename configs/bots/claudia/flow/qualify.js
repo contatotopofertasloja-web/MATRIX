@@ -1,9 +1,9 @@
 // configs/bots/claudia/flow/qualify.js
-// Roteador leve de objetivo:
+// Roteador de objetivo:
 // - Detecta objetivo em texto livre.
-// - Objetivo detectado → 1) confirmação do objetivo, 2) oferta curta (pré-CEP).
-// - Sem objetivo → nudge curto.
-// - Sempre retorna em replies[].
+// - Objetivo detectado → 1) confirmação do objetivo, 2) TRANSIÇÃO suave, 3) oferta curta (pré-CEP).
+// - Sem objetivo → nudge curto perguntando o objetivo.
+// - Sempre retorna em replies[] (compatível com orchestrator).
 
 import { ensureProfile, tagReply, normalizeSettings } from "./_state.js";
 
@@ -18,6 +18,7 @@ function detectGoal(s = "") {
   return null;
 }
 
+// 1ª bolha: confirmação do objetivo (texto curto e específico)
 function goalAck(ctx, goal) {
   switch (goal) {
     case "alisar":
@@ -35,7 +36,7 @@ function goalAck(ctx, goal) {
     case "volume":
       return tagReply(
         ctx,
-        "Perfeito 💚! Ela *baixa o volume* alinhando os fios, sem perder movimento e *sem formol*.",
+        "Perfeito 💚! Ela *baixa o volume* alinhando os fios, sem perder movimento — *sem formol*.",
         "flow/goal#volume"
       );
     case "brilho":
@@ -49,6 +50,7 @@ function goalAck(ctx, goal) {
   }
 }
 
+// Defaults seguros de preço (usando settings do bot, com fallback)
 function safePrices(settings = {}) {
   const S = normalizeSettings(settings) || {};
   const original = Number(S?.product?.price_original ?? 197);
@@ -59,17 +61,27 @@ function safePrices(settings = {}) {
 export default async function qualify(ctx = {}) {
   const { state = {}, text = "", settings = {} } = ctx;
   const profile = ensureProfile(state);
+
   const goal = detectGoal(text) || profile.goal || null;
 
-  // Objetivo detectado → confirmação + pré-CEP
+  // Objetivo detectado → confirmação + TRANSIÇÃO + oferta curta (pré-CEP)
   if (goal) {
     profile.goal = goal;
     state.stage = "offer.ask_cep_city";
 
     const { original, target } = safePrices(settings);
 
+    // 1) Confirma objetivo
     const ack = goalAck(ctx, goal);
 
+    // 2) TRANSIÇÃO suave para a oferta
+    const transition = tagReply(
+      ctx,
+      "E olha, pra você que busca esse resultado, a condição de hoje tá especial 👇",
+      "flow/goal→offer_transition"
+    );
+
+    // 3) Oferta curta (pré-CEP)
     const precheck = tagReply(
       ctx,
       "Hoje a nossa condição está assim:\n" +
@@ -80,10 +92,10 @@ export default async function qualify(ctx = {}) {
       "flow/offer#precheck_special"
     );
 
-    return { replies: [ack, precheck], meta: { tag: "flow/offer#precheck_special" } };
+    return { replies: [ack, transition, precheck], meta: { tag: "flow/offer#precheck_special" } };
   }
 
-  // Sem objetivo ainda → nudge curto
+  // Sem objetivo ainda → nudge curto (greet já cuidou da explicação)
   const nudge = tagReply(
     ctx,
     "Me conta rapidinho: qual é o *seu objetivo hoje* — *alisar, reduzir frizz, baixar volume* ou *dar brilho*?",
