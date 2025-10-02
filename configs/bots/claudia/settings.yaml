@@ -31,4 +31,4 @@ marketing:
 flags:
   debug_labels: true
   has_cod: true
-  flow_only: true
+  flow_only: true   # quando liberar para LLM (false), preços continuam fixos aqui

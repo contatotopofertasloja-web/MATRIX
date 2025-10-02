@@ -1,5 +1,5 @@
 // configs/bots/claudia/flow/index.js
-// Router do bot (neutro): mapeia estágios para handlers.
+// Router do bot: mapeia estágios para handlers.
 // Pontos-chave:
 // - Alias explícito: "recepcao" → greet (evita silêncio no 1º "oi")
 // - handle() faz fallback para greet
@@ -16,7 +16,7 @@ import postsale from './postsale.js';
 export { greet, qualify, offer, faq, objections, close, postsale };
 
 // Alias explícitos de estágio → handler
-export const recepcao   = greet;        // <- importante: 1º turno cai aqui
+export const recepcao     = greet;        // <- importante: 1º turno cai aqui
 export const qualificacao = qualify;
 export const oferta       = offer;
 export const objecoes     = objections;
