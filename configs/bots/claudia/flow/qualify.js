@@ -1,7 +1,8 @@
 // configs/bots/claudia/flow/qualify.js
 // Roteador de objetivo:
 // - Detecta objetivo em texto livre.
-// - Objetivo detectado → 1) confirmação do objetivo, 2) TRANSIÇÃO suave, 3) oferta curta (pré-CEP).
+// - Objetivo detectado → 1) confirmação do objetivo, 2) TRANSIÇÃO suave,
+//   3) oferta curta (preços) e 4) pergunta + instrução de CEP.
 // - Sem objetivo → nudge curto perguntando o objetivo.
 // - Sempre retorna em replies[] (compatível com orchestrator).
 
@@ -18,7 +19,7 @@ function detectGoal(s = "") {
   return null;
 }
 
-// 1ª bolha: confirmação do objetivo (texto curto e específico)
+// 1ª bolha: confirmação do objetivo (curta e específica)
 function goalAck(ctx, goal) {
   switch (goal) {
     case "alisar":
@@ -50,7 +51,7 @@ function goalAck(ctx, goal) {
   }
 }
 
-// Defaults seguros de preço (usando settings do bot, com fallback)
+// Defaults de preço (com fallback seguro)
 function safePrices(settings = {}) {
   const S = normalizeSettings(settings) || {};
   const original = Number(S?.product?.price_original ?? 197);
@@ -64,7 +65,7 @@ export default async function qualify(ctx = {}) {
 
   const goal = detectGoal(text) || profile.goal || null;
 
-  // Objetivo detectado → confirmação + TRANSIÇÃO + oferta curta (pré-CEP)
+  // Objetivo detectado → confirmação + TRANSIÇÃO + oferta curta (em 2 bolhas)
   if (goal) {
     profile.goal = goal;
     state.stage = "offer.ask_cep_city";
@@ -81,21 +82,30 @@ export default async function qualify(ctx = {}) {
       "flow/goal→offer_transition"
     );
 
-    // 3) Oferta curta (pré-CEP)
-    const precheck = tagReply(
+    // 3) Oferta curta (bolha 1 — apenas preços)
+    const priceBubble = tagReply(
       ctx,
       "Hoje a nossa condição está assim:\n" +
         `💰 *Preço cheio: R$${original}*\n` +
-        `🎁 *Promo do dia: R$${target}*\n\n` +
-        "Quer que eu *consulte no sistema* se existe alguma *promoção especial* liberada para o seu endereço?\n" +
-        "Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).",
-      "flow/offer#precheck_special"
+        `🎁 *Promo do dia: R$${target}*`,
+      "flow/offer#precheck_prices"
     );
 
-    return { replies: [ack, transition, precheck], meta: { tag: "flow/offer#precheck_special" } };
+    // 4) Oferta curta (bolha 2 — pergunta + instrução de CEP)
+    const requestBubble = tagReply(
+      ctx,
+      "Quer que eu *consulte no sistema* se existe alguma *promoção especial* liberada para o seu endereço?\n" +
+        "Se sim, me envia *Cidade/UF + CEP* (ex.: *São Paulo/SP – 01001-000*).",
+      "flow/offer#precheck_request"
+    );
+
+    return {
+      replies: [ack, transition, priceBubble, requestBubble],
+      meta: { tag: "flow/offer#precheck_request" }
+    };
   }
 
-  // Sem objetivo ainda → nudge curto (greet já cuidou da explicação)
+  // Sem objetivo ainda → nudge curto (greet já explicou o produto)
   const nudge = tagReply(
     ctx,
     "Me conta rapidinho: qual é o *seu objetivo hoje* — *alisar, reduzir frizz, baixar volume* ou *dar brilho*?",
