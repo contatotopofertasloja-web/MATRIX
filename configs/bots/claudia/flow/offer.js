@@ -12,8 +12,12 @@ function bubble(text, tag) {
   return tagReply({}, text, tag); // carimbo preservado
 }
 function REPLY(text, tag) {
-  return { replies: [bubble(text, tag)], meta: { tag } };
+  return { 
+    replies: [bubble(text, tag)], 
+    meta: { tag, stage: "oferta" }   // <---- garante allowPrice
+  };
 }
+
 
 const SAFE = (S) => ({
   original: Number(S?.product?.price_original ?? 197),
