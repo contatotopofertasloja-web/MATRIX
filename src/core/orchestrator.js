@@ -15,8 +15,7 @@ export async function orchestrate(ctx = {}) {
   const flowOnly = !!settings?.flags?.flow_only;
   const debugLabels =
     (settings?.flags && Object.prototype.hasOwnProperty.call(settings.flags, 'debug_labels'))
-      ? !!settings.flags.debug_labels
-      : true;
+      ? !!settings.flags.debug_labels : true;
 
   const { saveSession = async () => {} } = await getMemory();
   const { captureFromActions = async () => {} } = await getMetrics();
