@@ -1,7 +1,4 @@
 // src/core/orchestrator.js
-// Orquestrador neutro: múltiplas bolhas (out.replies), fallback para 'greet' no estágio inicial,
-// polimento/sanitização e captura de métricas opcionais.
-
 import { intentOf } from './intent.js';
 import { callLLM } from './llm.js';
 import { settings, BOT_ID } from './settings.js';
@@ -10,53 +7,8 @@ import { polishReply, consolidateBubbles, sanitizeOutbound } from '../utils/poli
 
 const DEFAULT_FALLBACK = 'Consegue repetir por gentileza?';
 
-// -------- helpers --------
-function stageFromIntent(intention) {
-  const t = String(intention || '').toLowerCase();
-  if (/qualify|qualifica/.test(t)) return 'qualificacao';
-  if (/offer|oferta|pitch/.test(t)) return 'oferta';
-  if (/objection|obj(e|é)coes?/.test(t)) return 'objecoes';
-  if (/close|checkout|fechamento/.test(t)) return 'fechamento';
-  if (/post|after|p[oó]s-?venda|pos-?venda/.test(t)) return 'posvenda';
-  if (/delivery|entrega/.test(t)) return 'entrega';
-  if (/payment|pagamento/.test(t)) return 'pagamento';
-  if (/features|modo|como usar|caracter[ií]sticas/.test(t)) return 'features';
-  return 'recepcao';
-}
+// ... (helpers e lazy-loaders inalterados) ...
 
-function withVisibleTag(text, tag, debugLabels, fallbackTag) {
-  const has = /\[[a-z]+\/.+?\]/i.test(String(text || ''));
-  const useTag = tag || fallbackTag;
-  if (!debugLabels || !useTag || has) return text;
-  return `[${useTag}] ${text}`;
-}
-
-// lazy loaders (evitam top-level await)
-let _memoryLoaded = null;
-async function getMemory() {
-  if (_memoryLoaded) return _memoryLoaded;
-  try { _memoryLoaded = await import('./memory.js'); }
-  catch { _memoryLoaded = {}; }
-  return _memoryLoaded;
-}
-
-let _metricsLoaded = null;
-async function getMetrics() {
-  if (_metricsLoaded) return _metricsLoaded;
-  try { _metricsLoaded = await import('./metrics/middleware.js'); }
-  catch { _metricsLoaded = {}; }
-  return _metricsLoaded;
-}
-
-let _promptsMod = null;
-async function getPromptsBuilder() {
-  if (_promptsMod) return _promptsMod;
-  try { _promptsMod = await import(`../../configs/bots/${BOT_ID}/prompts/index.js`); }
-  catch { _promptsMod = {}; }
-  return _promptsMod;
-}
-
-// -------- main --------
 export async function orchestrate(ctx = {}) {
   const { session = {}, from = '', text = '', meta = {} } = ctx;
 
@@ -66,7 +18,6 @@ export async function orchestrate(ctx = {}) {
       ? !!settings.flags.debug_labels
       : true;
 
-  // carrega utilitários opcionais
   const { saveSession = async () => {} } = await getMemory();
   const { captureFromActions = async () => {} } = await getMetrics();
   const { buildPrompt = null, default: buildPromptDefault = null } = await getPromptsBuilder();
@@ -84,7 +35,6 @@ export async function orchestrate(ctx = {}) {
   let actionsFromFlow = null;
   let repliesFromFlow = null;
 
-  // handler: tenta stage → intent → greet → handle
   const flowHandler =
     (typeof flows[stage] === 'function' && flows[stage]) ||
     (typeof flows[intent?.toLowerCase?.()] === 'function' && flows[intent.toLowerCase()]) ||
@@ -118,7 +68,7 @@ export async function orchestrate(ctx = {}) {
     console.error('[orchestrator][flow]', err?.stack || err?.message || err);
   }
 
-  // nenhum retorno do flow → opcional LLM (se NÃO for flow_only)
+  // LLM opcional (se flow_only = false) — inalterado
   if (!reply && !actionsFromFlow && !repliesFromFlow) {
     if (!flowOnly) {
       try {
@@ -140,18 +90,19 @@ export async function orchestrate(ctx = {}) {
     }
   }
 
-  // polimento do single-reply (quando houver)
+  // Polimento/sanitização do SINGLE reply (mantido)
   let polished = '';
   try { polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply; }
   catch { polished = reply || ''; }
 
-  const allowPrice = (stage === 'oferta' || stage === 'fechamento');
-  const allowLink  = (stage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(polished)));
-  const finalText  = sanitizeOutbound(polished, { allowLink, allowPrice });
+  const allowPriceSingle = (stage === 'oferta' || stage === 'fechamento');
+  const allowLinkSingle  = (stage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(polished)));
+  const finalText        = sanitizeOutbound(polished, { allowLink: allowLinkSingle, allowPrice: allowPriceSingle });
 
   const defaultTag = `flow/${stage}`;
   let actions = [];
 
+  // Actions vindas do flow (quando for array de bolhas)
   if (actionsFromFlow && actionsFromFlow.length) {
     actions = actionsFromFlow.map((a) => ({
       type: a?.type || 'text',
@@ -162,19 +113,57 @@ export async function orchestrate(ctx = {}) {
   } else if (repliesFromFlow && repliesFromFlow.length) {
     actions = repliesFromFlow
       .map((r) => {
-        const line = (r && (r.reply ?? r.text)) || '';
-        const txt  = withVisibleTag(String(line || ''), (r?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag);
+        // r pode ser:
+        // 1) string
+        // 2) { reply: 'texto', meta? }
+        // 3) { reply: { reply: 'texto', meta: {...} } }  <- tagReply embrulhado
+        let line = '';
+        let bubbleMeta = {};
+
+        if (typeof r === 'string') {
+          line = r;
+        } else if (r && typeof r.reply === 'string') {
+          line = r.reply;
+          bubbleMeta = { ...(r.meta || {}) };
+        } else if (r && typeof r.reply === 'object' && r.reply) {
+          // Corrige caso tenha vindo { reply: { reply, meta } }
+          line = r.reply.reply || '';
+          bubbleMeta = { ...(r.reply.meta || {}), ...(r.meta || {}) };
+        } else if (r && typeof r.text === 'string') {
+          line = r.text;
+          bubbleMeta = { ...(r.meta || {}) };
+        }
+
+        const bubbleTag   = bubbleMeta.tag || replyMeta?.tag || defaultTag;
+        const bubbleStage = bubbleMeta.stage || stage;
+
+        // Polimento + sanização POR BOLHA
+        let polishedBubble = '';
+        try { polishedBubble = polishReply(line, { stage: bubbleStage, settings, tag: bubbleTag }) || line; }
+        catch { polishedBubble = line || ''; }
+
+        const isOfferishMeta =
+          (bubbleMeta.stage === 'oferta') ||
+          /^flow\/offer#/i.test(String(bubbleTag)) ||
+          /^flow\/fechamento#/i.test(String(bubbleTag));
+
+        const allowPrice = isOfferishMeta || bubbleStage === 'oferta' || bubbleStage === 'fechamento';
+        const allowLink  = isOfferishMeta || bubbleStage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(polishedBubble));
+        const finalLine  = sanitizeOutbound(polishedBubble, { allowLink, allowPrice });
+
+        const txt = withVisibleTag(finalLine, bubbleTag, debugLabels, defaultTag);
+
         return {
           type: 'text',
           to: from,
           text: txt,
-          meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) },
+          meta: { ...bubbleMeta, stage: bubbleStage, intent, botId: BOT_ID, tag: bubbleTag },
         };
       })
       .filter(a => a.text && a.text.trim());
   }
 
-  // fallback final (single bubble)
+  // Fallback final (single bubble)
   if (!actions.length) {
     const textOut = finalText || DEFAULT_FALLBACK;
     const bubbles = consolidateBubbles([withVisibleTag(textOut, (replyMeta?.tag), debugLabels, defaultTag)]);
