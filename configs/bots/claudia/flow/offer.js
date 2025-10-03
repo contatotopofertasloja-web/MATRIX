@@ -1,19 +1,18 @@
 // configs/bots/claudia/flow/offer.js
 // Pré-CEP: âncora (R$197) + promo do dia (R$170) → pede Cidade/UF + CEP.
 // Cobertura: rota COD (2×197 ou 1×150). Fora de rota: Coinzz (R$170).
-// Preços SEMPRE vindos do settings (normalizeSettings). Bolhas marcadas como 'oferta'.
+// Preços SEMPRE vindos do settings (normalizeSettings). Carimbos preservados.
 
 import { normalizeSettings, tagReply } from "./_state.js";
 import { recall, remember } from "../../../../src/core/memory.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 
-function bubble(text, tag, extraMeta = {}) {
-  // sempre meta.stage='oferta' p/ garantir números visíveis
-  return { reply: tagReply({}, text, tag, { stage: "oferta", ...extraMeta }) };
+function bubble(text, tag) {
+  return tagReply({}, text, tag); // carimbo preservado
 }
-function REPLY(text, tag, extraMeta) {
-  return { replies: [bubble(text, tag, extraMeta)], meta: { tag } };
+function REPLY(text, tag) {
+  return { replies: [bubble(text, tag)], meta: { tag } };
 }
 
 const SAFE = (S) => ({
@@ -338,7 +337,7 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
 
   // 5) Coleta ordenada (coverage ok → já escolheu oferta)
   if (state.stage === FLOW.COLLECT_NAME || want("name", state)) {
-    if (!ck.name) {
+    if (!ensureCheckout(state).name) {
       state.stage = FLOW.COLLECT_NAME;
       return REPLY(`Perfeito 💚 Me diga seu **nome completo**, por favor.`, "flow/offer#address_name");
     }
@@ -346,15 +345,17 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
   }
 
   if (state.stage === FLOW.COLLECT_PHONE || want("phone", state)) {
-    if (!ck.phone) {
+    const ck2 = ensureCheckout(state);
+    if (!ck2.phone) {
       state.stage = FLOW.COLLECT_PHONE;
-      return REPLY(`Obrigado, ${firstName(ck.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
+      return REPLY(`Obrigado, ${firstName(ck2.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
     }
     state.stage = FLOW.COLLECT_NUMBER;
   }
 
   if (state.stage === FLOW.COLLECT_NUMBER || want("number", state)) {
-    if (!ck.number) {
+    const ck3 = ensureCheckout(state);
+    if (!ck3.number) {
       state.stage = FLOW.COLLECT_NUMBER;
       return REPLY(`Anotado. Qual o **número** da residência?`, "flow/offer#address_number");
     }
@@ -362,7 +363,8 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
   }
 
   if (state.stage === FLOW.COLLECT_APTREF || want("aptref", state)) {
-    if (!ck.apt && !ck.reference) {
+    const ck4 = ensureCheckout(state);
+    if (!ck4.apt && !ck4.reference) {
       state.stage = FLOW.COLLECT_APTREF;
       return REPLY(`Tem **apartamento (bloco/apto)**? E algum **ponto de referência** que ajude o entregador? (Se não tiver, diga “não”).`, "flow/offer#address_aptref");
     }
@@ -371,26 +373,29 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
 
   // Recap
   if (state.stage === FLOW.RECAP || want("recap", state)) {
-    const rec = recapText(ck);
+    const ck5 = ensureCheckout(state);
+    const rec = recapText(ck5);
     state.stage = FLOW.CONFIRMING;
     return REPLY(
-      `Perfeito${ck.name ? `, ${firstName(ck.name)}` : ""}! Só pra garantir que anotei tudo certinho:\n${rec}\n\nEstá correto? Se quiser ajustar, me diga o que mudar (ex.: “trocar telefone” ou “sem referência”).`,
+      `Perfeito${ck5.name ? `, ${firstName(ck5.name)}` : ""}! Só pra garantir que anotei tudo certinho:\n${rec}\n\nEstá correto? Se quiser ajustar, me diga o que mudar (ex.: “trocar telefone” ou “sem referência”).`,
       "flow/offer#recap"
     );
   }
 
   // Confirmar → (opcional) API Logzz somente APÓS ratificação
   if (state.stage === FLOW.CONFIRMING) {
+    const ck6 = ensureCheckout(state);
+
     if (RX.YES.test(lower)) {
-      try { await remember(jid, { checkout: ck }); } catch {}
+      try { await remember(jid, { checkout: ck6 }); } catch {}
       let logzzOk = false;
       if (S?.integrations?.logzz?.webhook_url) {
         const payload = {
-          customer: { name: ck.name, phone: ck.phone },
-          address: { cep: ck.cep, city: ck.city, number: ck.number, apt: ck.apt, reference: ck.reference },
-          value: ck.price || (ck.units === 2 ? 197 : (P.promoDay || 150)),
+          customer: { name: ck6.name, phone: ck6.phone },
+          address: { cep: ck6.cep, city: ck6.city, number: ck6.number, apt: ck6.apt, reference: ck6.reference },
+          value: ck6.price || (ck6.units === 2 ? 197 : (P.promoDay || 150)),
           payment: "COD",
-          notes: `Oferta escolhida: ${ck.units===2 ? "2x197" : "1x150"}`,
+          notes: `Oferta escolhida: ${ck6.units===2 ? "2x197" : "1x150"}`,
           jid
         };
         const res = await postToLogzz(S, payload);
@@ -404,7 +409,7 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
       state.stage = null;
       return REPLY(
         (logzzOk ? `Pedido registrado 🎉 ` : `Tudo certo com seus dados 💚 `) +
-        `${ck.name ? `${firstName(ck.name)}, ` : ""}o entregador vai te chamar no WhatsApp para combinar o melhor horário.\n\n` +
+        `${ck6.name ? `${firstName(ck6.name)}, ` : ""}o entregador vai te chamar no WhatsApp para combinar o melhor horário.\n\n` +
         `• **Pagamento só na entrega (COD)**\n` +
         `• Aceitamos cartões e até ${parcelas}x (juros dependem da bandeira)\n` +
         `• Prazo: até ${prazoCap}h em capitais e até ${prazoOut}h nas demais\n\n` +
@@ -418,8 +423,8 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
       return REPLY(`Claro! Me diga o que precisa ajustar (ex.: “corrigir telefone”, “nº da casa é 152”, “sem referência”).`, "flow/offer#recap_edit");
     }
 
-    const rec = recapText(ck);
-    return REPLY(`Confere pra mim:\n${rec}\n\nPosso registrar agora e pedir pro entregador te chamar no WhatsApp?`, "flow/offer#recap_repeat");
+    const rec2 = recapText(ck6);
+    return REPLY(`Confere pra mim:\n${rec2}\n\nPosso registrar agora e pedir pro entregador te chamar no WhatsApp?`, "flow/offer#recap_repeat");
   }
 
   // 6) Fallback genérico
