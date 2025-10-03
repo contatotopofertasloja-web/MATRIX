@@ -516,22 +516,26 @@ adapter.onMessage(async ({ from, text, hasMedia, raw }) => {
         lastSentAt.set(from, Date.now()); await persist(); return "";
       }
     }
+// ... o arquivo permanece igual ATÉ o bloco do nudge curto ...
 
-    // 4) Nudge curto (evita silêncio)
-    {
-      const haveName = !!(state?.profile?.name);
-      const ctx = { profile: state?.profile || {}, product: settings?.product || {} };
-      const tpl = haveName
-        ? (settings?.messages?.opening_named?.[0] || "")
-        : (settings?.messages?.opening?.[0] || "");
-      const rendered = tpl ? expandTpl(tpl, ctx) : "";
-      const fallback = "Consegue me dizer rapidinho: seu cabelo é liso, ondulado, cacheado ou crespo?";
-      const nudge = prepText(rendered || fallback);
+  // 4) Nudge curto (evita silêncio)
+  {
+    const haveName = !!(state?.profile?.name);
+    const ctx = { profile: state?.profile || {}, product: settings?.product || {} };
+    const tpl = haveName
+      ? (settings?.messages?.opening_named?.[0] || "")
+      : (settings?.messages?.opening?.[0] || "");
 
-      await enqueueOrDirect({ to: from, payload: { text: nudge } });
-      dbgPush({ kind:"outbound", to: from, preview: String(nudge).slice(0,120), via: "nudge" });
-      lastSentAt.set(from, Date.now()); await persist(); return "";
-    }
+    // 🔁 Em vez da pergunta antiga de "tipo de cabelo", forçamos o goal prompt validado:
+    const fallback = "[flow/greet#goal_prompt_v3] E me conta: qual é o seu objetivo hoje? Alisar, reduzir frizz, baixar volume ou dar brilho?";
+    const rendered = tpl && tpl.trim() ? tpl : fallback;
+    const nudge = prepText(rendered);
+
+    await enqueueOrDirect({ to: from, payload: { text: nudge } });
+    dbgPush({ kind:"outbound", to: from, preview: String(nudge).slice(0,120), via: "nudge" });
+    lastSentAt.set(from, Date.now()); await persist(); return "";
+  }
+
   } catch (e) {
     console.error("[onMessage]", e);
     return "";

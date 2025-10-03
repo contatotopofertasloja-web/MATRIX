@@ -8,9 +8,12 @@ import { recall, remember } from "../../../../src/core/memory.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 
-// helper pra construir { replies: [ tagReply(...) ] }
+function bubble(text, tag, extraMeta = {}) {
+  // sempre meta.stage='oferta' p/ garantir números visíveis
+  return { reply: tagReply({}, text, tag, { stage: "oferta", ...extraMeta }) };
+}
 function REPLY(text, tag, extraMeta) {
-  return { replies: [tagReply({}, text, tag, { stage: "oferta", ...(extraMeta || {}) })], meta: { tag } };
+  return { replies: [bubble(text, tag, extraMeta)], meta: { tag } };
 }
 
 const SAFE = (S) => ({
@@ -208,6 +211,7 @@ Posso consultar seu CEP pra ver se libera **promoção especial** com pagamento 
 
   // 1) Preço / Link (pré-CEP)
   if (RX.PRICE.test(lower)) {
+    state.stage = FLOW.ASK_CEP_CITY;
     const msg = `Hoje a nossa condição está assim:
 💰 **Preço cheio: R$ ${P.original},00**
 🎁 **Promo do dia: R$ ${P.target},00**
@@ -222,11 +226,13 @@ ${S?.product?.checkout_link || P.link}`;
     return REPLY(msg, "flow/offer#link");
   }
 
-  // 2) Pedir CEP + Cidade (entrada padrão vinda do greet/qualify)
+  // 2) Pedir CEP + Cidade (entrada padrão vinda do greet)
   if (state.stage === FLOW.ASK_CEP_CITY || want("cep_city", state)) {
     const ck = ensureCheckout(state);
 
+    // Se ainda não temos CEP nem Cidade, mostrar âncora + promo e pedir ambos
     if (!ck.cep && !ck.city) {
+      state.stage = FLOW.ASK_CEP_CITY;
       return REPLY(
         `Hoje a nossa condição está assim:
 💰 **Preço cheio: R$ ${P.original},00**
@@ -238,8 +244,14 @@ Me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
       );
     }
 
-    if (!ck.cep)  return REPLY(`Pode me enviar o seu **CEP** (ex.: 00000-000)?`, "flow/offer#ask_cep_city");
-    if (!ck.city) return REPLY(`Obrigada! Agora me diga a **cidade no formato Cidade/UF** (ex.: Brasília/DF).`, "flow/offer#ask_city");
+    if (!ck.cep) {
+      state.stage = FLOW.ASK_CEP_CITY;
+      return REPLY(`Pode me enviar o seu **CEP** (ex.: 00000-000)?`, "flow/offer#ask_cep_city");
+    }
+    if (!ck.city) {
+      state.stage = FLOW.ASK_CEP_CITY;
+      return REPLY(`Obrigada! Agora me diga a **cidade no formato Cidade/UF** (ex.: Brasília/DF).`, "flow/offer#ask_city");
+    }
 
     // Checar cobertura
     const cov = await loadCoverage();
@@ -247,6 +259,7 @@ Me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
     ck.coverage = res;
 
     if (res.ok) {
+      // Libera ofertas COD e enfatiza pagamento só na entrega
       state.stage = FLOW.CHOOSE_OFFER;
       return REPLY(
         `Parabéns 🎉 seu endereço **está na rota** com **pagamento só na entrega (COD)** ✅
@@ -283,19 +296,30 @@ Quer que eu te envie o link oficial agora pra finalizar?`,
 
   if (state.stage === FLOW.CHOOSE_OFFER) {
     if (RX.CHOOSE_TWO.test(lower)) {
-      ck.price = 197; ck.units = 2; ck.method = "COD";
+      ck.price = 197;
+      ck.units = 2;
+      ck.method = "COD";
+      state.stage = FLOW.COLLECT_NAME;
       return REPLY(`Ótima escolha 👏 (sai **R$ 98,50 cada**). Pra agendar, me confirma seu **nome completo**, por favor.`, "flow/offer#choose_two");
     }
     if (RX.CHOOSE_ONE.test(lower)) {
-      ck.price = P.promoDay || 150; ck.units = 1; ck.method = "COD";
+      ck.price = P.promoDay || 150;
+      ck.units = 1;
+      ck.method = "COD";
+      state.stage = FLOW.COLLECT_NAME;
       return REPLY(`Show! É **promo relâmpago** com poucas unidades. Me diga seu **nome completo**, por favor.`, "flow/offer#choose_one");
     }
-    return REPLY(`Posso registrar **2 por R$ 197** (R$ 98,50 cada) ou **1 por R$ 150** (relâmpago). Qual prefere?`, "flow/offer#choose_offer_repeat");
+    // Repetir opções se não entendeu
+    return REPLY(
+      `Posso registrar **2 por R$ 197** (R$ 98,50 cada) ou **1 por R$ 150** (relâmpago). Qual prefere?`,
+      "flow/offer#choose_offer_repeat"
+    );
   }
 
   // 4) Fallback Coinzz quando coverage bloqueado
   if (state.stage === FLOW.COVERAGE_BLOCKED) {
     if (RX.YES.test(lower)) {
+      state.stage = null;
       return REPLY(
         `Aqui está: ${P.link}
 Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **frete grátis** pelos Correios.`,
@@ -303,21 +327,51 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
       );
     }
     if (RX.NO.test(lower)) {
+      state.stage = null;
       return REPLY(`Sem problema 💚 Posso te mandar mais detalhes do produto ou retomamos quando preferir.`, "flow/offer#prepaid_declined");
     }
-    return REPLY(`Quer receber o link oficial (**${P.partner}**) para finalizar por **R$ ${P.prepaidPrice},00** com **frete grátis** pelos Correios?`, "flow/offer#prepaid_offer_repeat");
+    return REPLY(
+      `Quer receber o link oficial (**${P.partner}**) para finalizar por **R$ ${P.prepaidPrice},00** com **frete grátis** pelos Correios?`,
+      "flow/offer#prepaid_offer_repeat"
+    );
   }
 
-  // 5) Coleta ordenada
-  if (!ck.name)     return REPLY(`Perfeito 💚 Me diga seu **nome completo**, por favor.`, "flow/offer#address_name");
-  if (!ck.phone)    return REPLY(`Obrigado, ${firstName(ck.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
-  if (!ck.number)   return REPLY(`Anotado. Qual o **número** da residência?`, "flow/offer#address_number");
-  if (!ck.apt && !ck.reference)
-                   return REPLY(`Tem **apartamento (bloco/apto)**? E algum **ponto de referência** que ajude o entregador? (Se não tiver, diga “não”).`, "flow/offer#address_aptref");
+  // 5) Coleta ordenada (coverage ok → já escolheu oferta)
+  if (state.stage === FLOW.COLLECT_NAME || want("name", state)) {
+    if (!ck.name) {
+      state.stage = FLOW.COLLECT_NAME;
+      return REPLY(`Perfeito 💚 Me diga seu **nome completo**, por favor.`, "flow/offer#address_name");
+    }
+    state.stage = FLOW.COLLECT_PHONE;
+  }
+
+  if (state.stage === FLOW.COLLECT_PHONE || want("phone", state)) {
+    if (!ck.phone) {
+      state.stage = FLOW.COLLECT_PHONE;
+      return REPLY(`Obrigado, ${firstName(ck.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
+    }
+    state.stage = FLOW.COLLECT_NUMBER;
+  }
+
+  if (state.stage === FLOW.COLLECT_NUMBER || want("number", state)) {
+    if (!ck.number) {
+      state.stage = FLOW.COLLECT_NUMBER;
+      return REPLY(`Anotado. Qual o **número** da residência?`, "flow/offer#address_number");
+    }
+    state.stage = FLOW.COLLECT_APTREF;
+  }
+
+  if (state.stage === FLOW.COLLECT_APTREF || want("aptref", state)) {
+    if (!ck.apt && !ck.reference) {
+      state.stage = FLOW.COLLECT_APTREF;
+      return REPLY(`Tem **apartamento (bloco/apto)**? E algum **ponto de referência** que ajude o entregador? (Se não tiver, diga “não”).`, "flow/offer#address_aptref");
+    }
+    state.stage = FLOW.RECAP;
+  }
 
   // Recap
-  const rec = recapText(ck);
-  if (state.stage !== FLOW.CONFIRMING) {
+  if (state.stage === FLOW.RECAP || want("recap", state)) {
+    const rec = recapText(ck);
     state.stage = FLOW.CONFIRMING;
     return REPLY(
       `Perfeito${ck.name ? `, ${firstName(ck.name)}` : ""}! Só pra garantir que anotei tudo certinho:\n${rec}\n\nEstá correto? Se quiser ajustar, me diga o que mudar (ex.: “trocar telefone” ou “sem referência”).`,
@@ -326,41 +380,54 @@ Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **
   }
 
   // Confirmar → (opcional) API Logzz somente APÓS ratificação
-  if (RX.YES.test(lower)) {
-    try { await remember(jid, { checkout: ck }); } catch {}
-    let logzzOk = false;
-    if (S?.integrations?.logzz?.webhook_url) {
-      const payload = {
-        customer: { name: ck.name, phone: ck.phone },
-        address: { cep: ck.cep, city: ck.city, number: ck.number, apt: ck.apt, reference: ck.reference },
-        value: ck.price || (ck.units === 2 ? 197 : (P.promoDay || 150)),
-        payment: "COD",
-        notes: `Oferta escolhida: ${ck.units===2 ? "2x197" : "1x150"}`,
-        jid
-      };
-      const res = await postToLogzz(S, payload);
-      logzzOk = !!res?.ok;
+  if (state.stage === FLOW.CONFIRMING) {
+    if (RX.YES.test(lower)) {
+      try { await remember(jid, { checkout: ck }); } catch {}
+      let logzzOk = false;
+      if (S?.integrations?.logzz?.webhook_url) {
+        const payload = {
+          customer: { name: ck.name, phone: ck.phone },
+          address: { cep: ck.cep, city: ck.city, number: ck.number, apt: ck.apt, reference: ck.reference },
+          value: ck.price || (ck.units === 2 ? 197 : (P.promoDay || 150)),
+          payment: "COD",
+          notes: `Oferta escolhida: ${ck.units===2 ? "2x197" : "1x150"}`,
+          jid
+        };
+        const res = await postToLogzz(S, payload);
+        logzzOk = !!res?.ok;
+      }
+
+      const prazoCap = P.capH;
+      const prazoOut = P.othH;
+      const parcelas = S?.payments?.installments_max || 12;
+
+      state.stage = null;
+      return REPLY(
+        (logzzOk ? `Pedido registrado 🎉 ` : `Tudo certo com seus dados 💚 `) +
+        `${ck.name ? `${firstName(ck.name)}, ` : ""}o entregador vai te chamar no WhatsApp para combinar o melhor horário.\n\n` +
+        `• **Pagamento só na entrega (COD)**\n` +
+        `• Aceitamos cartões e até ${parcelas}x (juros dependem da bandeira)\n` +
+        `• Prazo: até ${prazoCap}h em capitais e até ${prazoOut}h nas demais\n\n` +
+        `Qualquer dúvida, fico aqui com você 💚`,
+        "flow/offer#confirmed_cod"
+      );
     }
 
-    const prazoCap = P.capH, prazoOut = P.othH, parcelas = S?.payments?.installments_max || 12;
+    if (RX.NO.test(lower)) {
+      state.stage = FLOW.RECAP;
+      return REPLY(`Claro! Me diga o que precisa ajustar (ex.: “corrigir telefone”, “nº da casa é 152”, “sem referência”).`, "flow/offer#recap_edit");
+    }
 
-    return REPLY(
-      (logzzOk ? `Pedido registrado 🎉 ` : `Tudo certo com seus dados 💚 `) +
-      `${ck.name ? `${firstName(ck.name)}, ` : ""}o entregador vai te chamar no WhatsApp para combinar o melhor horário.\n\n` +
-      `• **Pagamento só na entrega (COD)**\n` +
-      `• Aceitamos cartões e até ${parcelas}x (juros dependem da bandeira)\n` +
-      `• Prazo: até ${prazoCap}h em capitais e até ${prazoOut}h nas demais\n\n` +
-      `Qualquer dúvida, fico aqui com você 💚`,
-      "flow/offer#confirmed_cod"
-    );
+    const rec = recapText(ck);
+    return REPLY(`Confere pra mim:\n${rec}\n\nPosso registrar agora e pedir pro entregador te chamar no WhatsApp?`, "flow/offer#recap_repeat");
   }
 
-  if (RX.NO.test(lower)) {
-    return REPLY(`Claro! Me diga o que precisa ajustar (ex.: “corrigir telefone”, “nº da casa é 152”, “sem referência”).`, "flow/offer#recap_edit");
-  }
-
+  // 6) Fallback genérico
+  state.stage = FLOW.ASK_CEP_CITY;
   return REPLY(
-    `Confere pra mim:\n${rec}\n\nPosso registrar agora e pedir pro entregador te chamar no WhatsApp?`,
-    "flow/offer#recap_repeat"
+    `A Progressiva Vegetal serve para todos os tipos de cabelo e hidrata enquanto alinha.
+Hoje: **R$ ${P.original},00** (cheio) e **R$ ${P.target},00** (Promo do Dia).
+Quer que eu verifique seu **CEP** para liberar **promoção especial** com **pagamento só na entrega**?`,
+    "flow/offer#fallback"
   );
 }
