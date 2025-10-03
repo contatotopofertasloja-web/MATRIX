@@ -43,29 +43,9 @@ function stripCodeFences(s = '') {
   return t.replace(/^```[a-z0-9]*\s*/i, '').replace(/```$/, '').trim();
 }
 
-/**
- * Sanitiza a saída textual.
- * Libera preço automaticamente se:
- *  - allowPrice = true, OU
- *  - tag começar com "flow/offer#" (mensagens da oferta), OU
- *  - tag indicar fechamento.
- */
-export function sanitizeOutbound(text, opts = {}) {
-  const { allowLink = false } = opts || {};
-  let { allowPrice = false } = opts || {};
-
-  const tag = String(opts?.tag || '');
-  const isOfferTagged =
-    /^flow\/offer#/i.test(tag) || /(^|\/)(offer|oferta)(#|$)/i.test(tag) || /fechamento/i.test(tag);
-
-  if (!allowPrice && isOfferTagged) {
-    allowPrice = true; // força liberação de preço nas bolhas de oferta
-  }
-
+export function sanitizeOutbound(text, { allowLink = false, allowPrice = false } = {}) {
   let out = stripCodeFences(String(text || ''));
-
   if (!allowLink) out = out.replace(/https?:\/\/\S+/gi, '[link removido]');
-
   if (!allowPrice) {
     out = out
       .replace(/\bR\$\s?\d{1,3}(\.\d{3})*(,\d{2})?\b/g, 'R$ ***')
@@ -74,7 +54,6 @@ export function sanitizeOutbound(text, opts = {}) {
         (m, num, _g, _c, tail) => (tail ? '***' : m)
       );
   }
-
   out = stripForbidden(out);
   out = softenTone(out);
   out = normalizeWhitespace(out);
@@ -85,10 +64,11 @@ export function sanitizeOutbound(text, opts = {}) {
 export function polishReply(text, { stage } = {}) {
   let out = String(text || '').trim();
 
-  // ⚠️ sem interferir no greet/recepção
+  // ⚠️ Ajuste: neutralizar fallback de recepção (greet já trata essa etapa)
   if (!out) {
     switch (String(stage || '')) {
       case 'recepcao':
+        // Não injetar nada: mantém vazio para não sobrescrever greet
         out = '';
         break;
       case 'qualificacao':
