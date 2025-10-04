@@ -43,17 +43,38 @@ function stripCodeFences(s = '') {
   return t.replace(/^```[a-z0-9]*\s*/i, '').replace(/```$/, '').trim();
 }
 
-export function sanitizeOutbound(text, { allowLink = false, allowPrice = false } = {}) {
+// --- injeção de preços para as bolhas da oferta ---
+function injectOfferPrices(out) {
+  const O = process.env.CLAUDIA_PRICE_ORIGINAL   ?? '197';
+  const T = process.env.CLAUDIA_PRICE_TARGET     ?? '170';
+  const P = process.env.CLAUDIA_PRICE_PROMO_DAY  ?? T;
+
+  // substitui apenas placeholders "R$ ****"
+  out = out.replace(/(Preço\s*cheio:\s*)R\$\s?\*{3,4}/i, `$1R$ ${O}`);
+  out = out.replace(/(Promo\s*do\s*dia:\s*)R\$\s?\*{3,4}/i, `$1R$ ${T}`);
+  // fallback para casos de "Promo relâmpago" / "Promoção especial"
+  out = out.replace(/(Promo(?:ção)?\s*(?:relâmpago|especial)?:\s*)R\$\s?\*{3,4}/i, `$1R$ ${P}`);
+  return out;
+}
+
+export function sanitizeOutbound(text, { allowLink = false, allowPrice = false, tag = null } = {}) {
   let out = stripCodeFences(String(text || ''));
+
+  // se for bolha de OFFER, liberamos preço e injetamos ENV antes
+  const isOffer = /^flow\/offer#/i.test(String(tag || ''));
+  if (isOffer) {
+    allowPrice = true;
+    out = injectOfferPrices(out);
+  }
+
   if (!allowLink) out = out.replace(/https?:\/\/\S+/gi, '[link removido]');
   if (!allowPrice) {
     out = out
       .replace(/\bR\$\s?\d{1,3}(\.\d{3})*(,\d{2})?\b/g, 'R$ ***')
-      .replace(
-        /\b(\d{1,3}(\.\d{3})*(,\d{2})?)\s*(reais|rs|r\$|por)?\b/gi,
-        (m, num, _g, _c, tail) => (tail ? '***' : m)
-      );
+      .replace(/\b(\d{1,3}(\.\d{3})*(,\d{2})?)\s*(reais|rs|r\$|por)?\b/gi,
+        (m, num, _g, _c, tail) => (tail ? '***' : m));
   }
+
   out = stripForbidden(out);
   out = softenTone(out);
   out = normalizeWhitespace(out);
@@ -68,7 +89,6 @@ export function polishReply(text, { stage } = {}) {
   if (!out) {
     switch (String(stage || '')) {
       case 'recepcao':
-        // Não injetar nada: mantém vazio para não sobrescrever greet
         out = '';
         break;
       case 'qualificacao':
