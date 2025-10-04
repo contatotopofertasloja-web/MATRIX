@@ -31,4 +31,38 @@ marketing:
 flags:
   debug_labels: true
   has_cod: true
-  flow_only: true
+  flow_only: true   # quando liberar para LLM (false), preços continuam fixos aqui
+bot_id: claudia
+persona_name: "Cláudia"
+language: "pt-BR"
+
+product:
+  name: "Progressiva Vegetal"
+  store_name: "TopOfertas"
+  price_original: 197
+  price_target: 170
+  price_promo_day: 150
+  promo_day_quota: 5
+  checkout_link: "https://entrega.logzz.com.br/pay/memmpxgmg/progcreme170"
+  site_url: "https://tpofertas.com/collections/cod-todos"
+  coupon_code: "TOP-AGO2025-PROGRVG-150"
+  refund_days_after_delivery: 7
+  volume_ml: 500
+  delivery_sla:
+    capitals_hours: 24
+    others_hours: 72
+
+media:
+  opening_photo_url: "https://cdn.shopify.com/s/files/1/0947/7609/9133/files/Inserirumtitulo_8.png?v=1755836200"
+
+messages:
+  opening:
+    - "[flow/greet#ask_name] Oi! Eu sou a Cláudia 💚 Qual o seu **nome completo**?"
+
+marketing:
+  sold_count: 40000
+
+flags:
+  debug_labels: true
+  has_cod: true
+  flow_only: true   # quando liberar para LLM (false), preços continuam fixos aqui
