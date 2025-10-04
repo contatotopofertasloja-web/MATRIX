@@ -1,25 +1,40 @@
 // configs/bots/claudia/flow/offer.js
-// Fluxo de oferta – mantém tudo que já validamos.
-// Ajuste: preços vindos de ENV/Settings e formatados via fmtPrice (anti-mask).
+// Ajustado: pré-CEP agora apresenta âncora (R$197) + promo do dia (R$170) e só depois pede Cidade/UF + CEP.
+// Mantém: cobertura → COD (2×197 ou 1×150) | fora de rota → Coinzz (R$170).
+// Base usada: 2032 - offer.txt
 
 import { normalizeSettings, tagReply } from "./_state.js";
-import { getPrices, fmtPrice } from "./price-utils.js"; // <— NOVO
-import path from "node:path";
-import fs from "node:fs/promises";
+import { recall, remember } from "../../../../src/core/memory.js";
 
-function bubble(text, tag) { return tagReply({}, text, tag); }
-function REPLY(text, tag) { return { replies: [bubble(text, tag)], meta: { tag } }; }
+function TAG(text, id) { return { reply: tagReply({}, text, id), meta: { tag: id } }; }
+
+const SAFE = (S) => ({
+  original: Number(S?.product?.price_original ?? 197),
+  target: Number(S?.product?.price_target ?? 170),
+  promoDay: Number(S?.product?.price_promo_day ?? 150),
+  quota: Number(S?.product?.promo_day_quota ?? 5),
+  capH: Number(S?.product?.delivery_sla?.capitals_hours ?? 24),
+  othH: Number(S?.product?.delivery_sla?.others_hours ?? 72),
+  prepaidPrice: Number(S?.fallback?.prepaid_price ?? S?.product?.price_target ?? 170),
+  partner: S?.fallback?.prepaid_partner || "Coinzz",
+  link: S?.fallback?.prepaid_link || S?.product?.checkout_link || ""
+});
 
 const RX = {
   PRICE: /(preç|valor|quanto|cust)/i,
   LINK: /\b(link|checkout|compr(ar|a)|finaliza(r)?|carrinho|pagamento)\b/i,
   YES: /\b(sim|s|claro|quero|pode|ok|isso|mandar|envia|envie)\b/i,
-  NO:  /\b(n[ãa]o|nao|depois|agora n[ãa]o)\b/i,
+  NO: /\b(n[ãa]o|nao|depois|agora n[ãa]o)\b/i,
+  OBJECTION_SAFETY: /\b(anvisa|seguran[çc]a|golpe|fraude|registro)\b/i,
+  OBJECTION_PRICE: /\b(caro|caro demais|muito caro|car[ao])\b/i,
+
   PHONE: /(\+?\d{2}\s*)?(\(?\d{2}\)?\s*)?\d{4,5}[-\s.]?\d{4}/,
   CEP: /(\d{5})[-\s.]?(\d{3})/,
-  NUMBER: /\b(n[úu]mero|nº|no\.?|num\.?)\s*[:\-]?\s*(\d{1,6})\b|\b(\d{1,6})\b/i,
+  NUMBER: /\b(n[úu]mero|nº|no\.?|num\.?)\s*[:\-]?\s*(\d{1,6})\b|\b(\d{1,6})(?:\s*(?:,|\-|\/)?\s*(?:casa|res|resid|n[úu]mero))?/i,
   APT: /\b(ap(?:to)?\.?\s*\d{1,5}|apartamento\s*\d{1,5}|bloco\s*\w+\s*apto\s*\d{1,5})/i,
+  REF: /\b(ref(?:er[êe]ncia)?[:\-]?\s*[^\n]{3,})/i,
   CITY_FALLBACK: /([a-záàâãéêíóôõúüç ]{3,})(?:\/[a-z]{2})?$/i,
+
   CHOOSE_TWO: /\b(2|duas|dois)\b|\bcombo\b|\b197\b/i,
   CHOOSE_ONE: /\b(1|uma|um)\b|\b150\b/i,
 };
@@ -33,153 +48,375 @@ const FLOW = {
   COLLECT_APTREF: "offer.collect_aptref",
   RECAP: "offer.recap",
   CONFIRMING: "offer.confirming",
+  COVERAGE_OK: "offer.coverage_ok",
   COVERAGE_BLOCKED: "offer.coverage_blocked",
 };
 
-const onlyDigits = (s) => String(s || "").replace(/\D+/g, "");
-function normCEP(s = "") { const m = String(s).match(RX.CEP); return m ? `${m[1]}-${m[2]}` : ""; }
+// Helpers
+function onlyDigits(s) { return String(s || "").replace(/\D+/g, ""); }
+function normCEP(s = "") {
+  const m = String(s).match(RX.CEP);
+  return m ? `${m[1]}-${m[2]}` : "";
+}
+function normPhone(s = "") {
+  const d = onlyDigits(s);
+  if (d.length < 10) return "";
+  if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+  return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+}
 function guessCity(s = "") {
   const parts = String(s).split(/[,\n]/).map(x=>x.trim()).filter(Boolean);
   const tail = parts[parts.length - 1] || s;
   const m = tail.match(RX.CITY_FALLBACK);
   return m ? m[1].replace(/\s+/g, " ").trim() : "";
 }
-const firstName = (full="") => (String(full).trim().split(/\s+/)[0] || "");
+function firstName(full = "") {
+  const p = String(full).trim().split(/\s+/);
+  return p[0] || "";
+}
 
+// Cobertura JSON
 let _coverageCache = null;
 async function loadCoverage() {
   if (_coverageCache) return _coverageCache;
-  const CAND = [
-    path.resolve(process.cwd(), "configs/coverage/claudia-coverage.json"),
-    path.resolve("configs/coverage/claudia-coverage.json"),
-  ];
-  for (const p of CAND) {
-    try { const raw = await fs.readFile(p, "utf8"); _coverageCache = JSON.parse(raw); return _coverageCache; }
-    catch {}
+  try {
+    const fs = await import("node:fs/promises");
+    const raw = await fs.readFile("/app/configs/coverage/claudia-coverage.json", "utf8");
+    _coverageCache = JSON.parse(raw);
+  } catch {
+    _coverageCache = { schema: 1, default_policy: "deny", cities: [] };
   }
-  _coverageCache = { schema: 1, default_policy: "deny", cities: [] };
   return _coverageCache;
-}
-function findCityEntry(cov, cityName) {
-  if (!cityName) return null; const q = cityName.toLowerCase();
-  for (const c of (cov.cities || [])) {
-    if (String(c?.name||"").toLowerCase() === q) return c;
-    if (Array.isArray(c?.alias) && c.alias.some(a=>String(a).toLowerCase()===q)) return c;
-  }
-  return null;
 }
 function cepMatch(cep, rule) {
   if (!rule) return false;
-  if (rule.includes("..")) { const [a,b]=rule.split(".."); const ca=onlyDigits(a), cb=onlyDigits(b), cx=onlyDigits(cep); return cx>=ca && cx<=cb; }
-  if (rule.includes("*")) { const re=new RegExp("^"+rule.replace(/\*/g,"\\d").replace("-", "\\-")+"$"); return re.test(cep); }
+  if (rule.includes("..")) {
+    const [a, b] = rule.split("..");
+    const ca = onlyDigits(a), cb = onlyDigits(b), cx = onlyDigits(cep);
+    return ca.length===8 && cb.length===8 && cx.length===8 && cx >= ca && cx <= cb;
+  }
+  if (rule.includes("*")) {
+    const re = new RegExp("^" + rule.replace(/\*/g, "\\d").replace("-", "\\-") + "$");
+    return re.test(cep);
+  }
   return cep === rule;
+}
+function findCityEntry(cov, cityName) {
+  if (!cityName) return null;
+  const q = cityName.toLowerCase();
+  for (const c of (cov.cities || [])) {
+    if (!c) continue;
+    if (String(c.name||"").toLowerCase() === q) return c;
+    if (Array.isArray(c.alias) && c.alias.some(a => String(a).toLowerCase() === q)) return c;
+  }
+  return null;
 }
 function checkCoverage(cov, city, cep) {
   const entry = findCityEntry(cov, city);
-  if (!entry) return { ok:false, reason:"city_not_found" };
-  if (String(entry.policy||"deny").toLowerCase()!=="allow") return { ok:false, reason:"city_policy_deny" };
-  for (const r of (entry.deny_ceps||[])) if (cepMatch(cep, r)) return { ok:false, reason:"cep_blocked", rule:r };
-  return { ok:true };
+  if (!entry) return { ok: false, reason: "city_not_found" };
+  if (String(entry.policy||"deny").toLowerCase() !== "allow") return { ok: false, reason: "city_policy_deny" };
+  const deny = Array.isArray(entry.deny_ceps) ? entry.deny_ceps : [];
+  for (const r of deny) if (cepMatch(cep, r)) return { ok: false, reason: "cep_blocked", rule: r };
+  return { ok: true };
 }
 
+// Persistência
 function ensureCheckout(state) {
-  state.checkout = state.checkout || { cep:"", city:"", name:"", phone:"", number:"", apt:"", reference:"", price:0, units:1, method:"" };
+  state.checkout = state.checkout || {
+    cep: "", city: "", name: "", phone: "", number: "", apt: "", reference: "",
+    price: 0, units: 1, method: "", coverage: null
+  };
   return state.checkout;
 }
-function fillIfPresent(str="", state) {
+function fillIfPresent(str = "", state) {
   const ck = ensureCheckout(state);
-  const mCep = normCEP(str); if (mCep && !ck.cep) ck.cep = mCep;
-  const mCity = guessCity(str); if (mCity && !ck.city) ck.city = mCity;
-  const nMatch = str.match(RX.NUMBER); if (nMatch && !ck.number) ck.number = (nMatch[2] || nMatch[3] || "").trim();
+  const cep = normCEP(str); if (cep && !ck.cep) ck.cep = cep;
+  const city = guessCity(str); if (city && !ck.city) ck.city = city;
+  const pM = str.match(RX.PHONE); if (pM && !ck.phone) ck.phone = normPhone(pM[0]);
+  const nM = str.match(RX.NUMBER); if (nM && !ck.number) ck.number = (nM[2] || nM[3] || "").trim();
+  const aM = str.match(RX.APT); if (aM && !ck.apt) ck.apt = aM[0].replace(/\s+/g, " ").trim();
+  const rM = str.match(RX.REF); if (rM && !ck.reference) ck.reference = rM[0].replace(/^ref(er[êe]ncia)?[:\-]?\s*/i,"").trim();
+
+  const nameGuess = str.split(/\s+/).filter(w => /^[A-Za-zÁ-ÿ]{2,}$/.test(w)).slice(0, 6).join(" ");
+  if (nameGuess && nameGuess.split(" ").length >= 2 && !ck.name) ck.name = nameGuess;
 }
 function want(field, state) {
   const ck = ensureCheckout(state);
-  if (field==="cep_city") return (!ck.cep || !ck.city);
-  if (field==="name") return !ck.name;
-  if (field==="phone") return !ck.phone;
-  if (field==="number") return !ck.number;
-  if (field==="aptref") return (!ck.apt && !ck.reference);
-  if (field==="recap") return (ck.cep && ck.city && ck.name && ck.phone && ck.number);
+  if (field === "cep_city") return (!ck.cep || !ck.city);
+  if (field === "name") return !ck.name;
+  if (field === "phone") return !ck.phone;
+  if (field === "number") return !ck.number;
+  if (field === "aptref") return (!ck.apt && !ck.reference);
+  if (field === "recap") return (ck.cep && ck.city && ck.name && ck.phone && ck.number);
   return false;
 }
 function recapText(ck) {
-  return `📌 Nome: ${ck.name||"-"}\n📌 Telefone: ${ck.phone||"-"}\n📌 Endereço: CEP ${ck.cep||"-"}, nº ${ck.number||"-"}${ck.apt?`, ${ck.apt}`:""}\n📌 Referência: ${ck.reference||"-"}`;
+  return [
+    `📌 Nome: ${ck.name || "-"}`,
+    `📌 Telefone: ${ck.phone || "-"}`,
+    `📌 Endereço: CEP ${ck.cep || "-"}, nº ${ck.number || "-"}${ck.apt ? ", " + ck.apt : ""}`,
+    `📌 Referência: ${ck.reference || "-"}`
+  ].join("\n");
+}
+
+// Webhook Logzz (opcional) — chamar só APÓS ratificação
+async function postToLogzz(S, payload = {}) {
+  try {
+    const url = S?.integrations?.logzz?.webhook_url || "";
+    const token = S?.integrations?.logzz?.token || "";
+    if (!url) return { ok: false, skipped: true, reason: "no_url" };
+    const headers = { "content-type": "application/json" };
+    if (token) headers["authorization"] = `Bearer ${token}`;
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+    return { ok: res.ok, status: res.status };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
 }
 
 export default async function offer(ctx = {}) {
-  const { state = {}, text = "", settings = {} } = ctx;
-  const prices = getPrices(settings);              // <— lê ENV/Settings
-  const t = String(text||"").trim();
+  const { jid = "", state = {}, text = "", settings = {} } = ctx;
+  const S = normalizeSettings(settings);
+  const P = SAFE(S);
+
+  const t = String(text || "").trim();
+  const lower = t.toLowerCase();
+
+  // Capturar dados soltos
   fillIfPresent(t, state);
 
-  // Entrada padrão: pedir CEP + Cidade já mostrando âncora + promo (com preços)
+  // 0) Objeções
+  if (RX.OBJECTION_SAFETY.test(lower)) {
+    const msg = `Pode ficar tranquila 💚 Nossa Progressiva Vegetal é 100% livre de formol, regularizada e segura, com mais de ${S?.marketing?.sold_count || 40000} clientes satisfeitas.
+E o melhor: pagamento somente na entrega (COD), direto ao entregador. Aceitamos cartões e parcelamos em até ${S?.payments?.installments_max || 12}x.`;
+    return TAG(msg, "flow/offer#objection_safety");
+  }
+  if (RX.OBJECTION_PRICE.test(lower)) {
+    const msg = `Entendo 👍 Comparando com salão, sai bem mais em conta e você faz em casa no seu tempo.
+Hoje trabalhamos a **R$ ${P.original},00** (cheio) com **Promo do Dia por R$ ${P.target},00**.
+Posso consultar seu CEP pra ver se libera **promoção especial** com pagamento só na entrega?`;
+    return TAG(msg, "flow/offer#objection_price");
+  }
+
+  // 1) Preço / Link (pré-CEP)
+  if (RX.PRICE.test(lower)) {
+    state.stage = FLOW.ASK_CEP_CITY;
+    const msg = `Hoje a nossa condição está assim:
+💰 **Preço cheio: R$ ${P.original},00**
+🎁 **Promo do dia: R$ ${P.target},00**
+
+Quer que eu **consulte no sistema** se existe **promoção especial** para o seu endereço?
+Se sim, me envia **Cidade/UF + CEP** (ex.: São Paulo/SP – 01001-000).`;
+    return TAG(msg, "flow/offer#precheck_special");
+  }
+  if (RX.LINK.test(lower)) {
+    const msg = `Aqui está o link seguro para finalizar pelo site oficial:
+${S?.product?.checkout_link || P.link}`;
+    return TAG(msg, "flow/offer#link");
+  }
+
+  // 2) Pedir CEP + Cidade (entrada padrão vinda do greet)
   if (state.stage === FLOW.ASK_CEP_CITY || want("cep_city", state)) {
     const ck = ensureCheckout(state);
+
+    // ——— NOVO: se ainda não temos CEP nem Cidade, mostrar âncora + promo e pedir ambos ———
     if (!ck.cep && !ck.city) {
       state.stage = FLOW.ASK_CEP_CITY;
-      return REPLY(
-`Hoje a nossa condição está assim:
-💰 *Preço cheio: ${fmtPrice(prices.original)}*
-🎁 *Promo do dia: ${fmtPrice(prices.target)}*
+      return TAG(
+        `Hoje a nossa condição está assim:
+💰 **Preço cheio: R$ ${P.original},00**
+🎁 **Promo do dia: R$ ${P.target},00**
 
-Quer que eu *consulte no sistema* se existe alguma *promoção especial* liberada para o seu endereço?
-Me envia **Cidade/UF + CEP** (ex.: *São Paulo/SP – 01001-000*).`,
-        "flow/offer#precheck_prices"
+Quer que eu **consulte no sistema** se existe **promoção especial** para o seu endereço?
+Me envia **Cidade/UF + CEP** (ex.: **São Paulo/SP – 01001-000**).`,
+        "flow/offer#precheck_special"
       );
     }
 
-    if (!ck.cep)  { state.stage = FLOW.ASK_CEP_CITY; return REPLY(`Pode me enviar o seu **CEP** (ex.: 00000-000)?`, "flow/offer#ask_cep"); }
-    if (!ck.city) { state.stage = FLOW.ASK_CEP_CITY; return REPLY(`Obrigado! Agora me diga a **cidade** no formato Cidade/UF (ex.: Brasília/DF).`, "flow/offer#ask_city"); }
+    if (!ck.cep) {
+      state.stage = FLOW.ASK_CEP_CITY;
+      return TAG(`Pode me enviar o seu **CEP** (ex.: 00000-000)?`, "flow/offer#ask_cep_city");
+    }
+    if (!ck.city) {
+      state.stage = FLOW.ASK_CEP_CITY;
+      return TAG(`Obrigada! Agora me diga a **cidade no formato Cidade/UF** (ex.: Brasília/DF).`, "flow/offer#ask_city");
+    }
 
-    // cobertura
+    // Checar cobertura
     const cov = await loadCoverage();
     const res = checkCoverage(cov, ck.city, ck.cep);
-    if (!res.ok) {
-      state.stage = FLOW.COVERAGE_BLOCKED;
-      return REPLY(
-        `Nesse endereço o pagamento na entrega não está disponível 😕
-Mas consigo te atender por **${fmtPrice(prices.prepaid)}** com frete grátis pelos Correios (checkout seguro). Posso te enviar o link?`,
-        "flow/offer#coverage_blocked"
+    ck.coverage = res;
+
+    if (res.ok) {
+      // Libera ofertas COD e enfatiza "pagamento só na entrega"
+      state.stage = FLOW.CHOOSE_OFFER;
+      return TAG(
+        `Parabéns 🎉 seu endereço **está na rota** com **pagamento só na entrega (COD)** ✅
+Tenho duas opções liberadas pra você:
+👉 **2 unidades por R$ 197** (R$ 98,50 cada)
+👉 **1 unidade por R$ 150** (*Promo Relâmpago – poucas unidades*)
+Qual você prefere que eu **registre agora**?`,
+        "flow/offer#release_offers"
       );
     }
 
-    // cobertura ok → apresenta as duas opções (com preço anti-mask)
-    state.stage = FLOW.CHOOSE_OFFER;
-    return REPLY(
-`Parabéns 🎉 seu endereço **está na rota** com **pagamento só na entrega (COD)**.
-Tenho duas opções liberadas:
-👉 **2 unidades por ${fmtPrice(197)}** (sai ${fmtPrice(98)} cada)
-👉 **1 unidade por ${fmtPrice(prices.promoDay)}** (*Promo Relâmpago*)
-Qual você prefere que eu registre agora?`,
-      "flow/offer#release_offers"
+    // Fora da cobertura → Coinzz
+    state.stage = FLOW.COVERAGE_BLOCKED;
+
+    if (res.reason === "city_not_found" || res.reason === "city_policy_deny") {
+      return TAG(
+        `Nesse endereço ainda não temos entrega na hora 😕
+Mas não te deixo na mão 💚 Você recebe pelos **Correios com frete grátis** por **R$ ${P.prepaidPrice},00**, via checkout seguro no nosso parceiro **${P.partner}**.
+Posso te enviar o **link oficial** pra finalizar?`,
+        "flow/offer#city_not_covered"
+      );
+    }
+
+    return TAG(
+      `Para esse endereço o pagamento na entrega (COD) não está disponível 😕
+Consigo te atender por **R$ ${P.prepaidPrice},00** com frete grátis pelos Correios, via **${P.partner}** (checkout seguro).
+Quer que eu te envie o link oficial agora pra finalizar?`,
+      "flow/offer#coverage_blocked"
     );
   }
 
-  // escolha de oferta (mantido)
+  // 3) Escolha de oferta COD (2x197 ou 1x150) → segue coleta
+  const ck = ensureCheckout(state);
+
   if (state.stage === FLOW.CHOOSE_OFFER) {
-    const ck = ensureCheckout(state);
-    if (RX.CHOOSE_TWO.test(t.toLowerCase())) {
-      ck.price = 197; ck.units = 2; ck.method = "COD"; state.stage = FLOW.COLLECT_NAME;
-      return REPLY(`Ótima escolha 👏 (sai ${fmtPrice(98)} cada). Me confirma seu **nome completo**, por favor.`, "flow/offer#choose_two");
+    if (RX.CHOOSE_TWO.test(lower)) {
+      ck.price = 197;
+      ck.units = 2;
+      ck.method = "COD";
+      state.stage = FLOW.COLLECT_NAME;
+      return TAG(`Ótima escolha 👏 (sai **R$ 98,50 cada**). Pra agendar, me confirma seu **nome completo**, por favor.`, "flow/offer#choose_two");
     }
-    if (RX.CHOOSE_ONE.test(t.toLowerCase())) {
-      ck.price = prices.promoDay; ck.units = 1; ck.method = "COD"; state.stage = FLOW.COLLECT_NAME;
-      return REPLY(`Perfeito! Promo relâmpago liberada. Seu **nome completo**, por favor.`, "flow/offer#choose_one");
+    if (RX.CHOOSE_ONE.test(lower)) {
+      ck.price = P.promoDay || 150;
+      ck.units = 1;
+      ck.method = "COD";
+      state.stage = FLOW.COLLECT_NAME;
+      return TAG(`Show! É **promo relâmpago** com poucas unidades. Me diga seu **nome completo**, por favor.`, "flow/offer#choose_one");
     }
-    return REPLY(`Posso registrar **2 por ${fmtPrice(197)}** ou **1 por ${fmtPrice(prices.promoDay)}**. Qual prefere?`, "flow/offer#choose_repeat");
+    // Repetir opções se não entendeu
+    return TAG(
+      `Posso registrar **2 por R$ 197** (R$ 98,50 cada) ou **1 por R$ 150** (relâmpago). Qual prefere?`,
+      "flow/offer#choose_offer_repeat"
+    );
   }
 
-  // (restante do fluxo – coleta, recap, confirmação) 100% igual ao validado
-  // … (mantém suas mensagens atuais — sem alterações) …
-  // Para não alongar, mantenha aqui seu bloco de coleta já validado.
-  // Se quiser, posso colar também esse trecho inteiro como estava.
+  // 4) Fallback Coinzz quando coverage bloqueado
+  if (state.stage === FLOW.COVERAGE_BLOCKED) {
+    if (RX.YES.test(lower)) {
+      state.stage = null;
+      return TAG(
+        `Aqui está: ${P.link}
+Checkout seguro pelo **${P.partner}**, valor **R$ ${P.prepaidPrice},00**, com **frete grátis** pelos Correios.`,
+        "flow/offer#prepaid_link"
+      );
+    }
+    if (RX.NO.test(lower)) {
+      state.stage = null;
+      return TAG(`Sem problema 💚 Posso te mandar mais detalhes do produto ou retomamos quando preferir.`, "flow/offer#prepaid_declined");
+    }
+    return TAG(
+      `Quer receber o link oficial (**${P.partner}**) para finalizar por **R$ ${P.prepaidPrice},00** com **frete grátis** pelos Correios?`,
+      "flow/offer#prepaid_offer_repeat"
+    );
+  }
 
-  // fallback
+  // 5) Coleta ordenada (coverage ok → já escolheu oferta)
+  if (state.stage === FLOW.COLLECT_NAME || want("name", state)) {
+    if (!ck.name) {
+      state.stage = FLOW.COLLECT_NAME;
+      return TAG(`Perfeito 💚 Me diga seu **nome completo**, por favor.`, "flow/offer#address_name");
+    }
+    state.stage = FLOW.COLLECT_PHONE;
+  }
+
+  if (state.stage === FLOW.COLLECT_PHONE || want("phone", state)) {
+    if (!ck.phone) {
+      state.stage = FLOW.COLLECT_PHONE;
+      return TAG(`Obrigado, ${firstName(ck.name)}! Agora o seu **telefone com DDD** (ex.: (61) 9XXXX-XXXX).`, "flow/offer#address_phone");
+    }
+    state.stage = FLOW.COLLECT_NUMBER;
+  }
+
+  if (state.stage === FLOW.COLLECT_NUMBER || want("number", state)) {
+    if (!ck.number) {
+      state.stage = FLOW.COLLECT_NUMBER;
+      return TAG(`Anotado. Qual o **número** da residência?`, "flow/offer#address_number");
+    }
+    state.stage = FLOW.COLLECT_APTREF;
+  }
+
+  if (state.stage === FLOW.COLLECT_APTREF || want("aptref", state)) {
+    if (!ck.apt && !ck.reference) {
+      state.stage = FLOW.COLLECT_APTREF;
+      return TAG(`Tem **apartamento (bloco/apto)**? E algum **ponto de referência** que ajude o entregador? (Se não tiver, diga “não”).`, "flow/offer#address_aptref");
+    }
+    state.stage = FLOW.RECAP;
+  }
+
+  // Recap
+  if (state.stage === FLOW.RECAP || want("recap", state)) {
+    const rec = recapText(ck);
+    state.stage = FLOW.CONFIRMING;
+    return TAG(
+      `Perfeito${ck.name ? `, ${firstName(ck.name)}` : ""}! Só pra garantir que anotei tudo certinho:\n${rec}\n\nEstá correto? Se quiser ajustar, me diga o que mudar (ex.: “trocar telefone” ou “sem referência”).`,
+      "flow/offer#recap"
+    );
+  }
+
+  // Confirmar → (opcional) API Logzz somente APÓS ratificação
+  if (state.stage === FLOW.CONFIRMING) {
+    if (RX.YES.test(lower)) {
+      try { await remember(jid, { checkout: ck }); } catch {}
+      let logzzOk = false;
+      if (S?.integrations?.logzz?.webhook_url) {
+        const payload = {
+          customer: { name: ck.name, phone: ck.phone },
+          address: { cep: ck.cep, city: ck.city, number: ck.number, apt: ck.apt, reference: ck.reference },
+          value: ck.price || (ck.units === 2 ? 197 : (P.promoDay || 150)),
+          payment: "COD",
+          notes: `Oferta escolhida: ${ck.units===2 ? "2x197" : "1x150"}`,
+          jid
+        };
+        const res = await postToLogzz(S, payload);
+        logzzOk = !!res?.ok;
+      }
+
+      const prazoCap = P.capH;
+      const prazoOut = P.othH;
+      const parcelas = S?.payments?.installments_max || 12;
+
+      state.stage = null;
+      return TAG(
+        (logzzOk ? `Pedido registrado 🎉 ` : `Tudo certo com seus dados 💚 `) +
+        `${ck.name ? `${firstName(ck.name)}, ` : ""}o entregador vai te chamar no WhatsApp para combinar o melhor horário.\n\n` +
+        `• **Pagamento só na entrega (COD)**\n` +
+        `• Aceitamos cartões e até ${parcelas}x (juros dependem da bandeira)\n` +
+        `• Prazo: até ${prazoCap}h em capitais e até ${prazoOut}h nas demais\n\n` +
+        `Qualquer dúvida, fico aqui com você 💚`,
+        "flow/offer#confirmed_cod"
+      );
+    }
+
+    if (RX.NO.test(lower)) {
+      state.stage = FLOW.RECAP;
+      return TAG(`Claro! Me diga o que precisa ajustar (ex.: “corrigir telefone”, “nº da casa é 152”, “sem referência”).`, "flow/offer#recap_edit");
+    }
+
+    const rec = recapText(ck);
+    return TAG(`Confere pra mim:\n${rec}\n\nPosso registrar agora e pedir pro entregador te chamar no WhatsApp?`, "flow/offer#recap_repeat");
+  }
+
+  // 6) Fallback genérico
   state.stage = FLOW.ASK_CEP_CITY;
-  return REPLY(
-    `A Progressiva Vegetal hidrata enquanto alinha e é 100% sem formol.
-Hoje: **${fmtPrice(prices.original)}** (cheio) e **${fmtPrice(prices.target)}** (Promo do Dia).
-Quer que eu verifique seu **CEP** para liberar **promoção especial** com pagamento na entrega?`,
+  return TAG(
+    `A Progressiva Vegetal serve para todos os tipos de cabelo e hidrata enquanto alinha.
+Hoje: **R$ ${P.original},00** (cheio) e **R$ ${P.target},00** (Promo do Dia).
+Quer que eu verifique seu **CEP** para liberar **promoção especial** com **pagamento só na entrega**?`,
     "flow/offer#fallback"
   );
 }

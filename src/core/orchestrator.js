@@ -145,48 +145,30 @@ export async function orchestrate(ctx = {}) {
   try { polished = polishReply(reply, { stage, settings, tag: replyMeta?.tag || null }) || reply; }
   catch { polished = reply || ''; }
 
-  // single-reply passa pelo sanitizer (com controle de preço/link por estágio + tag)
-  const allowPriceSingle =
-    (stage === 'oferta' || stage === 'fechamento' || /^flow\/offer#/i.test(String(replyMeta?.tag || '')));
-  const allowLinkSingle  =
-    (stage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(polished)));
-
-  const finalText  = sanitizeOutbound(polished, {
-    allowLink: allowLinkSingle,
-    allowPrice: allowPriceSingle,
-    tag: replyMeta?.tag || null,
-  });
+  const allowPrice = (stage === 'oferta' || stage === 'fechamento');
+  const allowLink  = (stage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(polished)));
+  const finalText  = sanitizeOutbound(polished, { allowLink, allowPrice });
 
   const defaultTag = `flow/${stage}`;
   let actions = [];
 
   if (actionsFromFlow && actionsFromFlow.length) {
-    actions = actionsFromFlow.map((a) => {
-      const tag = (a?.meta?.tag || replyMeta?.tag || defaultTag);
-      const allowPrice = (stage === 'oferta' || stage === 'fechamento' || /^flow\/offer#/i.test(String(tag || '')));
-      const allowLink  = (stage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(a?.text || a?.reply || '')));
-      const txtSan = sanitizeOutbound((a?.text || a?.reply || ''), { allowLink, allowPrice, tag });
-      return {
-        type: a?.type || 'text',
-        to: a?.to || from,
-        text: withVisibleTag(txtSan, tag, debugLabels, defaultTag),
-        meta: { ...(a?.meta || {}), stage, intent, botId: BOT_ID, tag },
-      };
-    });
+    actions = actionsFromFlow.map((a) => ({
+      type: a?.type || 'text',
+      to: a?.to || from,
+      text: withVisibleTag(a?.text || a?.reply || '', (a?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag),
+      meta: { ...(a?.meta || {}), stage, intent, botId: BOT_ID, tag: (a?.meta?.tag || replyMeta?.tag || defaultTag) },
+    }));
   } else if (repliesFromFlow && repliesFromFlow.length) {
     actions = repliesFromFlow
       .map((r) => {
         const line = (r && (r.reply ?? r.text)) || '';
-        const tag = (r?.meta?.tag || replyMeta?.tag || defaultTag);
-        const allowPrice = (stage === 'oferta' || stage === 'fechamento' || /^flow\/offer#/i.test(String(tag || '')));
-        const allowLink  = (stage === 'fechamento' || /link|checkout|coinzz|logzz/i.test(String(line)));
-        const sanitized  = sanitizeOutbound(String(line || ''), { allowLink, allowPrice, tag });
-        const txt        = withVisibleTag(sanitized, tag, debugLabels, defaultTag);
+        const txt  = withVisibleTag(String(line || ''), (r?.meta?.tag || replyMeta?.tag), debugLabels, defaultTag);
         return {
           type: 'text',
           to: from,
           text: txt,
-          meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag },
+          meta: { ...(r?.meta || {}), stage, intent, botId: BOT_ID, tag: (r?.meta?.tag || replyMeta?.tag || defaultTag) },
         };
       })
       .filter(a => a.text && a.text.trim());
