@@ -1,4 +1,6 @@
-﻿bot_id: claudia
+﻿# configs/bots/claudia/settings.yaml
+
+bot_id: claudia
 persona_name: "Cláudia"
 language: "pt-BR"
 

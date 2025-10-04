@@ -171,8 +171,6 @@ Qual você prefere que eu registre agora?`,
 
   // (restante do fluxo – coleta, recap, confirmação) 100% igual ao validado
   // … (mantém suas mensagens atuais — sem alterações) …
-  // Para não alongar, mantenha aqui seu bloco de coleta já validado.
-  // Se quiser, posso colar também esse trecho inteiro como estava.
 
   // fallback
   state.stage = FLOW.ASK_CEP_CITY;

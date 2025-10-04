@@ -22,6 +22,7 @@ export function getPrices(settings) {
   const S = normalizeSettings(settings);
   const env = (typeof process !== "undefined" ? process.env : {}) || {};
 
+  // Aceita ENV específicas da Cláudia e cai para YAML
   const original  = Number(env.CLAUDIA_PRICE_ORIGINAL   ?? S?.product?.price_original ?? 197);
   const target    = Number(env.CLAUDIA_PRICE_TARGET     ?? S?.product?.price_target   ?? 170);
   const promoDay  = Number(env.CLAUDIA_PRICE_PROMO_DAY  ?? S?.product?.price_promo_day ?? target);
