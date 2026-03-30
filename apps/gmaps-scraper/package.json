@@ -1,0 +1,19 @@
+{
+  "name": "gmaps-scraper",
+  "version": "1.0.0",
+  "description": "Scraper automação do Google Maps para extração de contatos.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.8.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "csv-writer": "^1.6.0",
+    "@supabase/supabase-js": "^2.42.0",
+    "dotenv": "^16.4.5"
+  }
+}
